@@ -44,6 +44,18 @@ so agents can use it as a drop-in replacement for the built-in `glob` tool.
 - Handles timeout and cancellation without leaving long-running processes behind.
 - Adds render metadata through a lightweight post-execution hook.
 
+## 📦 npm installation
+
+Planned npm package name:
+
+```bash
+npm install opencode-betterglob
+```
+
+This package metadata is ready for npm publication, but actual registry
+availability depends on whether it has already been published. Until then, use
+the source/file installation flow below.
+
 ## 🚀 Installation from source
 
 ```bash

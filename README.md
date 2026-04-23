@@ -65,6 +65,19 @@ Each package registers using the same tool ID as the built-in tool it replaces:
 - Returns metadata/text for images and PDFs because the current OpenCode plugin
   API does not expose built-in-style file attachments.
 
+## 📦 npm-ready package names
+
+The monorepo is prepared for npm publication with these planned package names:
+
+```bash
+npm install opencode-betterglob
+npm install opencode-bettergrep
+npm install opencode-betterread
+```
+
+Actual registry availability depends on whether a release has already been
+published. Until then, use the source/file installation flow below.
+
 ## 🚀 Installation from source
 
 Clone and build the monorepo:

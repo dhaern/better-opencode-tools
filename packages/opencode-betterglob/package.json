@@ -2,6 +2,11 @@
   "name": "opencode-betterglob",
   "version": "0.1.0",
   "description": "Standalone OpenCode plugin that provides an rg-backed glob tool with native-compatible output.",
+  "repository": "git+https://github.com/dhaern/better-opencode-tools.git",
+  "homepage": "https://github.com/dhaern/better-opencode-tools/tree/main/packages/opencode-betterglob",
+  "bugs": {
+    "url": "https://github.com/dhaern/better-opencode-tools/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,6 +15,9 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22"
