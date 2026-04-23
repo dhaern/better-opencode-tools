@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Please use the issue forms
+    url: https://github.com/dhaern/better-opencode-tools/issues/new/choose
+    about: Please pick the form that best matches your bug report, feature request, or question.

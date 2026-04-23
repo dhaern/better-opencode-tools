@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement for one of the Better OpenCode Tools plugins.
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin is this for?
+      options:
+        - opencode-betterglob
+        - opencode-bettergrep
+        - opencode-betterread
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the feature you want.
+      placeholder: What should be added or changed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why_this_would_help
+    attributes:
+      label: Why this would help
+      description: Explain the value of this change.
+      placeholder: What problem would this solve?
+    validations:
+      required: true

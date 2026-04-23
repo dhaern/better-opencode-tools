@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a bug in one of the Better OpenCode Tools plugins.
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin is affected?
+      options:
+        - opencode-betterglob
+        - opencode-bettergrep
+        - opencode-betterread
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Briefly describe the problem.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Share the smallest repro you can.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+      placeholder: What did you expect?
+    validations:
+      required: true

@@ -102,6 +102,12 @@ bun run check
 
 The root scripts run across all packages under `packages/*`.
 
+## 📝 Issue reporting
+
+This repository uses GitHub issue forms for bug reports, feature requests, and
+questions. A lightweight issue triage workflow adds plugin labels and asks only
+for the minimum missing details when a report is incomplete.
+
 ## ⚠️ Known limitations
 
 - `opencode-betterread` cannot return built-in-style image/PDF attachments

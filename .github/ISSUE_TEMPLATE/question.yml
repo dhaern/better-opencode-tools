@@ -1,0 +1,35 @@
+name: Question
+description: Ask a usage or behavior question about one of the Better OpenCode Tools plugins.
+title: "[question] "
+labels:
+  - question
+body:
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin is this about?
+      options:
+        - opencode-betterglob
+        - opencode-bettergrep
+        - opencode-betterread
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Ask your question.
+      placeholder: What do you want to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Add any extra context that may help.
+      placeholder: Optional details, config, or examples.
+    validations:
+      required: false
