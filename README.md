@@ -122,6 +122,15 @@ for the minimum missing details when a report is incomplete.
 Contributions are welcome. Keep changes local to the plugins unless a core
 change is explicitly proposed and reviewed separately.
 
+### 🙏 Special thanks
+
+Special thanks to [`oh-my-opencode-slim`](https://github.com/alvinunreal/oh-my-opencode-slim)
+for pushing the OpenCode plugin ecosystem forward and for helping inspire parts
+of the standalone plugin direction taken here.
+
+If you want a broader day-to-day OpenCode plugin setup beyond the standalone
+tool replacements in this repository, it is also worth checking out and trying.
+
 Before opening a PR, run:
 
 ```bash
