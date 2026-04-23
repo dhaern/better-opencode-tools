@@ -1,0 +1,17 @@
+{
+  "name": "better-opencode-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Monorepo for standalone Better OpenCode tool plugins.",
+  "packageManager": "bun@1.3.13",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "sh ./scripts/run-workspaces.sh build",
+    "test": "sh ./scripts/run-workspaces.sh test",
+    "typecheck": "sh ./scripts/run-workspaces.sh typecheck",
+    "check": "sh ./scripts/run-workspaces.sh check",
+    "format": "sh ./scripts/run-workspaces.sh format"
+  }
+}
