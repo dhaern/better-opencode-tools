@@ -50,19 +50,28 @@ metadata that helps agents reason about whether a search was exhaustive.
 - Tracks timeout, cancellation, partial output, and stderr notes explicitly.
 - Keeps output bounded and compatible with OpenCode's tool rendering model.
 
-## 📦 npm installation
+## 📦 Recommended installation (npm)
 
-Planned npm package name:
+For normal installs, use npm:
 
 ```bash
 npm install opencode-bettergrep
 ```
 
-This package metadata is ready for npm publication, but actual registry
-availability depends on whether it has already been published. Until then, use
-the source/file installation flow below.
+Then register the installed package in your OpenCode config by package name:
 
-## 🚀 Installation from source
+```json
+{
+  "plugin": [
+    "opencode-bettergrep"
+  ]
+}
+```
+
+## 🛠️ Manual installation from source (alternative)
+
+Use the source/file flow if you want to run the plugin from a local checkout or
+test local unpublished changes.
 
 ```bash
 git clone https://github.com/dhaern/better-opencode-tools.git

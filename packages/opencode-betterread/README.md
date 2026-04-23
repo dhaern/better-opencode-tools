@@ -57,19 +57,28 @@ Because of that, this plugin **does not return built-in-style image/PDF
 attachments**. For images and PDFs it returns metadata/text only, with an explicit
 note in the output.
 
-## 📦 npm installation
+## 📦 Recommended installation (npm)
 
-Planned npm package name:
+For normal installs, use npm:
 
 ```bash
 npm install opencode-betterread
 ```
 
-This package metadata is ready for npm publication, but actual registry
-availability depends on whether it has already been published. Until then, use
-the source/file installation flow below.
+Then register the installed package in your OpenCode config by package name:
 
-## 🚀 Installation from source
+```json
+{
+  "plugin": [
+    "opencode-betterread"
+  ]
+}
+```
+
+## 🛠️ Manual installation from source (alternative)
+
+Use the source/file flow if you want to run the plugin from a local checkout or
+test local unpublished changes.
 
 ```bash
 git clone https://github.com/dhaern/better-opencode-tools.git
