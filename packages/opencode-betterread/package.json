@@ -2,7 +2,11 @@
   "name": "opencode-betterread",
   "version": "0.1.0",
   "description": "Standalone OpenCode plugin that replaces the native read tool with a real plugin implementation.",
-  "repository": "git+https://github.com/dhaern/better-opencode-tools.git",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhaern/better-opencode-tools.git",
+    "directory": "packages/opencode-betterread"
+  },
   "homepage": "https://github.com/dhaern/better-opencode-tools/tree/main/packages/opencode-betterread",
   "bugs": {
     "url": "https://github.com/dhaern/better-opencode-tools/issues"

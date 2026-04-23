@@ -2,7 +2,11 @@
   "name": "opencode-bettergrep",
   "version": "0.1.0",
   "description": "Standalone OpenCode plugin that ports the advanced local grep implementation from oh-my-opencode-slim.",
-  "repository": "git+https://github.com/dhaern/better-opencode-tools.git",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhaern/better-opencode-tools.git",
+    "directory": "packages/opencode-bettergrep"
+  },
   "homepage": "https://github.com/dhaern/better-opencode-tools/tree/main/packages/opencode-bettergrep",
   "bugs": {
     "url": "https://github.com/dhaern/better-opencode-tools/issues"
