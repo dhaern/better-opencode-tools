@@ -14,17 +14,25 @@ function toErrorMessage(error: unknown): string {
 
 const KILL_GRACE_MS = 5_000;
 
+function hasMagic(value: string): boolean {
+  return /[*?[{]/.test(value);
+}
+
 function createMatcher(pattern: string): (file: string) => boolean {
   const normalizedPattern = pattern.replace(/\\/g, '/');
   const hasPathSegment = normalizedPattern.includes('/');
   const isLiteral = !/[?*[{]/.test(normalizedPattern);
   const basenameSuffix =
-    !hasPathSegment && normalizedPattern.startsWith('*.')
+    !hasPathSegment &&
+    normalizedPattern.startsWith('*.') &&
+    !hasMagic(normalizedPattern.slice(2))
       ? normalizedPattern.slice(1)
       : null;
-  const deepSuffix = normalizedPattern.startsWith('**/*.')
-    ? normalizedPattern.slice(4)
-    : null;
+  const deepSuffix =
+    normalizedPattern.startsWith('**/*.') &&
+    !hasMagic(normalizedPattern.slice(5))
+      ? normalizedPattern.slice(4)
+      : null;
 
   if (normalizedPattern === '**/*') {
     return () => true;
@@ -54,22 +62,6 @@ function createMatcher(pattern: string): (file: string) => boolean {
     if (hasPathSegment) return false;
     return path.matchesGlob(path.basename(normalized), normalizedPattern);
   };
-}
-
-export function parseNulPaths(
-  input: Pick<NormalizedGlobInput, 'searchPath'>,
-  stdout: string,
-  options: { discardIncomplete?: boolean } = {},
-): string[] {
-  if (stdout.length === 0) return [];
-
-  const parts = stdout.split('\0');
-  if (parts[parts.length - 1] === '') parts.pop();
-  if (options.discardIncomplete && !stdout.endsWith('\0')) parts.pop();
-
-  return parts
-    .filter((file) => file.length > 0)
-    .map((file) => path.resolve(input.searchPath, file));
 }
 
 function sliceLimit(input: NormalizedGlobInput, files: string[]): string[] {

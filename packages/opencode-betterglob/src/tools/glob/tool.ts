@@ -4,7 +4,10 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import { Effect } from 'effect';
+import {
+  runBestEffortOpenCodeSideEffect,
+  runOpenCodeSideEffect,
+} from '../../utils/opencode-effects';
 import {
   DEFAULT_GLOB_LIMIT,
   DEFAULT_GLOB_TIMEOUT_MS,
@@ -13,7 +16,11 @@ import {
 } from './constants';
 import { getInstalledRipgrepPath, getRipgrepCacheDir } from './downloader';
 import { formatGlobResult } from './format';
-import { normalizeGlobInput, resolveGlobScope } from './normalize';
+import {
+  containsPath,
+  normalizeGlobInput,
+  resolveGlobScope,
+} from './normalize';
 import { type ResolvedGlobCli, resolveGlobCli } from './resolver';
 import { runRipgrep } from './runner';
 import { globArgsSchema } from './schema';
@@ -29,9 +36,21 @@ interface CreateGlobToolOptions {
   resolveCli?: () => ResolvedGlobCli;
 }
 
-function execute<T>(value: T | Promise<T> | Effect.Effect<T>): Promise<T> {
-  if (Effect.isEffect(value)) return Effect.runPromise(value);
-  return Promise.resolve(value);
+function isEffectiveBoundary(root: string): boolean {
+  const resolved = path.resolve(root);
+  return resolved !== path.parse(resolved).root;
+}
+
+function isInsideAllowedBoundary(input: {
+  directory: string;
+  worktree: string;
+  searchPath: string;
+}): boolean {
+  if (containsPath(input.directory, input.searchPath)) return true;
+  return (
+    isEffectiveBoundary(input.worktree) &&
+    containsPath(input.worktree, input.searchPath)
+  );
 }
 
 function title(args: GlobToolInput, input?: NormalizedGlobInput): string {
@@ -83,11 +102,6 @@ function resultMetadata(
   };
 }
 
-function contains(root: string, target: string): boolean {
-  const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
 async function askExternalDirectory(
   ctx: {
     ask: (payload: {
@@ -97,13 +111,19 @@ async function askExternalDirectory(
       metadata: Record<string, unknown>;
     }) => Promise<unknown> | unknown;
   },
-  input: { worktree: string; searchPath: string; followSymlinks: boolean },
+  input: {
+    directory: string;
+    worktree: string;
+    searchPath: string;
+    followSymlinks: boolean;
+  },
 ): Promise<void> {
-  if (!input.followSymlinks && contains(input.worktree, input.searchPath))
+  if (!input.followSymlinks && isInsideAllowedBoundary(input)) {
     return;
+  }
 
   const glob = path.join(input.searchPath, '*').replaceAll('\\', '/');
-  await execute(
+  await runOpenCodeSideEffect(
     ctx.ask({
       permission: 'external_directory',
       patterns: [glob],
@@ -127,7 +147,7 @@ async function askRipgrepAutoInstall(ctx: {
   }) => Promise<unknown> | unknown;
 }): Promise<void> {
   const dir = getRipgrepCacheDir().replaceAll('\\', '/');
-  await execute(
+  await runOpenCodeSideEffect(
     ctx.ask({
       permission: 'install_ripgrep',
       patterns: [dir],
@@ -167,7 +187,9 @@ async function emit(
   metadata: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await ctx.metadata({ title: name, metadata });
+    await runBestEffortOpenCodeSideEffect(
+      ctx.metadata({ title: name, metadata }),
+    );
   } catch {
     // Metadata is best-effort.
   }
@@ -199,7 +221,7 @@ export function createGlobTool(
         const scope = resolveGlobScope(raw, ctx, pluginCtx);
         stage = 'permission';
 
-        await execute(
+        await runOpenCodeSideEffect(
           ctx.ask({
             permission: GLOB_TOOL_ID,
             patterns: [raw.pattern],
@@ -213,6 +235,7 @@ export function createGlobTool(
         );
 
         const preflight = {
+          directory: scope.cwd,
           worktree: scope.worktreeRoot,
           searchPath: scope.resolvedPath,
           followSymlinks: raw.follow_symlinks === true,
@@ -226,6 +249,7 @@ export function createGlobTool(
           input.worktree !== preflight.worktree
         ) {
           await askExternalDirectory(ctx, {
+            directory: input.cwd,
             worktree: input.worktree,
             searchPath: input.searchPath,
             followSymlinks: input.followSymlinks,
