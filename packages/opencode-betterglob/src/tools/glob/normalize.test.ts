@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
-import { normalizeGlobInput } from './normalize';
+import { containsPath, normalizeGlobInput } from './normalize';
 import { buildRgArgs } from './rg-args';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
@@ -52,6 +52,15 @@ describe('tools/glob/normalize', () => {
 
     expect(normalized.searchPath).toBe(repoDir);
     expect(normalized.relativePattern).toBe('src/*.ts');
+  });
+
+  test('treats nested names starting with dot-dot as contained paths', () => {
+    const repoDir = temps.createRepo();
+    const nested = path.join(repoDir, '..bar');
+    mkdirSync(nested);
+
+    expect(containsPath(repoDir, nested)).toBe(true);
+    expect(containsPath(repoDir, path.dirname(repoDir))).toBe(false);
   });
 
   test('extracts base directory and relative pattern from absolute patterns', () => {
