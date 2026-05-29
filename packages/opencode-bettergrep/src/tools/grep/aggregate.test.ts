@@ -2,9 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { GrepAggregator } from './aggregate';
 import {
-  consumeNullCountPairs,
   consumeNullCountPairsBytes,
-  consumeNullItems,
   consumeNullItemsBytes,
   consumeRgJsonStream,
 } from './json-stream';
@@ -170,61 +168,6 @@ describe('tools/grep/aggregate', () => {
 
     const snapshot = aggregator.snapshot();
     expect(snapshot.files[0]?.matches[0]?.lineText).toBe('foo\n');
-  });
-
-  test.each([
-    {
-      name: 'consumeNullItems drops incomplete trailing filenames',
-      run: async () => {
-        const items: string[] = [];
-        await consumeNullItems(createTextStream(['alpha\0beta']), (item) => {
-          items.push(item);
-          return true;
-        });
-        expect(items).toEqual(['alpha']);
-      },
-    },
-    {
-      name: 'consumeNullItems preserves carriage returns inside valid POSIX paths',
-      run: async () => {
-        const items: string[] = [];
-        await consumeNullItems(createTextStream(['alpha\r\0']), (item) => {
-          items.push(item);
-          return true;
-        });
-        expect(items).toEqual(['alpha\r']);
-      },
-    },
-    {
-      name: 'consumeNullCountPairs drops incomplete trailing pairs and invalid counts',
-      run: async () => {
-        const pairs: Array<[string, string]> = [];
-        await consumeNullCountPairs(
-          createTextStream(['alpha\x0012\n', 'beta\x003oops']),
-          (filePath, countText) => {
-            pairs.push([filePath, countText]);
-            return true;
-          },
-        );
-        expect(pairs).toEqual([['alpha', '12']]);
-      },
-    },
-    {
-      name: 'consumeNullCountPairs preserves carriage returns in paths',
-      run: async () => {
-        const pairs: Array<[string, string]> = [];
-        await consumeNullCountPairs(
-          createTextStream(['alpha\r\x0012\n']),
-          (filePath, countText) => {
-            pairs.push([filePath, countText]);
-            return true;
-          },
-        );
-        expect(pairs).toEqual([['alpha\r', '12']]);
-      },
-    },
-  ])('$name', async ({ run }) => {
-    await run();
   });
 
   test.each([

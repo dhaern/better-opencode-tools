@@ -282,12 +282,11 @@ export class GrepAggregator {
       return;
     }
 
-    const absolutePath = event.data.path
-      ? this.resolvePathInfo(event.data.path).absolutePath
+    const pathInfo = event.data.path
+      ? this.resolvePathInfo(event.data.path)
       : undefined;
-    const pathKey = event.data.path
-      ? this.resolvePathInfo(event.data.path).pathKey
-      : undefined;
+    const absolutePath = pathInfo?.absolutePath;
+    const pathKey = pathInfo?.pathKey;
     if (
       !absolutePath ||
       (absolutePath === this.drainPath && pathKey === this.drainKey)

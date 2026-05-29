@@ -140,72 +140,6 @@ class GrowableByteBuffer {
   }
 }
 
-async function consumeDelimitedText(
-  stream: BinaryReadableStream,
-  delimiter: string,
-  onItem: (line: string) => boolean | undefined,
-  options?: {
-    flushTrailing?: boolean;
-    normalizeItem?: (item: string) => string;
-  },
-): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const flushTrailing = options?.flushTrailing !== false;
-  const normalizeItem = options?.normalizeItem ?? ((item: string) => item);
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decodeChunk(decoder, value);
-
-    let index = buffer.indexOf(delimiter);
-    while (index >= 0) {
-      const item = normalizeItem(buffer.slice(0, index));
-      buffer = buffer.slice(index + delimiter.length);
-
-      if (onItem(item) === false) {
-        await reader.cancel();
-        return;
-      }
-
-      index = buffer.indexOf(delimiter);
-    }
-
-    if (done) {
-      break;
-    }
-  }
-
-  buffer += decodeChunk(decoder);
-  if (flushTrailing && buffer.length > 0) {
-    onItem(normalizeItem(buffer));
-  }
-}
-
-export function consumeTextLines(
-  stream: BinaryReadableStream,
-  onLine: (line: string) => boolean | undefined,
-): Promise<void> {
-  return consumeDelimitedText(stream, '\n', onLine, {
-    normalizeItem: (line) => line.replace(/\r$/, ''),
-  });
-}
-
-export function consumeNullItems(
-  stream: BinaryReadableStream,
-  onItem: (item: string) => boolean | undefined,
-): Promise<void> {
-  return consumeDelimitedText(stream, '\0', onItem, {
-    flushTrailing: false,
-  });
-}
-
 export async function consumeNullItemsBytes(
   stream: BinaryReadableStream,
   onItem: (item: Uint8Array) => boolean | undefined,
@@ -236,60 +170,6 @@ export async function consumeNullItemsBytes(
       return;
     }
   }
-}
-
-export async function consumeNullCountPairs(
-  stream: BinaryReadableStream,
-  onPair: (filePath: string, countText: string) => boolean | undefined,
-): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let currentPath: string | undefined;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decodeChunk(decoder, value);
-
-    while (true) {
-      if (currentPath === undefined) {
-        const nullIndex = buffer.indexOf('\0');
-        if (nullIndex < 0) {
-          break;
-        }
-
-        currentPath = buffer.slice(0, nullIndex);
-        buffer = buffer.slice(nullIndex + 1);
-        continue;
-      }
-
-      const newlineIndex = buffer.indexOf('\n');
-      if (newlineIndex < 0) {
-        break;
-      }
-
-      const countText = buffer.slice(0, newlineIndex).replace(/\r$/, '');
-      buffer = buffer.slice(newlineIndex + 1);
-      const path = currentPath;
-      currentPath = undefined;
-
-      if (onPair(path, countText) === false) {
-        await reader.cancel();
-        return;
-      }
-    }
-
-    if (done) {
-      break;
-    }
-  }
-
-  buffer += decodeChunk(decoder);
 }
 
 export async function consumeNullCountPairsBytes(

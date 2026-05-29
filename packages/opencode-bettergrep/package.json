@@ -1,6 +1,6 @@
 {
   "name": "opencode-bettergrep",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone OpenCode plugin that ports the advanced local grep implementation from oh-my-opencode-slim.",
   "repository": {
     "type": "git",
@@ -37,7 +37,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external effect && tsc --emitDeclarationOnly",
     "prepack": "bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -46,7 +46,8 @@
     "format": "biome format src package.json README.md biome.json tsconfig.json --write"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.4.7",
+    "@opencode-ai/plugin": "^1.15.12",
+    "effect": "4.0.0-beta.66",
     "which": "^6.0.1"
   },
   "devDependencies": {
