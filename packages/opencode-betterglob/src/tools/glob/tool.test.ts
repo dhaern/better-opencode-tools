@@ -188,6 +188,36 @@ describe('tools/glob/tool', () => {
     expect(external.metadata.parentDir).toBe(outside);
   });
 
+  test('does not treat filesystem root worktree as an allowed boundary', async () => {
+    const projectDir = temps.createRepo();
+    const outside = temps.createRepo();
+    const run: GlobRunner = mock(async (input) => ({
+      files: [path.join(outside, 'src', 'a.ts')],
+      count: 1,
+      backend: 'rg' as const,
+      truncated: false,
+      incomplete: false,
+      timedOut: false,
+      cancelled: false,
+      exitCode: 0,
+      cwd: input.searchPath,
+      stderr: '',
+    }));
+    const tool = createGlobTool(
+      { directory: projectDir, worktree: '/', client: {} } as any,
+      { run },
+    );
+    const ctx = createExecutionContext(projectDir, '/');
+
+    await tool.execute({ pattern: '*.ts', path: outside }, ctx as any);
+
+    expect(ctx.ask).toHaveBeenCalledTimes(2);
+    const external = (
+      ctx.ask.mock.calls[1] as unknown as [{ permission: string }]
+    )[0];
+    expect(external.permission).toBe('external_directory');
+  });
+
   test('asks external_directory before probing missing external paths', async () => {
     const repoDir = temps.createRepo();
     const outsideRoot = temps.createDir('opencode-betterglob-outside');

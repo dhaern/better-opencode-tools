@@ -43,6 +43,17 @@ describe('tools/glob/normalize', () => {
     expect(normalized.relativePattern).toBe('*.ts');
   });
 
+  test('normalizes leading dot-slash relative patterns', () => {
+    const repoDir = temps.createRepo();
+    const normalized = normalizeGlobInput(
+      { pattern: './src/*.ts' },
+      createRepoContext(repoDir) as any,
+    );
+
+    expect(normalized.searchPath).toBe(repoDir);
+    expect(normalized.relativePattern).toBe('src/*.ts');
+  });
+
   test('extracts base directory and relative pattern from absolute patterns', () => {
     const repoDir = temps.createRepo();
     const normalized = normalizeGlobInput(

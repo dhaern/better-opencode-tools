@@ -18,6 +18,14 @@ function hasMagic(value: string): boolean {
   return /[*?[{]/.test(value);
 }
 
+function normalizeRelativePattern(pattern: string): string {
+  let normalized = pattern.replace(/\\/g, '/');
+  while (normalized.startsWith('./')) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
 function splitAbsolutePattern(pattern: string): {
   base: string;
   glob: string;
@@ -38,7 +46,7 @@ function splitAbsolutePattern(pattern: string): {
 
   return {
     base: index === 0 ? root : path.join(root, ...parts.slice(0, index)),
-    glob: parts.slice(index).join('/'),
+    glob: normalizeRelativePattern(parts.slice(index).join('/')),
   };
 }
 
@@ -52,7 +60,7 @@ function realpath(file: string, requested: string): string {
   }
 }
 
-function contains(root: string, target: string): boolean {
+export function containsPath(root: string, target: string): boolean {
   const rel = path.relative(path.resolve(root), path.resolve(target));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
@@ -93,12 +101,12 @@ export function resolveGlobScope(
     worktreeRoot,
     requestedPath,
     resolvedPath,
-    relativePattern: split.glob,
+    relativePattern: normalizeRelativePattern(split.glob),
   };
 }
 
 function getIgnoreFiles(searchPath: string, worktree: string): string[] {
-  if (!contains(worktree, searchPath)) return [];
+  if (!containsPath(worktree, searchPath)) return [];
   if (existsSync(path.join(worktree, '.git'))) return [];
 
   const files: string[] = [];

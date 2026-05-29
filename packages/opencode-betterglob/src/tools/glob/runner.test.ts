@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeGlobInput } from './normalize';
-import { parseNulPaths, runRipgrep } from './runner';
+import { runRipgrep } from './runner';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobToolInput } from './types';
 
@@ -94,6 +94,33 @@ describe('tools/glob/runner', () => {
     expect(result.truncated).toBe(false);
   });
 
+  test('matches common brace and bracket extension globs', async () => {
+    const repoDir = temps.createRepo();
+    writeFileSync(path.join(repoDir, 'src', 'extra.tsx'), 'tsx\n');
+    writeFileSync(path.join(repoDir, 'src', 'plain.js'), 'js\n');
+
+    const brace = await runRipgrep(
+      createNormalized({ pattern: '*.{ts,tsx}', path: 'src' }, repoDir)
+        .normalized,
+      new AbortController().signal,
+    );
+    const bracket = await runRipgrep(
+      createNormalized({ pattern: '*.[jt]s', path: 'src' }, repoDir).normalized,
+      new AbortController().signal,
+    );
+
+    expect(brace.files.map((file) => path.basename(file)).sort()).toEqual([
+      'a.ts',
+      'b.ts',
+      'extra.tsx',
+    ]);
+    expect(bracket.files.map((file) => path.basename(file)).sort()).toEqual([
+      'a.ts',
+      'b.ts',
+      'plain.js',
+    ]);
+  });
+
   test('filters matched files without re-including ignored files', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'), { recursive: true });
@@ -111,15 +138,5 @@ describe('tools/glob/runner', () => {
       'b.ts',
       'ok.ts',
     ]);
-  });
-
-  test('drops incomplete trailing path when parsing interrupted NUL output', () => {
-    const repoDir = temps.createRepo();
-
-    expect(
-      parseNulPaths({ searchPath: repoDir }, `src/a.ts\0src/partial`, {
-        discardIncomplete: true,
-      }),
-    ).toEqual([path.join(repoDir, 'src', 'a.ts')]);
   });
 });

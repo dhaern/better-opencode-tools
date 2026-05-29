@@ -1,6 +1,6 @@
 {
   "name": "opencode-betterglob",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone OpenCode plugin that provides an rg-backed glob tool with native-compatible output.",
   "repository": {
     "type": "git",
@@ -49,8 +49,8 @@
     "format": "biome format src package.json README.md biome.json tsconfig.json --write"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.4.7",
-    "effect": "4.0.0-beta.48",
+    "@opencode-ai/plugin": "^1.15.12",
+    "effect": "4.0.0-beta.66",
     "which": "^6.0.1"
   },
   "devDependencies": {
