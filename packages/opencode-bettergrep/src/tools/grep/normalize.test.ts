@@ -109,6 +109,24 @@ describe('tools/grep/normalize', () => {
     }
   });
 
+  test('resolves relative worktrees against the tool directory', () => {
+    const parentDir = temps.createDir('opencode-bettergrep-parent');
+    const repoDir = path.join(parentDir, 'repo');
+    mkdirSync(repoDir);
+    mkdirSync(path.join(repoDir, 'src'));
+    writeFileSync(path.join(repoDir, 'src', 'index.ts'), 'createTool\n');
+
+    const normalized = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        path: 'src',
+      },
+      createRepoContext(repoDir, 'relative-worktree') as any,
+    );
+
+    expect(normalized.worktree).toBe(path.join(repoDir, 'relative-worktree'));
+  });
+
   test('fails cleanly for dangling symlink search paths', () => {
     const repoDir = temps.createRepo();
     const dangling = path.join(repoDir, 'dangling');
