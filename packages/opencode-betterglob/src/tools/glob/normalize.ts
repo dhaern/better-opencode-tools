@@ -62,7 +62,10 @@ function realpath(file: string, requested: string): string {
 
 export function containsPath(root: string, target: string): boolean {
   const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+  );
 }
 
 export interface ResolvedGlobScope {
