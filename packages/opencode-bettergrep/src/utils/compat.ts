@@ -1,8 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { writeFile as fsWriteFile } from 'node:fs/promises';
-
-export const isBun = typeof globalThis.Bun !== 'undefined';
 
 export interface CrossSpawnResult {
   proc: ChildProcess;
@@ -78,14 +75,4 @@ export function crossSpawn(
       return proc.exitCode;
     },
   };
-}
-
-/**
- * Cross-runtime file write that works in both Bun and Node.js.
- */
-export async function crossWrite(
-  path: string,
-  data: ArrayBuffer | Buffer | string,
-): Promise<void> {
-  await fsWriteFile(path, Buffer.from(data as ArrayBuffer));
 }

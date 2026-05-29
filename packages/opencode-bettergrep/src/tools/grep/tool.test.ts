@@ -139,6 +139,30 @@ describe('tools/grep/tool', () => {
     expect(metadataInput.metadata.route_fallback_reason).toBeUndefined();
   });
 
+  test('fails closed when permission Effect loses OpenCode context', async () => {
+    const repoDir = temps.createRepo();
+    const run: GrepRunner = mock(async () => buildResult(repoDir));
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = {
+      ...createExecutionContext(repoDir),
+      ask: mock(() => {
+        throw new Error('Service not found: InstanceRef not provided');
+      }),
+    };
+
+    await expect(
+      grep.execute({ pattern: 'createTool', path: 'src' }, ctx as any),
+    ).rejects.toThrow('InstanceRef not provided');
+    expect(run).not.toHaveBeenCalled();
+  });
+
   test('emits strategy metadata for mtime-hybrid results', async () => {
     const repoDir = temps.createRepo();
     const run: GrepRunner = mock(async () => {

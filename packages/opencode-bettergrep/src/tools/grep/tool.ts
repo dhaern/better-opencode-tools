@@ -3,6 +3,10 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import {
+  runBestEffortOpenCodeSideEffect,
+  runOpenCodeSideEffect,
+} from '../../utils/opencode-effects';
 import { GREP_DESCRIPTION, GREP_TOOL_ID } from './constants';
 import { formatGrepResult } from './format';
 import { normalizeGrepInput } from './normalize';
@@ -147,12 +151,11 @@ async function emitMetadataSafely(
   },
   title: string,
   metadata: Record<string, unknown>,
-): Promise<boolean> {
+): Promise<void> {
   try {
-    await ctx.metadata({ title, metadata });
-    return true;
+    await runBestEffortOpenCodeSideEffect(ctx.metadata({ title, metadata }));
   } catch {
-    return false;
+    // Metadata is best-effort.
   }
 }
 
@@ -175,12 +178,14 @@ export function createGrepTool(
         normalized = normalizeGrepInput(rawArgs, ctx, pluginCtx);
         stage = 'permission';
 
-        await ctx.ask({
-          permission: GREP_TOOL_ID,
-          patterns: normalized.permissionPatterns,
-          always: normalized.permissionPatterns,
-          metadata: buildBaseMetadata(rawArgs, normalized),
-        });
+        await runOpenCodeSideEffect(
+          ctx.ask({
+            permission: GREP_TOOL_ID,
+            patterns: normalized.permissionPatterns,
+            always: normalized.permissionPatterns,
+            metadata: buildBaseMetadata(rawArgs, normalized),
+          }),
+        );
 
         stage = 'execution';
         const result = await run(normalized, ctx.abort);
