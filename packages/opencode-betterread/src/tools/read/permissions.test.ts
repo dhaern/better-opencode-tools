@@ -27,6 +27,15 @@ describe('tools/read/permissions', () => {
     );
   });
 
+  test('allows non-ASCII paths and safe punctuation in permissions', () => {
+    const safePath = '/tmp/café/文件,name;ok.txt';
+
+    expect(assertSafePermissionPath(safePath)).toBe(safePath);
+    expect(permissionGlob('/tmp/café/文件,name;ok')).toBe(
+      '/tmp/café/文件,name;ok/*',
+    );
+  });
+
   test('rejects literal read permission paths with wildcard metacharacters', () => {
     expect(() => assertSafePermissionPath('/tmp/a*.txt')).toThrow(
       /wildcard metacharacters/,

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
 import { executeRead, inspectReadTarget } from './engine';
 
@@ -373,7 +374,7 @@ describe('executeRead', () => {
       {
         type: 'file',
         mime: 'image/png',
-        url: `file://${filePath}`,
+        url: pathToFileURL(filePath).href,
         filename: 'tiny.png',
       },
     ]);
@@ -415,7 +416,7 @@ describe('executeRead', () => {
       {
         type: 'file',
         mime: 'application/pdf',
-        url: `file://${filePath}`,
+        url: pathToFileURL(filePath).href,
         filename: 'sample.pdf',
       },
     ]);

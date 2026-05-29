@@ -45,7 +45,7 @@ export function selectExternalPermissionTarget(input: {
   );
 }
 
-const PERMISSION_SAFE_CHARS = /^[\w./: -]+$/u;
+const GLOB_META_CHARS = /[*?[\]{}()!+@\\]/;
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -62,7 +62,7 @@ function normalizePermissionGlobPath(parentDir: string): string {
 }
 
 export function assertSafePermissionPath(permissionPath: string): string {
-  if (!PERMISSION_SAFE_CHARS.test(permissionPath)) {
+  if (GLOB_META_CHARS.test(permissionPath)) {
     throw new Error(
       `Cannot request a safe read permission for a path with wildcard metacharacters: ${permissionPath}`,
     );
