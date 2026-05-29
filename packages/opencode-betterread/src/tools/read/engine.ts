@@ -1,5 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   isImageMime,
   isNotebookPath,
@@ -142,7 +143,7 @@ function fileAttachment(input: {
   return {
     type: 'file',
     mime: input.mime,
-    url: `file://${input.path}`,
+    url: pathToFileURL(input.path).href,
     filename: path.basename(input.path),
   };
 }
@@ -212,7 +213,9 @@ export async function executeRead(input: {
       realPath: inspection.realPath,
       output: formatImageInfoResult(image),
       metadata: buildImageMetadata(metadataPath(inspection), image),
-      attachments: [fileAttachment({ path: image.path, mime: image.mime })],
+      attachments: [
+        fileAttachment({ path: inspection.accessPath, mime: image.mime }),
+      ],
     };
   }
 
@@ -229,7 +232,10 @@ export async function executeRead(input: {
       output: formatPdfResult(pdf),
       metadata: buildPdfMetadata(metadataPath(inspection), pdf),
       attachments: [
-        fileAttachment({ path: pdf.path, mime: 'application/pdf' }),
+        fileAttachment({
+          path: inspection.accessPath,
+          mime: 'application/pdf',
+        }),
       ],
     };
   }
