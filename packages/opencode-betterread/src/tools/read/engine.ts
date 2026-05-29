@@ -1,4 +1,5 @@
 import { open, stat } from 'node:fs/promises';
+import path from 'node:path';
 import {
   isImageMime,
   isNotebookPath,
@@ -19,7 +20,7 @@ import {
   formatDirectoryResult,
   formatImageInfoResult,
   formatPdfResult,
-  formatTextResult,
+  renderTextResult,
 } from './formatter';
 import { readImageInfo } from './image-info';
 import { normalizeReadArgs } from './limits';
@@ -33,11 +34,11 @@ import { readPdf } from './pdf-reader';
 import { escapeStructuredSingleLineValue } from './structured-escape';
 import { readTextFile } from './text-reader';
 import type {
+  NormalizedReadArgs,
   NotebookReadResult,
   ReadArgs,
   ReadExecutionResult,
   ReadInspection,
-  ResolvedReadArgs,
   TextReadResult,
 } from './types';
 
@@ -52,7 +53,7 @@ async function sampleFile(readPath: string): Promise<Buffer> {
   }
 }
 
-function assertFilePath(args: ResolvedReadArgs): void {
+function assertFilePath(args: NormalizedReadArgs): void {
   if (args.filePath.length === 0) {
     throw new Error('filePath must be a non-empty string');
   }
@@ -134,6 +135,18 @@ function metadataPath(input: ReadInspection): {
   };
 }
 
+function fileAttachment(input: {
+  path: string;
+  mime: string;
+}): NonNullable<ReadExecutionResult['attachments']>[number] {
+  return {
+    type: 'file',
+    mime: input.mime,
+    url: `file://${input.path}`,
+    filename: path.basename(input.path),
+  };
+}
+
 function assertReadableWindow(
   result: TextReadResult | NotebookReadResult,
 ): void {
@@ -199,6 +212,7 @@ export async function executeRead(input: {
       realPath: inspection.realPath,
       output: formatImageInfoResult(image),
       metadata: buildImageMetadata(metadataPath(inspection), image),
+      attachments: [fileAttachment({ path: image.path, mime: image.mime })],
     };
   }
 
@@ -214,6 +228,9 @@ export async function executeRead(input: {
       realPath: inspection.realPath,
       output: formatPdfResult(pdf),
       metadata: buildPdfMetadata(metadataPath(inspection), pdf),
+      attachments: [
+        fileAttachment({ path: pdf.path, mime: 'application/pdf' }),
+      ],
     };
   }
 
@@ -223,13 +240,14 @@ export async function executeRead(input: {
       path: inspection.resolvedPath,
     };
     assertReadableWindow(notebook);
+    const rendered = renderTextResult(notebook);
     return {
       kind: notebook.kind,
       path: notebook.path,
       resolvedPath: inspection.resolvedPath,
       realPath: inspection.realPath,
-      output: formatTextResult(notebook),
-      metadata: buildTextMetadata(metadataPath(inspection), notebook),
+      output: rendered.output,
+      metadata: buildTextMetadata(metadataPath(inspection), notebook, rendered),
     };
   }
 
@@ -256,12 +274,13 @@ export async function executeRead(input: {
     path: inspection.resolvedPath,
   };
   assertReadableWindow(text);
+  const rendered = renderTextResult(text);
   return {
     kind: text.kind,
     path: text.path,
     resolvedPath: inspection.resolvedPath,
     realPath: inspection.realPath,
-    output: formatTextResult(text),
-    metadata: buildTextMetadata(metadataPath(inspection), text),
+    output: rendered.output,
+    metadata: buildTextMetadata(metadataPath(inspection), text, rendered),
   };
 }

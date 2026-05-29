@@ -30,9 +30,14 @@ export function createReadRenderMetadataHook() {
       if (output.metadata) {
         const hasMore = output.metadata.has_more === true;
         const truncatedByBytes = output.metadata.truncated_by_bytes === true;
+        const truncatedByLineLength =
+          output.metadata.truncated_by_line_length === true;
         const alreadyTruncated = output.metadata.truncated === true;
         output.metadata.truncated =
-          alreadyTruncated || hasMore || truncatedByBytes;
+          alreadyTruncated ||
+          hasMore ||
+          truncatedByBytes ||
+          truncatedByLineLength;
       }
 
       if (typeof output.title === 'string' && output.title.length > 0) return;

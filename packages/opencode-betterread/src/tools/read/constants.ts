@@ -13,7 +13,7 @@ export const MAX_SIMILAR_PATHS = 5;
 export const PDF_COMMAND_TIMEOUT_MS = 15000;
 export const READ_TOOL_ID = 'read';
 export const ATTACHMENT_UNAVAILABLE_NOTE =
-  'Builtin-style file attachments are unavailable through the current plugin API; returning metadata/text only.';
+  'File attachments are included when supported by the current plugin API.';
 export const READ_DESCRIPTION = `Read a file or directory from the local filesystem. If the path does not exist, an error is returned.
 
 Usage:
@@ -21,4 +21,4 @@ Usage:
 - filePath accepts absolute, session-relative, and \`~/\` paths
 - Returns numbered lines for files and one entry per line for directories
 - Supports text, directories, notebooks, images, PDFs, and binary detection
-- Images and PDFs return metadata/text only`;
+- Images and PDFs include file attachments on OpenCode versions whose plugin API supports them`;

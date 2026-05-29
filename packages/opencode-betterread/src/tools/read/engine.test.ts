@@ -356,7 +356,7 @@ describe('executeRead', () => {
     expect(result.metadata.truncated).toBe(true);
   });
 
-  test('returns structured image metadata without pretending attachments exist', async () => {
+  test('returns structured image metadata and attachment', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'tiny.png');
     await writeFile(filePath, tinyPng);
@@ -369,6 +369,14 @@ describe('executeRead', () => {
     expect(result.output).toContain('<type>image</type>');
     expect(result.output).toContain('<dimensions>2x3</dimensions>');
     expect(result.metadata.attachment_support).toBe('unavailable');
+    expect(result.attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'image/png',
+        url: `file://${filePath}`,
+        filename: 'tiny.png',
+      },
+    ]);
   });
 
   test('escapes unsafe image summaries and previews', async () => {
@@ -390,7 +398,7 @@ describe('executeRead', () => {
     expect((result.metadata.preview as string).split('\n')).toHaveLength(1);
   });
 
-  test('returns metadata-only PDF output when the plugin API cannot emit attachments', async () => {
+  test('returns PDF metadata and attachment', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'sample.pdf');
     await writeFile(filePath, '%PDF-1.4\n', 'utf8');
@@ -403,6 +411,14 @@ describe('executeRead', () => {
     expect(result.output).toContain('<type>pdf</type>');
     expect(result.output).toContain(ATTACHMENT_UNAVAILABLE_NOTE);
     expect(result.metadata.attachment_support).toBe('unavailable');
+    expect(result.attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'application/pdf',
+        url: `file://${filePath}`,
+        filename: 'sample.pdf',
+      },
+    ]);
   });
 
   test('returns a binary placeholder for unsupported binary files', async () => {

@@ -1,6 +1,6 @@
 import { ATTACHMENT_UNAVAILABLE_NOTE } from './constants';
 import { escapeDirectoryEntry } from './directory-output';
-import { renderTextResult } from './formatter';
+import { type RenderedTextResult, renderTextResult } from './formatter';
 import { escapeStructuredSingleLineValue } from './structured-escape';
 import type {
   DirectoryReadResult,
@@ -30,9 +30,8 @@ function baseMetadata(input: {
 export function buildTextMetadata(
   input: { filePath: string; realPath?: string },
   result: TextReadResult | NotebookReadResult,
+  rendered: RenderedTextResult = renderTextResult(result),
 ): Record<string, unknown> {
-  const rendered = renderTextResult(result);
-
   return {
     ...baseMetadata({
       filePath: input.filePath,

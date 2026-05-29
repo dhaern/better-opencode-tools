@@ -45,6 +45,25 @@ describe('hooks/read-render-metadata', () => {
     expect(output.metadata?.truncated).toBe(true);
   });
 
+  test('keeps line-length truncation in metadata', async () => {
+    const hook = createReadRenderMetadataHook();
+    const output: { title?: unknown; metadata?: Record<string, unknown> } = {
+      metadata: {
+        truncated: false,
+        has_more: false,
+        truncated_by_bytes: false,
+        truncated_by_line_length: true,
+      },
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { filePath: '/tmp/example.txt' } },
+      output,
+    );
+
+    expect(output.metadata?.truncated).toBe(true);
+  });
+
   test('leaves non-read tool outputs unchanged', async () => {
     const hook = createReadRenderMetadataHook();
     const output: { title?: unknown; metadata?: Record<string, unknown> } = {

@@ -2,48 +2,48 @@
 import { describe, expect, mock, test } from 'bun:test';
 import {
   askReadPermission,
-  escapePermissionPathLiteral,
+  assertSafePermissionPath,
   isWithinProjectBoundary,
   permissionGlob,
   selectExternalPermissionTarget,
 } from './permissions';
 
 describe('tools/read/permissions', () => {
-  test('escapes glob metacharacters already present in Unix paths', () => {
-    expect(permissionGlob('/tmp/[abc]?{x}(y)!+@*')).toBe(
-      '/tmp/\\[abc\\]\\?\\{x\\}\\(y\\)\\!\\+\\@\\*/*',
+  test('rejects wildcard metacharacters in permission paths', () => {
+    expect(() => permissionGlob('/tmp/[abc]?{x}(y)!+@*')).toThrow(
+      /wildcard metacharacters/,
     );
   });
 
-  test('preserves literal POSIX backslashes instead of treating them as separators', () => {
-    expect(permissionGlob('/tmp/a\\b')).toBe('/tmp/a\\\\b/*');
-    expect(permissionGlob('/tmp/a\\b')).not.toContain('/tmp/a/b/*');
+  test('rejects literal POSIX backslashes instead of using unsafe escapes', () => {
+    expect(() => permissionGlob('/tmp/a\\b')).toThrow(
+      /wildcard metacharacters/,
+    );
   });
 
   test('normalizes Windows separators while preserving only the final wildcard', () => {
-    expect(permissionGlob('C:\\Users\\ann\\[docs]\\file?')).toBe(
-      'C:/Users/ann/\\[docs\\]/file\\?/*',
+    expect(permissionGlob('C:\\Users\\ann\\docs\\file')).toBe(
+      'C:/Users/ann/docs/file/*',
     );
   });
 
-  test('escapes literal read permission paths without adding wildcards', () => {
-    expect(escapePermissionPathLiteral('/tmp/a*.txt')).toBe('/tmp/a\\*.txt');
-    expect(escapePermissionPathLiteral('/tmp/foo[bar].env')).toBe(
-      '/tmp/foo\\[bar\\].env',
+  test('rejects literal read permission paths with wildcard metacharacters', () => {
+    expect(() => assertSafePermissionPath('/tmp/a*.txt')).toThrow(
+      /wildcard metacharacters/,
     );
-    const backslashPattern = escapePermissionPathLiteral('/tmp/a\\b[1].txt');
-    expect(backslashPattern).toBe('/tmp/a\\\\b\\[1\\].txt');
-    expect(backslashPattern).not.toContain('/tmp/a/b');
+    expect(() => assertSafePermissionPath('/tmp/foo[bar].env')).toThrow(
+      /wildcard metacharacters/,
+    );
   });
 
-  test('uses escaped literal paths for read permission prompts', async () => {
+  test('uses safe literal paths for read permission prompts', async () => {
     const ask = mock(async () => undefined);
 
     await askReadPermission({
       ctx: { ask } as any,
-      requestedPath: '/tmp/a\\b[1].txt',
-      resolvedPath: '/tmp/a\\b[1].txt',
-      accessPath: '/tmp/a\\b[1].txt',
+      requestedPath: '/tmp/abc.txt',
+      resolvedPath: '/tmp/abc.txt',
+      accessPath: '/tmp/abc.txt',
       offset: 1,
       limit: 10,
     });
@@ -56,9 +56,24 @@ describe('tools/read/permissions', () => {
         },
       ]
     )[0];
-    expect(request.patterns).toEqual(['/tmp/a\\\\b\\[1\\].txt']);
-    expect(request.always).toEqual(['/tmp/a\\\\b\\[1\\].txt']);
-    expect(request.patterns[0]).not.toContain('/tmp/a/b');
+    expect(request.patterns).toEqual(['/tmp/abc.txt']);
+    expect(request.always).toEqual(['/tmp/abc.txt']);
+  });
+
+  test('fails closed when read permission path cannot be represented safely', async () => {
+    const ask = mock(async () => undefined);
+
+    await expect(
+      askReadPermission({
+        ctx: { ask } as any,
+        requestedPath: '/tmp/a*.txt',
+        resolvedPath: '/tmp/a*.txt',
+        accessPath: '/tmp/a*.txt',
+        offset: 1,
+        limit: 10,
+      }),
+    ).rejects.toThrow(/wildcard metacharacters/);
+    expect(ask).not.toHaveBeenCalled();
   });
 
   test('does not treat filesystem root as an effective project boundary', () => {
