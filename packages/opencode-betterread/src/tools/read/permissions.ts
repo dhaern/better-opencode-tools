@@ -1,16 +1,9 @@
 import path from 'node:path';
 import type { ToolContext } from '@opencode-ai/plugin';
-import { Effect } from 'effect';
+import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
 import { READ_TOOL_ID } from './constants';
 
 type AskContext = Pick<ToolContext, 'ask' | 'directory' | 'worktree'>;
-
-export async function executePermissionEffect<T>(
-  value: T | Promise<T> | Effect.Effect<T>,
-): Promise<T> {
-  if (Effect.isEffect(value)) return Effect.runPromise(value);
-  return Promise.resolve(value);
-}
 
 function contains(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -52,7 +45,7 @@ export function selectExternalPermissionTarget(input: {
   );
 }
 
-const GLOB_META_CHARS = /([\\*?[\]{}()!+@])/g;
+const PERMISSION_SAFE_CHARS = /^[\w./: -]+$/u;
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -68,20 +61,20 @@ function normalizePermissionGlobPath(parentDir: string): string {
   return normalized.replace(/\/+$/g, '');
 }
 
-function escapeGlobLiteral(value: string): string {
-  return value.replace(GLOB_META_CHARS, '\\$1');
-}
+export function assertSafePermissionPath(permissionPath: string): string {
+  if (!PERMISSION_SAFE_CHARS.test(permissionPath)) {
+    throw new Error(
+      `Cannot request a safe read permission for a path with wildcard metacharacters: ${permissionPath}`,
+    );
+  }
 
-export function escapePermissionPathLiteral(permissionPath: string): string {
-  return escapeGlobLiteral(permissionPath);
-}
-
-function escapePermissionGlobLiteral(permissionPath: string): string {
-  return escapeGlobLiteral(normalizePermissionGlobPath(permissionPath));
+  return permissionPath;
 }
 
 export function permissionGlob(parentDir: string): string {
-  const literalParent = escapePermissionGlobLiteral(parentDir);
+  const literalParent = assertSafePermissionPath(
+    normalizePermissionGlobPath(parentDir),
+  );
 
   return literalParent.endsWith('/')
     ? `${literalParent}*`
@@ -102,7 +95,7 @@ export async function askExternalDirectoryPermission(input: {
       : path.dirname(input.targetPath);
   const glob = permissionGlob(parentDir);
 
-  await executePermissionEffect(
+  await runOpenCodeSideEffect(
     input.ctx.ask({
       permission: 'external_directory',
       patterns: [glob],
@@ -128,9 +121,9 @@ export async function askReadPermission(input: {
   offset: number;
   limit: number;
 }): Promise<void> {
-  const permissionPath = escapePermissionPathLiteral(input.accessPath);
+  const permissionPath = assertSafePermissionPath(input.accessPath);
 
-  await executePermissionEffect(
+  await runOpenCodeSideEffect(
     input.ctx.ask({
       permission: READ_TOOL_ID,
       patterns: [permissionPath],

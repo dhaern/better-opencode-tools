@@ -12,8 +12,6 @@ export type NormalizedReadArgs = {
   limit: number;
 };
 
-export type ResolvedReadArgs = NormalizedReadArgs;
-
 export type ReadTargetKind = 'file' | 'directory' | 'special';
 
 export type TextReadResult = {
@@ -72,7 +70,7 @@ export type PdfReadResult = {
 };
 
 export type ReadInspection = {
-  args: ResolvedReadArgs;
+  args: NormalizedReadArgs;
   resolvedPath: string;
   accessPath: string;
   realPath?: string;
@@ -95,4 +93,10 @@ export type ReadExecutionResult = {
   realPath?: string;
   output: string;
   metadata: Record<string, unknown>;
+  attachments?: Array<{
+    type: 'file';
+    mime: string;
+    url: string;
+    filename?: string;
+  }>;
 };

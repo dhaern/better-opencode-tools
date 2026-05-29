@@ -82,6 +82,7 @@ export function createReadTool(
       return {
         output: result.output,
         metadata: result.metadata,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
       };
     },
   });
