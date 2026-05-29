@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GREP_LIMIT, DEFAULT_GREP_TIMEOUT_MS } from './constants';
 import { normalizeGrepInput } from './normalize';
@@ -85,6 +85,46 @@ describe('tools/grep/normalize', () => {
     expect(normalized.resolvedPath).toBe(path.join(repoDir, 'linked-outside'));
     expect(normalized.searchPath).toBe(externalDir);
     expect(normalized.permissionPatterns).toEqual([externalDir]);
+  });
+
+  test('falls back to resolved worktree path when canonicalization fails', () => {
+    const repoDir = temps.createRepo();
+    const restrictedWorktree = path.join(repoDir, 'restricted-worktree');
+    mkdirSync(restrictedWorktree);
+
+    try {
+      chmodSync(restrictedWorktree, 0o000);
+
+      const normalized = normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: '.',
+        },
+        createRepoContext(repoDir, restrictedWorktree) as any,
+      );
+
+      expect(normalized.worktree).toBe(path.resolve(restrictedWorktree));
+    } finally {
+      chmodSync(restrictedWorktree, 0o700);
+    }
+  });
+
+  test('resolves relative worktrees against the tool directory', () => {
+    const parentDir = temps.createDir('opencode-bettergrep-parent');
+    const repoDir = path.join(parentDir, 'repo');
+    mkdirSync(repoDir);
+    mkdirSync(path.join(repoDir, 'src'));
+    writeFileSync(path.join(repoDir, 'src', 'index.ts'), 'createTool\n');
+
+    const normalized = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        path: 'src',
+      },
+      createRepoContext(repoDir, 'relative-worktree') as any,
+    );
+
+    expect(normalized.worktree).toBe(path.join(repoDir, 'relative-worktree'));
   });
 
   test('fails cleanly for dangling symlink search paths', () => {

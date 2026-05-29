@@ -82,11 +82,19 @@ export function normalizeGrepInput(
   const cwd = context.directory || pluginCtx?.directory || process.cwd();
   const rawWorktree =
     context.worktree || pluginCtx?.worktree || context.directory || cwd;
-  const worktree = existsSync(rawWorktree)
-    ? realpathSync.native
-      ? realpathSync.native(rawWorktree)
-      : realpathSync(rawWorktree)
-    : path.resolve(rawWorktree);
+  const absoluteRawWorktree = path.isAbsolute(rawWorktree)
+    ? rawWorktree
+    : path.resolve(cwd, rawWorktree);
+  let worktree: string;
+  try {
+    worktree = existsSync(absoluteRawWorktree)
+      ? realpathSync.native
+        ? realpathSync.native(absoluteRawWorktree)
+        : realpathSync(absoluteRawWorktree)
+      : absoluteRawWorktree;
+  } catch {
+    worktree = absoluteRawWorktree;
+  }
   const base = cwd;
   const requestedPath = cleanOptionalString(args.path) ?? '.';
   const resolvedPath = path.isAbsolute(requestedPath)

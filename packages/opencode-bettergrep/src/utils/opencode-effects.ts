@@ -2,12 +2,6 @@ import { Effect } from 'effect';
 
 export type MaybeEffect<T> = T | Promise<T> | Effect.Effect<T>;
 
-export function isMissingInstanceRefError(error: unknown): boolean {
-  return (
-    error instanceof Error && error.message.includes('InstanceRef not provided')
-  );
-}
-
 export async function resolveOpenCodeEffect<T>(
   value: MaybeEffect<T>,
 ): Promise<T> {
