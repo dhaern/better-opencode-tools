@@ -45,7 +45,7 @@ export function selectExternalPermissionTarget(input: {
   );
 }
 
-const GLOB_META_CHARS = /[*?[\]{}()!+@\\]/;
+const GLOB_META_CHARS = /[*?[\]{}()!+\\]/;
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^\\\\[^\\]+\\[^\\]+/;
 

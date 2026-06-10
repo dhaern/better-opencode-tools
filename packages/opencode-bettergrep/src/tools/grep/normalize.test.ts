@@ -87,6 +87,60 @@ describe('tools/grep/normalize', () => {
     expect(normalized.permissionPatterns).toEqual([externalDir]);
   });
 
+  test('normalizes multiple search paths with mixed relative, absolute and symlink targets', () => {
+    const repoDir = temps.createRepo();
+    const externalDir = temps.createDir('opencode-bettergrep-multi-ext');
+    writeFileSync(path.join(repoDir, 'README.md'), 'createTool\n');
+    writeFileSync(path.join(externalDir, 'outside.ts'), 'createTool\n');
+    symlinkSync(externalDir, path.join(repoDir, 'linked-outside'), 'dir');
+
+    const normalized = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        paths: ['src', path.join(repoDir, 'README.md'), 'linked-outside'],
+      },
+      createRepoContext(repoDir) as any,
+    );
+
+    expect(normalized.requestedPath).toBe(
+      `src, ${path.join(repoDir, 'README.md')}, linked-outside`,
+    );
+    expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
+    expect(normalized.searchTargets).toEqual([
+      path.join(repoDir, 'src'),
+      path.join(repoDir, 'README.md'),
+      externalDir,
+    ]);
+    expect(normalized.permissionPatterns).toEqual([
+      path.join(repoDir, 'src'),
+      path.join(repoDir, 'README.md'),
+      externalDir,
+    ]);
+    expect(buildRgArgs(normalized)).toEqual(
+      expect.arrayContaining([
+        '--regexp',
+        'createTool',
+        path.join(repoDir, 'src'),
+        path.join(repoDir, 'README.md'),
+        externalDir,
+      ]),
+    );
+  });
+
+  test('rejects accidental path arrays with a clear compatibility error', () => {
+    const repoDir = temps.createRepo();
+
+    expect(() =>
+      normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: ['src', 'README.md'],
+        } as any,
+        createRepoContext(repoDir) as any,
+      ),
+    ).toThrow('path must be a string; use paths for multiple search targets');
+  });
+
   test('falls back to resolved worktree path when canonicalization fails', () => {
     const repoDir = temps.createRepo();
     const restrictedWorktree = path.join(repoDir, 'restricted-worktree');

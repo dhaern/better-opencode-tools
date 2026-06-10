@@ -21,6 +21,12 @@ export const grepArgsSchema: Record<string, unknown> = {
     .describe(
       'File or directory to search in. Defaults to the current project directory.',
     ),
+  paths: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      'Optional list of files or directories to search. When provided, it overrides path and searches all listed targets.',
+    ),
   include: z
     .string()
     .optional()

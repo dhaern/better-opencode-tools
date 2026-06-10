@@ -1,6 +1,7 @@
 export interface GrepToolInput {
   pattern: string;
   path?: string;
+  paths?: string[];
   include?: string;
   globs?: string[];
   exclude_globs?: string[];

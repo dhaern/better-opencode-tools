@@ -1,6 +1,6 @@
 {
   "name": "opencode-betterread",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Standalone OpenCode plugin that replaces the native read tool with a real plugin implementation.",
   "repository": {
     "type": "git",
@@ -49,8 +49,8 @@
     "format": "biome format src package.json README.md biome.json tsconfig.json --write"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.15.12",
-    "effect": "4.0.0-beta.66"
+    "@opencode-ai/plugin": "1.17.3",
+    "effect": "4.0.0-beta.74"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.11",

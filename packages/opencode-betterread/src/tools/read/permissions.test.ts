@@ -10,8 +10,17 @@ import {
 
 describe('tools/read/permissions', () => {
   test('rejects wildcard metacharacters in permission paths', () => {
-    expect(() => permissionGlob('/tmp/[abc]?{x}(y)!+@*')).toThrow(
+    expect(() => permissionGlob('/tmp/[abc]?{x}(y)!+*')).toThrow(
       /wildcard metacharacters/,
+    );
+  });
+
+  test('allows scoped package paths containing @', () => {
+    const scopedPath = '/tmp/project/node_modules/@opencode-ai/plugin/package.json';
+
+    expect(assertSafePermissionPath(scopedPath)).toBe(scopedPath);
+    expect(permissionGlob('/tmp/project/node_modules/@opencode-ai/plugin')).toBe(
+      '/tmp/project/node_modules/@opencode-ai/plugin/*',
     );
   });
 

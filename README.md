@@ -15,6 +15,12 @@ runtime behavior behind them.
 | [`opencode-bettergrep`](./packages/opencode-bettergrep) | `grep` | Advanced local search with `ripgrep`, fallback handling, rich filters, and hard-kill timeouts. |
 | [`opencode-betterread`](./packages/opencode-betterread) | `read` | Real plugin replacement for file/directory/notebook reading with stricter permissions and robust output budgeting. |
 
+## 🆕 Release 0.2.2
+
+- `betterread`: `@` is now allowed in scoped paths, with safer permission glob handling.
+- `bettergrep`: added explicit `paths: string[]` support and stricter mixed-target normalization.
+- All packages are aligned to OpenCode `1.17.3` and `effect` `4.0.0-beta.74`.
+
 ## 🚀 Why use these instead of the native tools?
 
 ### ⚡ Faster file operations

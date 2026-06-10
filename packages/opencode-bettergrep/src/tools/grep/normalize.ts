@@ -59,6 +59,39 @@ function uniqueStrings(values: Iterable<string | undefined>): string[] {
   return normalized;
 }
 
+function normalizeSearchTarget(target: string, base: string): {
+  requestedPath: string;
+  resolvedPath: string;
+  searchPath: string;
+} {
+  const resolvedPath = path.isAbsolute(target) ? target : path.resolve(base, target);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Search path does not exist: ${target}`);
+  }
+
+  let searchPath: string;
+  try {
+    searchPath = realpathSync.native
+      ? realpathSync.native(resolvedPath)
+      : realpathSync(resolvedPath);
+  } catch (error) {
+    throw new Error(
+      `Failed to resolve search path: ${target} (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+
+  const searchStat = statSync(searchPath);
+  if (!searchStat.isFile() && !searchStat.isDirectory()) {
+    throw new Error(`Search path must be a file or directory: ${target}`);
+  }
+
+  return {
+    requestedPath: target,
+    resolvedPath,
+    searchPath,
+  };
+}
+
 function cleanOptionalPositiveInteger(
   value: number | undefined,
 ): number | undefined {
@@ -96,10 +129,18 @@ export function normalizeGrepInput(
     worktree = absoluteRawWorktree;
   }
   const base = cwd;
-  const requestedPath = cleanOptionalString(args.path) ?? '.';
-  const resolvedPath = path.isAbsolute(requestedPath)
-    ? requestedPath
-    : path.resolve(base, requestedPath);
+  const rawTargets = cleanStringArray(args.paths);
+  if (rawTargets.length === 0 && Array.isArray((args as { path?: unknown }).path)) {
+    throw new Error('path must be a string; use paths for multiple search targets');
+  }
+  const requestedTargets = rawTargets.length > 0 ? uniqueStrings(rawTargets) : [cleanOptionalString(args.path) ?? '.'];
+  const normalizedTargets = requestedTargets.map((target) =>
+    normalizeSearchTarget(target, base),
+  );
+  const primaryTarget = normalizedTargets[0] as (typeof normalizedTargets)[number];
+  const requestedPath = rawTargets.length > 0 ? requestedTargets.join(', ') : primaryTarget.requestedPath;
+  const resolvedPath = rawTargets.length > 0 ? primaryTarget.resolvedPath : primaryTarget.resolvedPath;
+  const searchPath = primaryTarget.searchPath;
   const include = cleanOptionalString(args.include);
   const globs = cleanStringArray(args.globs);
   const excludeGlobs = cleanStringArray(args.exclude_globs);
@@ -130,31 +171,10 @@ export function normalizeGrepInput(
     cleanStringArray(args.exclude_file_types),
   );
 
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Search path does not exist: ${requestedPath}`);
-  }
-
-  let searchPath: string;
-  try {
-    searchPath = realpathSync.native
-      ? realpathSync.native(resolvedPath)
-      : realpathSync(resolvedPath);
-  } catch (error) {
-    throw new Error(
-      `Failed to resolve search path: ${requestedPath} (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-  const searchStat = statSync(searchPath);
   const multilineDotall = args.multiline_dotall === true;
   const multiline = args.multiline === true || multilineDotall;
   const caseSensitive = args.case_sensitive !== false;
   const smartCase = caseSensitive && args.smart_case === true;
-
-  if (!searchStat.isFile() && !searchStat.isDirectory()) {
-    throw new Error(
-      `Search path must be a file or directory: ${requestedPath}`,
-    );
-  }
 
   return {
     pattern: args.pattern,
@@ -199,6 +219,9 @@ export function normalizeGrepInput(
     sortOrder: args.sort_order ?? (args.sort_by === 'mtime' ? 'desc' : 'asc'),
     cwd,
     worktree,
-    permissionPatterns: [searchPath],
+    ...(rawTargets.length > 0
+      ? { searchTargets: normalizedTargets.map((target) => target.searchPath) }
+      : {}),
+    permissionPatterns: normalizedTargets.map((target) => target.searchPath),
   };
 }
