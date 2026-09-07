@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { release } from 'node:os';
-import { crossSpawn } from './compat';
+import { crossSpawn, waitForProcessOutputWithAbortGrace } from './compat';
+
+const SUPPORT_PROBE_TIMEOUT_MS = 5_000;
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
 
@@ -19,6 +21,7 @@ function isPwshAvailable(): boolean {
   if (process.platform !== 'win32') return false;
   const result = spawnSync('where', ['pwsh'], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: SUPPORT_PROBE_TIMEOUT_MS,
   });
   return result.status === 0;
 }
@@ -33,6 +36,7 @@ function hasCommand(command: string, args: string[] = ['--version']): boolean {
   try {
     const result = spawnSync(command, args, {
       stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: SUPPORT_PROBE_TIMEOUT_MS,
     });
     return result.status === 0;
   } catch {
@@ -145,19 +149,21 @@ export async function extractZip(
     });
   }
 
-  const onAbort = () => {
-    try {
-      proc.kill();
-    } catch {
-      // Process may have already exited.
-    }
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  const stderrPromise = proc.stderr();
-  const exitCode = await proc.exited;
-  signal?.removeEventListener('abort', onAbort);
+  const stderrPromise = proc.stderr().catch(() => '');
+  // Abort-gated cleanup grace: healthy-but-slow extractions have NO implicit
+  // duration cap; termination + bounded pipe drain only run after a real
+  // abort, so descendants inheriting the pipes cannot hang the wait either.
+  const output = await waitForProcessOutputWithAbortGrace(
+    proc,
+    Promise.all([proc.exited.catch(() => 1), stderrPromise]).then(
+      ([exitCode]) => exitCode as number,
+    ),
+    signal,
+  );
+  if (output === 'aborted') {
+    throw createAbortError();
+  }
+  const exitCode = output;
 
   if (signal?.aborted) {
     throw createAbortError();

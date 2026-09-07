@@ -68,6 +68,7 @@ export interface NormalizedGrepInput {
   sortBy: GrepSortMode;
   sortOrder: GrepSortOrder;
   searchTargets?: string[];
+  searchTargetKinds: Array<'file' | 'directory'>;
   cwd: string;
   worktree: string;
   permissionPatterns: string[];

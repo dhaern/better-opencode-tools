@@ -5,6 +5,7 @@ import {
   killProcess,
   setAbortKind,
   spawnRipgrep,
+  waitForExitAndStderr,
 } from './runtime';
 
 function isAlive(pid: number | undefined): boolean {
@@ -90,5 +91,21 @@ describe('tools/grep/runtime process termination', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(isAlive(proc.proc.pid)).toBe(false);
+  });
+
+  test('handles a rejected process promise without creating an unhandled rejection', async () => {
+    const proc = {
+      proc: {
+        exitCode: null,
+        signalCode: null,
+      },
+      exited: Promise.reject(new Error('spawn failed')),
+      kill: () => true,
+    } as any;
+
+    const result = await waitForExitAndStderr(proc, Promise.resolve(''));
+    expect(result.error).toBe('spawn failed');
+    killProcess(proc);
+    await Promise.resolve();
   });
 });

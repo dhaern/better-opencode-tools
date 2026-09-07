@@ -1,4 +1,4 @@
-import { DEFAULT_GREP_RETRY_COUNT } from './constants';
+import { DEFAULT_GREP_RETRY_COUNT, RG_BINARY } from './constants';
 import {
   executeContentLikeMode,
   executeCountMode,
@@ -8,7 +8,6 @@ import { buildGrepCommand, executeGrepFallback } from './fallback';
 import { buildDiscoveryInput, executeMtimeMode } from './mtime';
 import {
   type ResolvedGrepCli,
-  resolveGrepCli,
   resolveGrepCliWithAutoInstall,
 } from './resolver';
 import { createEmptyResult } from './result-utils';
@@ -95,10 +94,14 @@ async function resolveCliForExecution(
 }
 
 export const runRipgrep: GrepRunner = async (input, signal) => {
-  const previewCli = resolveGrepCli();
-  const command = buildPreviewCommand(input, previewCli);
   const deadline = Date.now() + input.timeoutMs;
   const globalAbort = createGlobalAbortState(signal, input.timeoutMs);
+  let previewCli: ResolvedGrepCli = {
+    path: RG_BINARY,
+    backend: 'rg',
+    source: 'missing-rg',
+  };
+  let command = buildPreviewCommand(input, previewCli);
 
   const createAbortedResult = (
     attempt: number,
@@ -120,6 +123,8 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
 
       try {
         cli = await resolveCliForExecution(globalAbort.signal);
+        previewCli = cli;
+        command = buildPreviewCommand(input, previewCli);
       } catch (error) {
         if (error instanceof AbortWaitError || globalAbort.signal.aborted) {
           return createAbortedResult(attempt);

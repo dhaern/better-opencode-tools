@@ -254,14 +254,22 @@ export function killProcess(proc: GrepProcess): void {
   }, KILL_GRACE_MS);
   timer.unref?.();
   KILL_TIMERS.set(proc, timer);
-  void proc.exited.finally(() => clearKillTimer(proc));
+  void proc.exited.then(
+    () => clearKillTimer(proc),
+    () => clearKillTimer(proc),
+  );
 }
 
-export function spawnRipgrep(command: string[], cwd: string): GrepProcess {
+export function spawnRipgrep(
+  command: string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+): GrepProcess {
   return crossSpawn(command, {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    env,
   }) as GrepProcess;
 }
 
@@ -365,7 +373,7 @@ export function isTransientStderr(stderr: string): boolean {
 export async function waitForExitAndStderr(
   proc: GrepProcess,
   stderrPromise: Promise<string>,
-): Promise<{ exitCode: number; stderr: string }> {
+): Promise<{ exitCode: number; stderr: string; error?: string }> {
   const [exitResult, stderr] = await Promise.allSettled([
     proc.exited,
     stderrPromise,
@@ -375,6 +383,9 @@ export async function waitForExitAndStderr(
   return {
     exitCode,
     stderr: stderr.status === 'fulfilled' ? stderr.value : '',
+    ...(exitResult.status === 'rejected'
+      ? { error: toErrorMessage(exitResult.reason) }
+      : {}),
   };
 }
 

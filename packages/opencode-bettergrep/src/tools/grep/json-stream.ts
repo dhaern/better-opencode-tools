@@ -52,7 +52,7 @@ function toWebReadableStream(
   ) as unknown as ReadableStream<Uint8Array>;
 }
 
-class GrowableByteBuffer {
+export class GrowableByteBuffer {
   private buffer = new Uint8Array(0);
   private start = 0;
   private end = 0;
@@ -81,6 +81,23 @@ class GrowableByteBuffer {
     const absoluteIndex = scanStart + relativeIndex;
     const item = this.buffer.slice(this.start, absoluteIndex);
     this.start = absoluteIndex + 1;
+    this.searchStart = this.start;
+    this.compactIfNeeded();
+    return item;
+  }
+
+  startsWith(prefix: Uint8Array): boolean {
+    if (prefix.length > this.end - this.start) return false;
+    for (let index = 0; index < prefix.length; index += 1) {
+      if (this.buffer[this.start + index] !== prefix[index]) return false;
+    }
+    return true;
+  }
+
+  takePrefix(length: number): Uint8Array | undefined {
+    if (length < 0 || this.end - this.start < length) return undefined;
+    const item = this.buffer.slice(this.start, this.start + length);
+    this.start += length;
     this.searchStart = this.start;
     this.compactIfNeeded();
     return item;
@@ -302,7 +319,15 @@ export async function readTextStream(
   let text = '';
 
   while (true) {
-    const { done, value } = await reader.read();
+    let result: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      result = await reader.read();
+    } catch {
+      // Stream was destroyed (e.g. force-closed after a probe timeout):
+      // keep whatever was collected instead of rejecting.
+      break;
+    }
+    const { done, value } = result;
     text += decodeChunk(decoder, value);
 
     if (text.length > maxChars) {

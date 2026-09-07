@@ -127,6 +127,21 @@ describe('tools/grep/normalize', () => {
     );
   });
 
+  test('deduplicates equivalent search targets after realpath normalization', () => {
+    const repoDir = temps.createRepo();
+    const normalized = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        paths: ['src', path.join(repoDir, 'src'), 'src/'],
+      },
+      createRepoContext(repoDir) as any,
+    );
+
+    expect(normalized.searchTargets).toEqual([path.join(repoDir, 'src')]);
+    expect(normalized.searchTargetKinds).toEqual(['directory']);
+    expect(normalized.permissionPatterns).toEqual([path.join(repoDir, 'src')]);
+  });
+
   test('rejects accidental path arrays with a clear compatibility error', () => {
     const repoDir = temps.createRepo();
 

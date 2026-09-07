@@ -62,12 +62,13 @@ export function applySuccessfulStderr(
 export function finalizeNonFatalExit(
   result: GrepSearchResult,
   exitCode: number,
+  stderr = result.stderr,
 ): GrepSearchResult | undefined {
   if (exitCode === 0) {
     return result;
   }
 
-  if (exitCode === 1 && !hasVisibleResults(result)) {
+  if (exitCode === 1 && !hasVisibleResults(result) && stderr.length === 0) {
     return result;
   }
 

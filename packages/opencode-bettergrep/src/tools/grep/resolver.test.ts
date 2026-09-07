@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
-import { resolveGrepCli, resolveGrepCliWithAutoInstall } from './resolver';
+import {
+  probeExecutable,
+  resolveGrepCli,
+  resolveGrepCliWithAutoInstall,
+} from './resolver';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
@@ -109,6 +113,32 @@ describe('tools/grep/resolver', () => {
     },
   ])('resolveGrepCli $name', ({ deps, expected }) => {
     expect(resolveGrepCli(deps)).toEqual(expected);
+  });
+
+  test('probeExecutable enforces its timeout for a non-terminating binary', async () => {
+    const result = await probeExecutable(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      undefined,
+      20,
+    );
+
+    expect(result.timedOut).toBe(true);
+  });
+
+  test('probeExecutable aborts a running probe without leaving it pending', async () => {
+    const controller = new AbortController();
+    const pending = probeExecutable(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      controller.signal,
+      5_000,
+    );
+
+    setTimeout(() => controller.abort(), 10);
+    await expect(pending).rejects.toThrow(
+      /cancelled before execution started/i,
+    );
   });
 
   test('resolveGrepCliWithAutoInstall installs ripgrep once on miss', async () => {
