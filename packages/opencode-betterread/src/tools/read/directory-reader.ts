@@ -34,12 +34,17 @@ function directoryPaginationLimitMessage(resolvedPath: string): string {
 
 async function scanDirectoryEntries(
   resolvedPath: string,
+  signal?: AbortSignal,
 ): Promise<DirectoryScanResult> {
+  signal?.throwIfAborted();
   const directory = await opendir(resolvedPath);
   const entries: ScannedDirectoryEntry[] = [];
 
   try {
     while (entries.length < MAX_DIRECTORY_SCAN_ENTRIES) {
+      // Cooperative cancellation: a scan aborted by the user stops instead
+      // of walking up to 65k entries with the signal already fired.
+      signal?.throwIfAborted();
       const entry = await directory.read();
       if (!entry) {
         return {
@@ -77,10 +82,13 @@ async function scanDirectoryEntries(
 async function formatDirectoryEntry(
   resolvedPath: string,
   entry: ScannedDirectoryEntry,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   if (entry.dirent.isDirectory()) return `${entry.name}/`;
   if (entry.dirent.isSymbolicLink()) {
     try {
+      signal?.throwIfAborted();
       if ((await stat(path.join(resolvedPath, entry.name))).isDirectory()) {
         return `${entry.name}/`;
       }
@@ -140,7 +148,9 @@ export async function readDirectory(
   const startIndex = Math.max(offset - 1, 0);
   const scan = await (options.scanDirectoryEntries ?? scanDirectoryEntries)(
     resolvedPath,
+    signal,
   );
+  signal?.throwIfAborted();
 
   if (!scan.totalEntriesKnown && offset > 1) {
     throw new Error(directoryPaginationLimitMessage(resolvedPath));
@@ -155,8 +165,10 @@ export async function readDirectory(
   );
   const visible: string[] = [];
   for (const entry of visibleDirents) {
-    visible.push(await formatDirectoryEntry(resolvedPath, entry));
+    signal?.throwIfAborted();
+    visible.push(await formatDirectoryEntry(resolvedPath, entry, signal));
   }
+  signal?.throwIfAborted();
   const normalizedPath = path.normalize(resolvedPath);
 
   const { selected, truncatedByBytes } = budgetedDirectoryEntries(

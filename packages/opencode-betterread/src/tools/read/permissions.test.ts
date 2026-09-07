@@ -43,13 +43,28 @@ describe('tools/read/permissions', () => {
     );
   });
 
+  test('does not turn a literal POSIX backslash into a different permission path', async () => {
+    const ask = mock(async () => undefined);
+
+    await expect(
+      askReadPermission({
+        ctx: { ask, worktree: '/repo' } as any,
+        requestedPath: '/repo/a\\b',
+        resolvedPath: '/repo/a\\b',
+        accessPath: '/repo/a\\b',
+        offset: 1,
+        limit: 10,
+      }),
+    ).rejects.toThrow(/wildcard metacharacters/);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
   test('normalizes Windows separators while preserving only the final wildcard', () => {
     expect(permissionGlob('C:\\Users\\ann\\docs\\file')).toBe(
       'C:/Users/ann/docs/file/*',
     );
-    // Backslash is an escape character in the host matcher, so raw
-    // Windows-style paths must be rejected; askReadPermission normalizes
-    // separators before the safety check.
+    // Raw backslashes are rejected as a conservative fail-closed policy;
+    // askReadPermission normalizes actual Windows-style paths first.
     expect(() => assertSafePermissionPath('C:\\Users\\ann\\file.txt')).toThrow(
       /wildcard metacharacters/,
     );

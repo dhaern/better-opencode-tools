@@ -261,6 +261,29 @@ describe('tools/read/tool', () => {
     ).rejects.toThrow(/changed while awaiting permission/);
   });
 
+  test('rejects when a directory is swapped while awaiting permission', async () => {
+    const repoDir = temps.createRepo();
+    const target = path.join(repoDir, 'src');
+    const outside = temps.createDir('opencode-betterread-swap-dir');
+    const read = createReadTool({
+      directory: repoDir,
+      worktree: repoDir,
+      client: {},
+    } as any);
+    const ctx = {
+      ...createExecutionContext(repoDir),
+      ask: mock(async () => {
+        const { rmSync, symlinkSync } = await import('node:fs');
+        rmSync(target, { recursive: true });
+        symlinkSync(outside, target);
+      }),
+    };
+
+    await expect(
+      read.execute({ filePath: target }, ctx as any),
+    ).rejects.toThrow(/changed while awaiting permission/);
+  });
+
   test('rejects immediately when the abort signal is already cancelled', async () => {
     const repoDir = temps.createRepo();
     const read = createReadTool({

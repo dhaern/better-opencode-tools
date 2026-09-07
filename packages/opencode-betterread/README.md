@@ -46,8 +46,8 @@ silently read.
 - text/code files
 - directories
 - Jupyter notebooks (`.ipynb`)
-- PDFs as metadata/text-only summaries
-- images as metadata-only summaries
+- PDFs as conservative metadata/text summaries plus embedded attachments
+- images as dimensions/metadata plus embedded attachments
 - binary files as explicit binary placeholders
 - missing paths with safe suggestions when possible
 
@@ -112,6 +112,7 @@ bun run check
 - Nested `AGENTS.md` auto-loading: the plugin API does not expose the host's
   instruction resolver, so reading a file inside a subproject does not
   auto-attach that subproject's `AGENTS.md` (the native tool does).
-- PDF support is intentionally conservative and metadata-oriented.
+- PDF metadata extraction is intentionally conservative; small PDFs still include
+  their embedded attachment when they fit the 20 MiB source limit.
 - The plugin replaces the agent-facing `read` tool, but it does not patch private
   OpenCode internals.

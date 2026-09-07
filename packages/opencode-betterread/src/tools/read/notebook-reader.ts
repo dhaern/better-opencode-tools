@@ -1,8 +1,8 @@
 import type { FileHandle } from 'node:fs/promises';
-import { readFile, stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
 import { selectBudgetedLines, splitLogicalLines } from './output-budget';
-import { readTextFileStreaming } from './text-reader';
+import { readAllFileBytes, readTextFileStreaming } from './text-reader';
 import type { NotebookReadResult } from './types';
 
 type NotebookCell = {
@@ -92,11 +92,19 @@ async function readParsedNotebook(
   offset: number,
   limit: number,
   mtimeMs: number,
+  signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<NotebookReadResult> {
-  const raw = handle
-    ? (await handle.readFile()).toString('utf8')
-    : await readFile(resolvedPath, 'utf8');
+  signal?.throwIfAborted();
+  const file = handle ?? (await open(resolvedPath, 'r'));
+  const ownsHandle = !handle;
+  let raw: string;
+  try {
+    raw = (await readAllFileBytes(file, signal)).toString('utf8');
+  } finally {
+    if (ownsHandle) await file.close().catch(() => undefined);
+  }
+  signal?.throwIfAborted();
   const parsed: unknown = JSON.parse(raw);
   // JSON that is valid but not a notebook (missing/invalid cells) falls back
   // to the raw reader instead of silently rendering an empty document.
@@ -146,9 +154,11 @@ export async function readNotebook(
       offset,
       limit,
       fileStat.mtimeMs,
+      signal,
       handle,
     );
   } catch {
+    signal?.throwIfAborted();
     return readNotebookFallback(resolvedPath, offset, limit, signal, handle);
   }
 }

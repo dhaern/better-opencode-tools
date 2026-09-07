@@ -55,11 +55,25 @@ function parseJpeg(buffer: Buffer): { width?: number; height?: number } {
 export async function readImageInfo(
   resolvedPath: string,
   handle?: FileHandle,
+  signal?: AbortSignal,
 ): Promise<ImageInfoResult> {
+  signal?.throwIfAborted();
   const file = handle ?? (await open(resolvedPath, 'r'));
   try {
     const buffer = Buffer.alloc(64 * 1024);
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      signal?.throwIfAborted();
+      const result = await file.read(
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    signal?.throwIfAborted();
     const sample = buffer.subarray(0, bytesRead);
     const mime = sniffMime(sample) ?? 'application/octet-stream';
     const fileStat = await file.stat();

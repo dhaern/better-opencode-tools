@@ -139,16 +139,18 @@ export async function askReadPermission(input: {
   let permissionPath: string;
   if (worktree) {
     // Windows-style inputs must be relativized with win32 semantics even when
-    // running on POSIX. The result is always forward-slashed: a backslash is
-    // never representable in a safe permission pattern anyway (the host
-    // matcher rewrites it to a path separator).
+    // running on POSIX. Only the win32 result is forward-slashed: a literal
+    // backslash in a POSIX filename must stay distinct (and fail closed in
+    // the safety check) instead of colliding with the real 'a/b' path.
     const normalizedWorktree = normalizePermissionPathSeparators(worktree);
     const useWin32 =
       isWindowsStylePath(worktree) || isWindowsStylePath(accessPath);
     const relative = useWin32
       ? path.win32.relative(normalizedWorktree, accessPath)
       : path.relative(normalizedWorktree, accessPath);
-    permissionPath = relative.replaceAll('\\', '/') || '.';
+    permissionPath = useWin32
+      ? relative.replaceAll('\\', '/') || '.'
+      : relative || '.';
   } else {
     permissionPath = accessPath;
   }

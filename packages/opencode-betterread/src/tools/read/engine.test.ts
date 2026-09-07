@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
-import { executeRead, inspectReadTarget } from './engine';
+import { executeRead, inspectReadTarget, readBoundedBytes } from './engine';
 
 const tempDirs: string[] = [];
 const tinyPng = Buffer.from([
@@ -29,6 +29,32 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('preserves attachment bytes when a handle returns short reads', async () => {
+    const expected = Buffer.from('short attachment payload');
+    let reads = 0;
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        reads += 1;
+        const available = expected.length - position;
+        const bytesRead = Math.max(0, Math.min(3, length, available));
+        if (bytesRead > 0) {
+          expected.copy(buffer, offset, position, position + bytesRead);
+        }
+        return { buffer, bytesRead };
+      },
+    } as any;
+
+    const actual = await readBoundedBytes(handle, expected.length);
+
+    expect(actual).toEqual(expected);
+    expect(reads).toBeGreaterThan(1);
+  });
+
   test('keeps missing paths beneath external symlinked directories canonical', async () => {
     const directory = await createWorkspace();
     const outside = await createWorkspace();

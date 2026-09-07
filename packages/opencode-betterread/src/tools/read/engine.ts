@@ -1,5 +1,6 @@
+import { constants as fsConstants } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { open, readFile, stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   isImageMime,
@@ -52,12 +53,14 @@ async function sampleFile(
   if (handle) {
     const buffer = Buffer.alloc(SAMPLE_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    signal?.throwIfAborted();
     return buffer.subarray(0, bytesRead);
   }
   const file = await open(readPath, 'r');
   try {
     const buffer = Buffer.alloc(SAMPLE_BYTES);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    signal?.throwIfAborted();
     return buffer.subarray(0, bytesRead);
   } finally {
     await file.close();
@@ -146,6 +149,43 @@ function metadataPath(input: ReadInspection): {
   };
 }
 
+// Reads up to cap+1 bytes from a handle with explicitly positioned reads,
+// tolerating short reads and stopping with an error past the cap. The shared
+// handle's cursor is never moved.
+export async function readBoundedBytes(
+  handle: FileHandle,
+  cap: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const chunkBuffer = Buffer.alloc(Math.min(1024 * 1024, cap + 1));
+  let position = 0;
+
+  for (;;) {
+    signal?.throwIfAborted();
+    const remaining = cap + 1 - total;
+    if (remaining <= 0) break;
+    const { bytesRead } = await handle.read(
+      chunkBuffer,
+      0,
+      Math.min(chunkBuffer.length, remaining),
+      position,
+    );
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    total += bytesRead;
+    chunks.push(Buffer.from(chunkBuffer.subarray(0, bytesRead)));
+    if (total > cap) break;
+  }
+
+  if (total > cap) {
+    throw new Error(`Embedded attachment exceeds the ${cap} byte limit`);
+  }
+  signal?.throwIfAborted();
+  return Buffer.concat(chunks, total);
+}
+
 // The host only delivers attachments whose URL is an embedded `data:` URL
 // (message-v2 filters `url.startsWith("data:")`), so embed bytes like the
 // native read tool does instead of returning `file://` URLs. Reading is
@@ -153,29 +193,14 @@ function metadataPath(input: ReadInspection): {
 async function dataFileAttachment(input: {
   path: string;
   mime: string;
-  handle?: FileHandle;
+  handle: FileHandle;
   signal?: AbortSignal;
 }): Promise<NonNullable<ReadExecutionResult['attachments']>[number]> {
-  input.signal?.throwIfAborted();
-  const cap = MAX_EMBEDDED_ATTACHMENT_BYTES;
-  let bytes: Buffer;
-  if (input.handle) {
-    const buffer = Buffer.alloc(cap + 1);
-    const { bytesRead } = await input.handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > cap) {
-      throw new Error(
-        `Attachment too large to embed (${input.path}; limit ${cap} bytes)`,
-      );
-    }
-    bytes = buffer.subarray(0, bytesRead);
-  } else {
-    bytes = await readFile(input.path);
-    if (bytes.byteLength > cap) {
-      throw new Error(
-        `Attachment too large to embed (${input.path}; limit ${cap} bytes)`,
-      );
-    }
-  }
+  const bytes = await readBoundedBytes(
+    input.handle,
+    MAX_EMBEDDED_ATTACHMENT_BYTES,
+    input.signal,
+  );
   return {
     type: 'file',
     mime: input.mime,
@@ -218,6 +243,20 @@ export async function executeRead(input: {
   }
 
   if (inspection.kind === 'directory') {
+    // Re-check identity before listing: a target swapped during the
+    // permission ask must not be listed as the authorized directory.
+    input.signal?.throwIfAborted();
+    const currentStat = await stat(readPath);
+    if (
+      !inspection.fileStat ||
+      currentStat.dev !== inspection.fileStat.dev ||
+      currentStat.ino !== inspection.fileStat.ino ||
+      !currentStat.isDirectory()
+    ) {
+      throw new Error(
+        `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
+      );
+    }
     const directory = {
       ...(await readDirectory(
         readPath,
@@ -245,16 +284,32 @@ export async function executeRead(input: {
   // Bind every byte we return to a single descriptor opened after the
   // permission ask and verified against the inspected identity: reopen-by-
   // path races (TOCTOU) are rejected here instead of silently reading a
-  // substituted object.
-  const handle = await open(readPath, 'r');
+  // substituted object. The pre-open re-stat narrows the swap-to-FIFO window
+  // (opening a FIFO read end would block); the post-open fstat is the real
+  // identity check.
+  input.signal?.throwIfAborted();
+  const preOpenStat = await stat(readPath);
+  if (
+    !inspection.fileStat ||
+    preOpenStat.dev !== inspection.fileStat.dev ||
+    preOpenStat.ino !== inspection.fileStat.ino ||
+    !preOpenStat.isFile()
+  ) {
+    throw new Error(
+      `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
+    );
+  }
+  const handle = await open(
+    readPath,
+    fsConstants.O_RDONLY | fsConstants.O_NONBLOCK,
+  );
   try {
     const handleStat = await handle.stat();
     if (
-      inspection.fileStat &&
-      (handleStat.dev !== inspection.fileStat.dev ||
-        handleStat.ino !== inspection.fileStat.ino ||
-        handleStat.isDirectory() ||
-        !handleStat.isFile())
+      !handleStat.isFile() ||
+      (inspection.fileStat &&
+        (handleStat.dev !== inspection.fileStat.dev ||
+          handleStat.ino !== inspection.fileStat.ino))
     ) {
       throw new Error(
         `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
@@ -266,7 +321,7 @@ export async function executeRead(input: {
 
     if (isImageMime(mime)) {
       const image = {
-        ...(await readImageInfo(readPath, handle)),
+        ...(await readImageInfo(readPath, handle, input.signal)),
         path: inspection.resolvedPath,
       };
       return {
@@ -375,8 +430,8 @@ export async function executeRead(input: {
       metadata: buildTextMetadata(metadataPath(inspection), text, rendered),
     };
   } finally {
-    // Streams created over this descriptor use autoClose:false, so the
-    // engine owns the single close for every path.
+    // All readers use positioned operations and never take ownership of this
+    // descriptor, so the engine performs the single close here.
     await handle.close().catch(() => undefined);
   }
 }

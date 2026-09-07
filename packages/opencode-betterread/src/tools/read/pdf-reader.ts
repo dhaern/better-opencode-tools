@@ -132,8 +132,11 @@ export async function readPdf(
   resolvedPath: string,
   signal?: AbortSignal,
 ): Promise<PdfReadResult> {
+  signal?.throwIfAborted();
   const fileStat = await stat(resolvedPath);
+  signal?.throwIfAborted();
   const pageCountText = await tryRun('pdfinfo', [resolvedPath], signal);
+  signal?.throwIfAborted();
   const pageCount = pageCountText?.match(/^Pages:\s+(\d+)/m)?.[1];
 
   return {
