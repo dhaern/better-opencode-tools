@@ -115,6 +115,7 @@ async function readStreamingPath(
   signal?.throwIfAborted();
   const handle = sharedHandle ?? (await open(resolvedPath, 'r'));
   const ownsHandle = !sharedHandle;
+  signal?.throwIfAborted();
   const decoder = new StringDecoder('utf8');
   const selected: string[] = [];
   const budget = createOutputBudgetState();
