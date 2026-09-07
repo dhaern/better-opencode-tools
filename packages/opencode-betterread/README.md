@@ -35,8 +35,11 @@ including symlink-aware access paths and escaped permission patterns.
 ### 🧯 Defensive filesystem behavior
 
 The implementation rejects special files such as FIFOs, handles missing paths
-with suggestions, avoids following symlinks just to decorate directory entries,
-and keeps PDF helper output bounded.
+with suggestions, resolves symlinks only for entries in the visible window to
+decorate directory links with a trailing `/` (matching the native tool), and
+keeps PDF helper output bounded. File reads open a single verified descriptor
+after the permission ask, so a target swapped mid-flight is rejected instead of
+silently read.
 
 ## 🧠 Supported inputs
 
@@ -48,14 +51,12 @@ and keeps PDF helper output bounded.
 - binary files as explicit binary placeholders
 - missing paths with safe suggestions when possible
 
-## ⚠️ Important limitation: media attachments
+## 📎 Media attachments
 
-The current public OpenCode plugin API does not expose the same rich attachment
-channel used by the built-in `read` tool.
-
-Because of that, this plugin **does not return built-in-style image/PDF
-attachments**. For images and PDFs it returns metadata/text only, with an explicit
-note in the output.
+Images and PDFs are returned as embedded `data:` base64 attachments, the only
+attachment form the host actually delivers to models (verified against OpenCode
+1.18.x). Embedded attachments are capped at 20 MiB; larger media files are
+reported as an error instead of ballooning memory and provider payloads.
 
 ## 📦 Recommended installation (npm)
 
@@ -108,7 +109,9 @@ bun run check
 
 ## ⚠️ Known limitations
 
-- No built-in-style image/PDF attachments through the current plugin API.
+- Nested `AGENTS.md` auto-loading: the plugin API does not expose the host's
+  instruction resolver, so reading a file inside a subproject does not
+  auto-attach that subproject's `AGENTS.md` (the native tool does).
 - PDF support is intentionally conservative and metadata-oriented.
 - The plugin replaces the agent-facing `read` tool, but it does not patch private
   OpenCode internals.

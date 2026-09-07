@@ -6,6 +6,9 @@ export const DEFAULT_OFFSET = 1;
 export const MAX_LINE_LENGTH = 4096;
 export const SAMPLE_BYTES = 8192;
 export const FAST_PATH_MAX_BYTES = 1024 * 1024;
+// Upper bound for base64-embedded image/PDF attachments; larger files are
+// reported as an error instead of ballooning memory and provider payloads.
+export const MAX_EMBEDDED_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_OUTPUT_BYTES = 512 * 1024;
 export const MAX_OUTPUT_CHARS = 262144;
 export const MAX_PARSED_NOTEBOOK_BYTES = MAX_OUTPUT_BYTES * 4;

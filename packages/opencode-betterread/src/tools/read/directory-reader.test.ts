@@ -9,6 +9,7 @@ const BOUNDED_SCAN_ENTRY_COUNT = 65_536;
 const tempDirs: string[] = [];
 const fileDirent = {
   isDirectory: () => false,
+  isSymbolicLink: () => false,
 } as any;
 let boundedScanEntries:
   | {

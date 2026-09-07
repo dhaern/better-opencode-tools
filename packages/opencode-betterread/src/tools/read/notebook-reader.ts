@@ -1,3 +1,4 @@
+import type { FileHandle } from 'node:fs/promises';
 import { readFile, stat } from 'node:fs/promises';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
 import { selectBudgetedLines, splitLogicalLines } from './output-budget';
@@ -31,10 +32,13 @@ function isParsedNotebookShape(value: unknown): value is {
   if (typeof value !== 'object' || value === null) return false;
   const cells = (value as { cells?: unknown }).cells;
   if (!Array.isArray(cells)) return false;
+  // Every cell must be a plain object; anything else (primitives, null,
+  // arrays) is not a well-formed notebook and must fall back to raw.
   return cells.every(
     (cell) =>
-      typeof cell !== 'object' ||
-      cell === null ||
+      typeof cell === 'object' &&
+      cell !== null &&
+      !Array.isArray(cell) &&
       isSupportedCell(cell as NotebookCell),
   );
 }
@@ -68,9 +72,16 @@ async function readNotebookFallback(
   offset: number,
   limit: number,
   signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
   return {
-    ...(await readTextFileStreaming(resolvedPath, offset, limit, signal)),
+    ...(await readTextFileStreaming(
+      resolvedPath,
+      offset,
+      limit,
+      signal,
+      handle,
+    )),
     kind: 'notebook',
     mode: 'raw-fallback',
   };
@@ -81,8 +92,11 @@ async function readParsedNotebook(
   offset: number,
   limit: number,
   mtimeMs: number,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
-  const raw = await readFile(resolvedPath, 'utf8');
+  const raw = handle
+    ? (await handle.readFile()).toString('utf8')
+    : await readFile(resolvedPath, 'utf8');
   const parsed: unknown = JSON.parse(raw);
   // JSON that is valid but not a notebook (missing/invalid cells) falls back
   // to the raw reader instead of silently rendering an empty document.
@@ -118,11 +132,12 @@ export async function readNotebook(
   offset: number,
   limit: number,
   signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
   signal?.throwIfAborted();
-  const fileStat = await stat(resolvedPath);
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   if (!shouldParseNotebook(fileStat.size)) {
-    return readNotebookFallback(resolvedPath, offset, limit, signal);
+    return readNotebookFallback(resolvedPath, offset, limit, signal, handle);
   }
 
   try {
@@ -131,8 +146,9 @@ export async function readNotebook(
       offset,
       limit,
       fileStat.mtimeMs,
+      handle,
     );
   } catch {
-    return readNotebookFallback(resolvedPath, offset, limit, signal);
+    return readNotebookFallback(resolvedPath, offset, limit, signal, handle);
   }
 }

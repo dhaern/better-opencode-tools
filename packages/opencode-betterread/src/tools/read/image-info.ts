@@ -1,3 +1,4 @@
+import type { FileHandle } from 'node:fs/promises';
 import { open } from 'node:fs/promises';
 import { sniffMime } from './binary';
 import type { ImageInfoResult } from './types';
@@ -53,8 +54,9 @@ function parseJpeg(buffer: Buffer): { width?: number; height?: number } {
 
 export async function readImageInfo(
   resolvedPath: string,
+  handle?: FileHandle,
 ): Promise<ImageInfoResult> {
-  const file = await open(resolvedPath, 'r');
+  const file = handle ?? (await open(resolvedPath, 'r'));
   try {
     const buffer = Buffer.alloc(64 * 1024);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
@@ -81,6 +83,8 @@ export async function readImageInfo(
       ...dimensions,
     };
   } finally {
-    await file.close();
+    // The verified descriptor is owned by the engine; only close handles we
+    // opened ourselves.
+    if (!handle) await file.close();
   }
 }

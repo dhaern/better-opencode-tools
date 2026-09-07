@@ -65,6 +65,14 @@ export function createReadRenderMetadataHook() {
           ) {
             output.metadata.end_line = lastLine;
             output.metadata.has_more = true;
+          } else if (
+            lastLine === undefined &&
+            typeof output.metadata.start_line === 'number'
+          ) {
+            // No numbered content survived host truncation: the window is
+            // empty from the consumer's perspective.
+            output.metadata.end_line = output.metadata.start_line - 1;
+            output.metadata.has_more = true;
           }
         }
 

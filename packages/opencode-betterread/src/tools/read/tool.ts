@@ -65,7 +65,7 @@ export function createReadTool(
       }
 
       await askReadPermission({
-        ctx,
+        ctx: permissionCtx,
         requestedPath: normalized.filePath,
         resolvedPath: inspection.resolvedPath,
         accessPath: inspection.accessPath,
@@ -74,10 +74,9 @@ export function createReadTool(
         limit: normalized.limit,
       });
 
-      // The permission ask can suspend for a long time; make sure the target
-      // we are about to open is still the object that was authorized.
-      await inspection.revalidate?.();
-
+      // Identity of what we open is enforced by executeRead itself: it opens
+      // the target once after the ask and verifies the descriptor against the
+      // inspected identity (TOCTOU closes there, not here).
       const result = await execute({
         args: normalized,
         directory,

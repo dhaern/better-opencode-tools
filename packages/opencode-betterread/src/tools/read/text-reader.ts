@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { readFile, stat } from 'node:fs/promises';
 import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
 import {
@@ -40,8 +41,11 @@ async function readFastPath(
   offset: number,
   limit: number,
   mtimeMs: number,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
-  const raw = await readFile(resolvedPath, 'utf8');
+  const raw = handle
+    ? (await handle.readFile()).toString('utf8')
+    : await readFile(resolvedPath, 'utf8');
   const split = splitLogicalLines(raw);
   const { selected, truncatedByBytes, truncatedByLineLength, hasMore } =
     selectBudgetedLines(split, offset, limit);
@@ -64,9 +68,13 @@ async function readStreamingPath(
   limit: number,
   mtimeMs: number,
   signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
-  const stream = createReadStream(resolvedPath, { encoding: 'utf8' });
+  const stream = createReadStream(resolvedPath, {
+    encoding: 'utf8',
+    ...(handle ? { fd: handle.fd, autoClose: false } : {}),
+  });
   const selected: string[] = [];
   const budget = createOutputBudgetState();
   let lineNumber = 0;
@@ -242,11 +250,12 @@ export async function readTextFile(
   offset: number,
   limit: number,
   signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
-  const fileStat = await stat(resolvedPath);
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   if (fileStat.size <= FAST_PATH_MAX_BYTES) {
-    return readFastPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+    return readFastPath(resolvedPath, offset, limit, fileStat.mtimeMs, handle);
   }
   return readStreamingPath(
     resolvedPath,
@@ -254,6 +263,7 @@ export async function readTextFile(
     limit,
     fileStat.mtimeMs,
     signal,
+    handle,
   );
 }
 
@@ -262,14 +272,16 @@ export async function readTextFileStreaming(
   offset: number,
   limit: number,
   signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
-  const fileStat = await stat(resolvedPath);
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   return readStreamingPath(
     resolvedPath,
     offset,
     limit,
     fileStat.mtimeMs,
     signal,
+    handle,
   );
 }

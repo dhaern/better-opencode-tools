@@ -121,6 +121,9 @@ async function tryRun(
   try {
     return await runCommand(command, args, signal);
   } catch {
+    // Cancellation must propagate; only genuine pdfinfo failures are
+    // optional metadata.
+    signal?.throwIfAborted();
     return undefined;
   }
 }

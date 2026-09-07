@@ -45,9 +45,10 @@ export function selectExternalPermissionTarget(input: {
   );
 }
 
-// The host wildcard matcher only treats * and ? as glob operators (a
-// backslash acts as an escape, so it is rejected too); characters like [],
-// () and {} are matched literally and must stay usable in permission paths.
+// The host wildcard matcher only expands * and ? (it rewrites backslashes to
+// slashes before matching, so a literal backslash cannot be represented
+// safely); characters like [], () and {} are matched literally and must stay
+// usable in permission paths.
 const GLOB_META_CHARS = /[*?\\]/;
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^\\\\[^\\]+\\[^\\]+/;
@@ -135,14 +136,23 @@ export async function askReadPermission(input: {
 }): Promise<void> {
   const worktree = input.ctx.worktree;
   const accessPath = normalizePermissionPathSeparators(input.accessPath);
-  // Normalize before relativizing so Windows-style paths relativize
-  // correctly on every platform; like the native tool, an external target
-  // keeps its `../` relative form.
-  const relativeOrAbsolute = worktree
-    ? path.relative(normalizePermissionPathSeparators(worktree), accessPath) ||
-      '.'
-    : accessPath;
-  const permissionPath = assertSafePermissionPath(relativeOrAbsolute);
+  let permissionPath: string;
+  if (worktree) {
+    // Windows-style inputs must be relativized with win32 semantics even when
+    // running on POSIX. The result is always forward-slashed: a backslash is
+    // never representable in a safe permission pattern anyway (the host
+    // matcher rewrites it to a path separator).
+    const normalizedWorktree = normalizePermissionPathSeparators(worktree);
+    const useWin32 =
+      isWindowsStylePath(worktree) || isWindowsStylePath(accessPath);
+    const relative = useWin32
+      ? path.win32.relative(normalizedWorktree, accessPath)
+      : path.relative(normalizedWorktree, accessPath);
+    permissionPath = relative.replaceAll('\\', '/') || '.';
+  } else {
+    permissionPath = accessPath;
+  }
+  permissionPath = assertSafePermissionPath(permissionPath);
 
   await runOpenCodeSideEffect(
     input.ctx.ask({
