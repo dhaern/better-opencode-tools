@@ -115,7 +115,6 @@ async function readStreamingPath(
   signal?.throwIfAborted();
   const handle = sharedHandle ?? (await open(resolvedPath, 'r'));
   const ownsHandle = !sharedHandle;
-  signal?.throwIfAborted();
   const decoder = new StringDecoder('utf8');
   const selected: string[] = [];
   const budget = createOutputBudgetState();
@@ -248,6 +247,7 @@ async function readStreamingPath(
   }
 
   try {
+    signal?.throwIfAborted();
     const chunkBuffer = Buffer.alloc(STREAM_CHUNK_BYTES);
     let position = 0;
     // Positioned reads: the shared handle cursor is never moved, and each
