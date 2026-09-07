@@ -16,12 +16,13 @@ describe('tools/read/permissions', () => {
   });
 
   test('allows scoped package paths containing @', () => {
-    const scopedPath = '/tmp/project/node_modules/@opencode-ai/plugin/package.json';
+    const scopedPath =
+      '/tmp/project/node_modules/@opencode-ai/plugin/package.json';
 
     expect(assertSafePermissionPath(scopedPath)).toBe(scopedPath);
-    expect(permissionGlob('/tmp/project/node_modules/@opencode-ai/plugin')).toBe(
-      '/tmp/project/node_modules/@opencode-ai/plugin/*',
-    );
+    expect(
+      permissionGlob('/tmp/project/node_modules/@opencode-ai/plugin'),
+    ).toBe('/tmp/project/node_modules/@opencode-ai/plugin/*');
   });
 
   test('rejects literal POSIX backslashes instead of using unsafe escapes', () => {
