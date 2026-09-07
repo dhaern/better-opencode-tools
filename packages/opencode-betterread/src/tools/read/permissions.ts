@@ -10,10 +10,10 @@ function contains(root: string, target: string): boolean {
   const resolvedTarget = path.resolve(target);
   const relative = path.relative(resolvedRoot, resolvedTarget);
 
-  return (
-    relative === '' ||
-    (!relative.startsWith('..') && !path.isAbsolute(relative))
-  );
+  if (relative === '') return true;
+  if (path.isAbsolute(relative)) return false;
+  if (relative === '..' || relative.startsWith(`..${path.sep}`)) return false;
+  return true;
 }
 
 function isEffectiveBoundary(root: string): boolean {
@@ -45,18 +45,27 @@ export function selectExternalPermissionTarget(input: {
   );
 }
 
-const GLOB_META_CHARS = /[*?[\]{}()!+\\]/;
+// The host wildcard matcher only expands * and ? (it rewrites backslashes to
+// slashes before matching, so a literal backslash cannot be represented
+// safely); characters like [], () and {} are matched literally and must stay
+// usable in permission paths.
+const GLOB_META_CHARS = /[*?\\]/;
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH = /^\\\\[^\\]+\\[^\\]+/;
 
-function isWindowsStylePath(parentDir: string): boolean {
-  return WINDOWS_DRIVE_PATH.test(parentDir) || WINDOWS_UNC_PATH.test(parentDir);
+function isWindowsStylePath(candidate: string): boolean {
+  return WINDOWS_DRIVE_PATH.test(candidate) || WINDOWS_UNC_PATH.test(candidate);
+}
+
+function normalizePermissionPathSeparators(permissionPath: string): string {
+  if (path.sep === '\\') return permissionPath.replaceAll('\\', '/');
+  return isWindowsStylePath(permissionPath)
+    ? permissionPath.replaceAll('\\', '/')
+    : permissionPath;
 }
 
 function normalizePermissionGlobPath(parentDir: string): string {
-  const normalized = isWindowsStylePath(parentDir)
-    ? parentDir.replaceAll('\\', '/')
-    : parentDir;
+  const normalized = normalizePermissionPathSeparators(parentDir);
   if (normalized === '/') return normalized;
   return normalized.replace(/\/+$/g, '');
 }
@@ -112,8 +121,12 @@ export async function askExternalDirectoryPermission(input: {
   return true;
 }
 
+// The native read tool asks for permission with the target path relative to
+// the worktree, so host rules like `secrets/*` match the evaluated pattern.
+// Mirror that contract; keep `always` scoped to the specific file instead of
+// the native blanket `*` so "always allow" stays per-file.
 export async function askReadPermission(input: {
-  ctx: Pick<ToolContext, 'ask'>;
+  ctx: Pick<ToolContext, 'ask' | 'worktree'>;
   requestedPath: string;
   resolvedPath: string;
   accessPath: string;
@@ -121,7 +134,27 @@ export async function askReadPermission(input: {
   offset: number;
   limit: number;
 }): Promise<void> {
-  const permissionPath = assertSafePermissionPath(input.accessPath);
+  const worktree = input.ctx.worktree;
+  const accessPath = normalizePermissionPathSeparators(input.accessPath);
+  let permissionPath: string;
+  if (worktree) {
+    // Windows-style inputs must be relativized with win32 semantics even when
+    // running on POSIX. Only the win32 result is forward-slashed: a literal
+    // backslash in a POSIX filename must stay distinct (and fail closed in
+    // the safety check) instead of colliding with the real 'a/b' path.
+    const normalizedWorktree = normalizePermissionPathSeparators(worktree);
+    const useWin32 =
+      isWindowsStylePath(worktree) || isWindowsStylePath(accessPath);
+    const relative = useWin32
+      ? path.win32.relative(normalizedWorktree, accessPath)
+      : path.relative(normalizedWorktree, accessPath);
+    permissionPath = useWin32
+      ? relative.replaceAll('\\', '/') || '.'
+      : relative || '.';
+  } else {
+    permissionPath = accessPath;
+  }
+  permissionPath = assertSafePermissionPath(permissionPath);
 
   await runOpenCodeSideEffect(
     input.ctx.ask({

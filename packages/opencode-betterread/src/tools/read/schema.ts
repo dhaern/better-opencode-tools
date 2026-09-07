@@ -14,13 +14,13 @@ export const readArgsSchema: Record<string, unknown> = {
     .describe(
       'The path to the file or directory to read. Accepts absolute paths, paths relative to the current session directory, and `~/` home-relative paths.',
     ),
-  offset: z.coerce
+  offset: z
     .number()
     .int()
     .min(1)
     .default(DEFAULT_OFFSET)
     .describe('The line number to start reading from (1-indexed).'),
-  limit: z.coerce
+  limit: z
     .number()
     .int()
     .positive()

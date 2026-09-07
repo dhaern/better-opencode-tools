@@ -1,6 +1,7 @@
+import { constants as fsConstants } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   isImageMime,
   isNotebookPath,
@@ -8,7 +9,7 @@ import {
   isProbablyBinary,
   sniffMime,
 } from './binary';
-import { SAMPLE_BYTES } from './constants';
+import { MAX_EMBEDDED_ATTACHMENT_BYTES, SAMPLE_BYTES } from './constants';
 import { readDirectory } from './directory-reader';
 import {
   buildDirectoryMetadata,
@@ -43,11 +44,23 @@ import type {
   TextReadResult,
 } from './types';
 
-async function sampleFile(readPath: string): Promise<Buffer> {
+async function sampleFile(
+  readPath: string,
+  signal?: AbortSignal,
+  handle?: FileHandle,
+): Promise<Buffer> {
+  signal?.throwIfAborted();
+  if (handle) {
+    const buffer = Buffer.alloc(SAMPLE_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    signal?.throwIfAborted();
+    return buffer.subarray(0, bytesRead);
+  }
   const file = await open(readPath, 'r');
   try {
     const buffer = Buffer.alloc(SAMPLE_BYTES);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    signal?.throwIfAborted();
     return buffer.subarray(0, bytesRead);
   } finally {
     await file.close();
@@ -136,14 +149,62 @@ function metadataPath(input: ReadInspection): {
   };
 }
 
-function fileAttachment(input: {
+// Reads up to cap+1 bytes from a handle with explicitly positioned reads,
+// tolerating short reads and stopping with an error past the cap. The shared
+// handle's cursor is never moved.
+export async function readBoundedBytes(
+  handle: FileHandle,
+  cap: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const chunkBuffer = Buffer.alloc(Math.min(1024 * 1024, cap + 1));
+  let position = 0;
+
+  for (;;) {
+    signal?.throwIfAborted();
+    const remaining = cap + 1 - total;
+    if (remaining <= 0) break;
+    const { bytesRead } = await handle.read(
+      chunkBuffer,
+      0,
+      Math.min(chunkBuffer.length, remaining),
+      position,
+    );
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    total += bytesRead;
+    chunks.push(Buffer.from(chunkBuffer.subarray(0, bytesRead)));
+    if (total > cap) break;
+  }
+
+  if (total > cap) {
+    throw new Error(`Embedded attachment exceeds the ${cap} byte limit`);
+  }
+  signal?.throwIfAborted();
+  return Buffer.concat(chunks, total);
+}
+
+// The host only delivers attachments whose URL is an embedded `data:` URL
+// (message-v2 filters `url.startsWith("data:")`), so embed bytes like the
+// native read tool does instead of returning `file://` URLs. Reading is
+// capped so a huge file cannot balloon memory or the provider payload.
+async function dataFileAttachment(input: {
   path: string;
   mime: string;
-}): NonNullable<ReadExecutionResult['attachments']>[number] {
+  handle: FileHandle;
+  signal?: AbortSignal;
+}): Promise<NonNullable<ReadExecutionResult['attachments']>[number]> {
+  const bytes = await readBoundedBytes(
+    input.handle,
+    MAX_EMBEDDED_ATTACHMENT_BYTES,
+    input.signal,
+  );
   return {
     type: 'file',
     mime: input.mime,
-    url: pathToFileURL(input.path).href,
+    url: `data:${input.mime};base64,${bytes.toString('base64')}`,
     filename: path.basename(input.path),
   };
 }
@@ -164,7 +225,9 @@ export async function executeRead(input: {
   args: ReadArgs;
   directory: string;
   inspection?: ReadInspection;
+  signal?: AbortSignal;
 }): Promise<ReadExecutionResult> {
+  input.signal?.throwIfAborted();
   const inspection =
     input.inspection ??
     (await inspectReadTarget({ args: input.args, directory: input.directory }));
@@ -180,8 +243,28 @@ export async function executeRead(input: {
   }
 
   if (inspection.kind === 'directory') {
+    // Re-check identity before listing: a target swapped during the
+    // permission ask must not be listed as the authorized directory.
+    input.signal?.throwIfAborted();
+    const currentStat = await stat(readPath);
+    if (
+      !inspection.fileStat ||
+      currentStat.dev !== inspection.fileStat.dev ||
+      currentStat.ino !== inspection.fileStat.ino ||
+      !currentStat.isDirectory()
+    ) {
+      throw new Error(
+        `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
+      );
+    }
     const directory = {
-      ...(await readDirectory(readPath, args.offset, args.limit)),
+      ...(await readDirectory(
+        readPath,
+        args.offset,
+        args.limit,
+        {},
+        input.signal,
+      )),
       path: inspection.resolvedPath,
     };
     return {
@@ -198,95 +281,157 @@ export async function executeRead(input: {
     throw new Error(specialFileMessage(inspection.resolvedPath));
   }
 
-  const sample = await sampleFile(readPath);
-  const mime = sniffMime(sample);
-
-  if (isImageMime(mime)) {
-    const image = {
-      ...(await readImageInfo(readPath)),
-      path: inspection.resolvedPath,
-    };
-    return {
-      kind: image.kind,
-      path: image.path,
-      resolvedPath: inspection.resolvedPath,
-      realPath: inspection.realPath,
-      output: formatImageInfoResult(image),
-      metadata: buildImageMetadata(metadataPath(inspection), image),
-      attachments: [
-        fileAttachment({ path: inspection.accessPath, mime: image.mime }),
-      ],
-    };
+  // Bind every byte we return to a single descriptor opened after the
+  // permission ask and verified against the inspected identity: reopen-by-
+  // path races (TOCTOU) are rejected here instead of silently reading a
+  // substituted object. The pre-open re-stat narrows the swap-to-FIFO window
+  // (opening a FIFO read end would block); the post-open fstat is the real
+  // identity check.
+  input.signal?.throwIfAborted();
+  const preOpenStat = await stat(readPath);
+  if (
+    !inspection.fileStat ||
+    preOpenStat.dev !== inspection.fileStat.dev ||
+    preOpenStat.ino !== inspection.fileStat.ino ||
+    !preOpenStat.isFile()
+  ) {
+    throw new Error(
+      `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
+    );
   }
+  const handle = await open(
+    readPath,
+    fsConstants.O_RDONLY | fsConstants.O_NONBLOCK,
+  );
+  try {
+    const handleStat = await handle.stat();
+    if (
+      !handleStat.isFile() ||
+      (inspection.fileStat &&
+        (handleStat.dev !== inspection.fileStat.dev ||
+          handleStat.ino !== inspection.fileStat.ino))
+    ) {
+      throw new Error(
+        `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(inspection.resolvedPath)}`,
+      );
+    }
 
-  if (isPdfMime(mime)) {
-    const pdf = {
-      ...(await readPdf(readPath)),
-      path: inspection.resolvedPath,
-    };
-    return {
-      kind: pdf.kind,
-      path: pdf.path,
-      resolvedPath: inspection.resolvedPath,
-      realPath: inspection.realPath,
-      output: formatPdfResult(pdf),
-      metadata: buildPdfMetadata(metadataPath(inspection), pdf),
-      attachments: [
-        fileAttachment({
-          path: inspection.accessPath,
-          mime: 'application/pdf',
-        }),
-      ],
-    };
-  }
+    const sample = await sampleFile(readPath, input.signal, handle);
+    const mime = sniffMime(sample);
 
-  if (isNotebookPath(inspection.resolvedPath)) {
-    const notebook = {
-      ...(await readNotebook(readPath, args.offset, args.limit)),
-      path: inspection.resolvedPath,
-    };
-    assertReadableWindow(notebook);
-    const rendered = renderTextResult(notebook);
+    if (isImageMime(mime)) {
+      const image = {
+        ...(await readImageInfo(readPath, handle, input.signal)),
+        path: inspection.resolvedPath,
+      };
+      return {
+        kind: image.kind,
+        path: image.path,
+        resolvedPath: inspection.resolvedPath,
+        realPath: inspection.realPath,
+        output: formatImageInfoResult(image),
+        metadata: buildImageMetadata(metadataPath(inspection), image),
+        attachments: [
+          await dataFileAttachment({
+            path: inspection.accessPath,
+            mime: image.mime,
+            handle,
+            signal: input.signal,
+          }),
+        ],
+      };
+    }
+
+    if (isPdfMime(mime)) {
+      const pdf = {
+        // pdfinfo takes a path argument; metadata-only, so a path-based
+        // probe is acceptable. Attachment bytes come from the verified
+        // descriptor.
+        ...(await readPdf(readPath, input.signal)),
+        path: inspection.resolvedPath,
+      };
+      return {
+        kind: pdf.kind,
+        path: pdf.path,
+        resolvedPath: inspection.resolvedPath,
+        realPath: inspection.realPath,
+        output: formatPdfResult(pdf),
+        metadata: buildPdfMetadata(metadataPath(inspection), pdf),
+        attachments: [
+          await dataFileAttachment({
+            path: inspection.accessPath,
+            mime: 'application/pdf',
+            handle,
+            signal: input.signal,
+          }),
+        ],
+      };
+    }
+
+    if (isNotebookPath(inspection.resolvedPath)) {
+      const notebook = await readNotebook(
+        readPath,
+        args.offset,
+        args.limit,
+        input.signal,
+        handle,
+      );
+      notebook.path = inspection.resolvedPath;
+      assertReadableWindow(notebook);
+      const rendered = renderTextResult(notebook);
+      return {
+        kind: notebook.kind,
+        path: notebook.path,
+        resolvedPath: inspection.resolvedPath,
+        realPath: inspection.realPath,
+        output: rendered.output,
+        metadata: buildTextMetadata(
+          metadataPath(inspection),
+          notebook,
+          rendered,
+        ),
+      };
+    }
+
+    if (isProbablyBinary(inspection.resolvedPath, sample)) {
+      const output = `Binary file detected: ${escapeStructuredSingleLineValue(
+        inspection.resolvedPath,
+      )}`;
+      return {
+        kind: 'binary',
+        path: inspection.resolvedPath,
+        resolvedPath: inspection.resolvedPath,
+        realPath: inspection.realPath,
+        output,
+        metadata: buildStaticMetadata(
+          { ...metadataPath(inspection), kind: 'binary' },
+          output,
+          false,
+        ),
+      };
+    }
+
+    const text = await readTextFile(
+      readPath,
+      args.offset,
+      args.limit,
+      input.signal,
+      handle,
+    );
+    text.path = inspection.resolvedPath;
+    assertReadableWindow(text);
+    const rendered = renderTextResult(text);
     return {
-      kind: notebook.kind,
-      path: notebook.path,
+      kind: text.kind,
+      path: text.path,
       resolvedPath: inspection.resolvedPath,
       realPath: inspection.realPath,
       output: rendered.output,
-      metadata: buildTextMetadata(metadataPath(inspection), notebook, rendered),
+      metadata: buildTextMetadata(metadataPath(inspection), text, rendered),
     };
+  } finally {
+    // All readers use positioned operations and never take ownership of this
+    // descriptor, so the engine performs the single close here.
+    await handle.close().catch(() => undefined);
   }
-
-  if (isProbablyBinary(inspection.resolvedPath, sample)) {
-    const output = `Binary file detected: ${escapeStructuredSingleLineValue(
-      inspection.resolvedPath,
-    )}`;
-    return {
-      kind: 'binary',
-      path: inspection.resolvedPath,
-      resolvedPath: inspection.resolvedPath,
-      realPath: inspection.realPath,
-      output,
-      metadata: buildStaticMetadata(
-        { ...metadataPath(inspection), kind: 'binary' },
-        output,
-        false,
-      ),
-    };
-  }
-
-  const text = {
-    ...(await readTextFile(readPath, args.offset, args.limit)),
-    path: inspection.resolvedPath,
-  };
-  assertReadableWindow(text);
-  const rendered = renderTextResult(text);
-  return {
-    kind: text.kind,
-    path: text.path,
-    resolvedPath: inspection.resolvedPath,
-    realPath: inspection.realPath,
-    output: rendered.output,
-    metadata: buildTextMetadata(metadataPath(inspection), text, rendered),
-  };
 }

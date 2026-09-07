@@ -64,6 +64,68 @@ describe('hooks/read-render-metadata', () => {
     expect(output.metadata?.truncated).toBe(true);
   });
 
+  test('resyncs end_line and has_more when the host truncated the rendered output', async () => {
+    const hook = createReadRenderMetadataHook();
+    const output: {
+      title?: unknown;
+      output?: unknown;
+      metadata?: Record<string, unknown>;
+    } = {
+      metadata: {
+        truncated: true,
+        has_more: false,
+        end_line: 4096,
+        truncated_by_bytes: false,
+        truncated_by_line_length: false,
+        outputPath: '/tmp/saved-output',
+      },
+      output: [
+        '<path>/tmp/example.txt</path>',
+        '<type>file</type>',
+        '<content>',
+        '1: a',
+        '2: b',
+        '...505 lines truncated...',
+        '</content>',
+      ].join('\n'),
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { filePath: '/tmp/example.txt' } },
+      output,
+    );
+
+    expect(output.metadata?.end_line).toBe(2);
+    expect(output.metadata?.has_more).toBe(true);
+    expect(output.metadata?.truncated).toBe(true);
+  });
+
+  test('marks an empty host-truncated window as having more content', async () => {
+    const hook = createReadRenderMetadataHook();
+    const output: {
+      output?: unknown;
+      metadata?: Record<string, unknown>;
+    } = {
+      metadata: {
+        truncated: true,
+        has_more: false,
+        start_line: 7,
+        end_line: 50,
+        outputPath: '/tmp/saved-output',
+      },
+      output: '<path>/tmp/example.txt</path>\n<content></content>',
+    };
+
+    await hook['tool.execute.after'](
+      { tool: 'read', args: { filePath: '/tmp/example.txt' } },
+      output,
+    );
+
+    expect(output.metadata?.end_line).toBe(6);
+    expect(output.metadata?.has_more).toBe(true);
+    expect(output.metadata?.truncated).toBe(true);
+  });
+
   test('leaves non-read tool outputs unchanged', async () => {
     const hook = createReadRenderMetadataHook();
     const output: { title?: unknown; metadata?: Record<string, unknown> } = {

@@ -1,7 +1,8 @@
-import { readFile, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
 import { selectBudgetedLines, splitLogicalLines } from './output-budget';
-import { readTextFileStreaming } from './text-reader';
+import { readAllFileBytes, readTextFileStreaming } from './text-reader';
 import type { NotebookReadResult } from './types';
 
 type NotebookCell = {
@@ -12,6 +13,38 @@ type NotebookCell = {
 function normalizeSource(source: string[] | string | undefined): string {
   if (Array.isArray(source)) return source.join('');
   return typeof source === 'string' ? source : '';
+}
+
+// A notebook cell header is a single logical line; multi-line cell types would
+// desynchronize the line accounting between generation and rendering.
+function isSupportedCell(cell: NotebookCell): boolean {
+  return (
+    typeof cell.cell_type === 'string' &&
+    cell.cell_type.length > 0 &&
+    !cell.cell_type.includes('\n') &&
+    !cell.cell_type.includes('\r')
+  );
+}
+
+function isParsedNotebookShape(value: unknown): value is {
+  cells: NotebookCell[];
+} {
+  if (typeof value !== 'object' || value === null) return false;
+  const cells = (value as { cells?: unknown }).cells;
+  if (!Array.isArray(cells)) return false;
+  // Every cell must be a plain object; anything else (primitives, null,
+  // arrays) is not a well-formed notebook and must fall back to raw.
+  return cells.every(
+    (cell) =>
+      typeof cell === 'object' &&
+      cell !== null &&
+      !Array.isArray(cell) &&
+      isSupportedCell(cell as NotebookCell),
+  );
+}
+
+export function isParsedNotebook(result: NotebookReadResult): boolean {
+  return result.mode === 'parsed';
 }
 
 function appendNotebookCell(
@@ -38,9 +71,17 @@ async function readNotebookFallback(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
   return {
-    ...(await readTextFileStreaming(resolvedPath, offset, limit)),
+    ...(await readTextFileStreaming(
+      resolvedPath,
+      offset,
+      limit,
+      signal,
+      handle,
+    )),
     kind: 'notebook',
     mode: 'raw-fallback',
   };
@@ -51,12 +92,28 @@ async function readParsedNotebook(
   offset: number,
   limit: number,
   mtimeMs: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
-  const raw = await readFile(resolvedPath, 'utf8');
-  const parsed = JSON.parse(raw) as { cells?: NotebookCell[] };
+  signal?.throwIfAborted();
+  const file = handle ?? (await open(resolvedPath, 'r'));
+  const ownsHandle = !handle;
+  let raw: string;
+  try {
+    raw = (await readAllFileBytes(file, signal)).toString('utf8');
+  } finally {
+    if (ownsHandle) await file.close().catch(() => undefined);
+  }
+  signal?.throwIfAborted();
+  const parsed: unknown = JSON.parse(raw);
+  // JSON that is valid but not a notebook (missing/invalid cells) falls back
+  // to the raw reader instead of silently rendering an empty document.
+  if (!isParsedNotebookShape(parsed)) {
+    throw new Error('Not a valid notebook structure');
+  }
   const lines: string[] = [];
 
-  for (const [index, cell] of (parsed.cells ?? []).entries()) {
+  for (const [index, cell] of parsed.cells.entries()) {
     appendNotebookCell(lines, cell, index);
   }
 
@@ -82,10 +139,13 @@ export async function readNotebook(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<NotebookReadResult> {
-  const fileStat = await stat(resolvedPath);
+  signal?.throwIfAborted();
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   if (!shouldParseNotebook(fileStat.size)) {
-    return readNotebookFallback(resolvedPath, offset, limit);
+    return readNotebookFallback(resolvedPath, offset, limit, signal, handle);
   }
 
   try {
@@ -94,8 +154,11 @@ export async function readNotebook(
       offset,
       limit,
       fileStat.mtimeMs,
+      signal,
+      handle,
     );
   } catch {
-    return readNotebookFallback(resolvedPath, offset, limit);
+    signal?.throwIfAborted();
+    return readNotebookFallback(resolvedPath, offset, limit, signal, handle);
   }
 }

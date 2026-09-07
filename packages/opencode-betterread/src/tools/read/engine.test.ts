@@ -4,9 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
-import { executeRead, inspectReadTarget } from './engine';
+import { executeRead, inspectReadTarget, readBoundedBytes } from './engine';
 
 const tempDirs: string[] = [];
 const tinyPng = Buffer.from([
@@ -30,6 +29,32 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('preserves attachment bytes when a handle returns short reads', async () => {
+    const expected = Buffer.from('short attachment payload');
+    let reads = 0;
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        reads += 1;
+        const available = expected.length - position;
+        const bytesRead = Math.max(0, Math.min(3, length, available));
+        if (bytesRead > 0) {
+          expected.copy(buffer, offset, position, position + bytesRead);
+        }
+        return { buffer, bytesRead };
+      },
+    } as any;
+
+    const actual = await readBoundedBytes(handle, expected.length);
+
+    expect(actual).toEqual(expected);
+    expect(reads).toBeGreaterThan(1);
+  });
+
   test('keeps missing paths beneath external symlinked directories canonical', async () => {
     const directory = await createWorkspace();
     const outside = await createWorkspace();
@@ -369,12 +394,12 @@ describe('executeRead', () => {
 
     expect(result.output).toContain('<type>image</type>');
     expect(result.output).toContain('<dimensions>2x3</dimensions>');
-    expect(result.metadata.attachment_support).toBe('unavailable');
+    expect(result.metadata.attachment_support).toBe('embedded');
     expect(result.attachments).toEqual([
       {
         type: 'file',
         mime: 'image/png',
-        url: pathToFileURL(filePath).href,
+        url: `data:image/png;base64,${tinyPng.toString('base64')}`,
         filename: 'tiny.png',
       },
     ]);
@@ -411,12 +436,12 @@ describe('executeRead', () => {
 
     expect(result.output).toContain('<type>pdf</type>');
     expect(result.output).toContain(ATTACHMENT_UNAVAILABLE_NOTE);
-    expect(result.metadata.attachment_support).toBe('unavailable');
+    expect(result.metadata.attachment_support).toBe('embedded');
     expect(result.attachments).toEqual([
       {
         type: 'file',
         mime: 'application/pdf',
-        url: pathToFileURL(filePath).href,
+        url: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\n').toString('base64')}`,
         filename: 'sample.pdf',
       },
     ]);

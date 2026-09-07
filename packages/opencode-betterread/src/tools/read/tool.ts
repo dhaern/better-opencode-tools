@@ -31,6 +31,7 @@ export function createReadTool(
     description: READ_DESCRIPTION,
     args: argsSchema,
     async execute(args, ctx) {
+      ctx.abort?.throwIfAborted();
       const rawArgs = args as unknown as ReadArgs;
       const normalized = normalizeReadArgs(rawArgs);
       const directory = ctx.directory ?? pluginCtx.directory;
@@ -64,7 +65,7 @@ export function createReadTool(
       }
 
       await askReadPermission({
-        ctx,
+        ctx: permissionCtx,
         requestedPath: normalized.filePath,
         resolvedPath: inspection.resolvedPath,
         accessPath: inspection.accessPath,
@@ -73,10 +74,14 @@ export function createReadTool(
         limit: normalized.limit,
       });
 
+      // Identity of what we open is enforced by executeRead itself: it opens
+      // the target once after the ask and verifies the descriptor against the
+      // inspected identity (TOCTOU closes there, not here).
       const result = await execute({
         args: normalized,
         directory,
         inspection,
+        signal: ctx.abort,
       });
 
       return {

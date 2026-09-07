@@ -45,7 +45,9 @@ function buildBaseMetadata(
     backend: 'rg',
     pattern: normalized?.pattern ?? getRawPattern(args),
     path: normalized?.requestedPath ?? args.path,
-    paths: normalized?.searchTargets ? normalized.permissionPatterns : args.paths,
+    paths: normalized?.searchTargets
+      ? normalized.permissionPatterns
+      : args.paths,
     resolved_path: normalized?.resolvedPath,
     real_path: normalized?.searchPath,
     include: normalized?.include ?? args.include,

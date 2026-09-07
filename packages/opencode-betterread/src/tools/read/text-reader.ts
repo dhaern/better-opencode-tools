@@ -1,5 +1,6 @@
-import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
+import { StringDecoder } from 'node:string_decoder';
 import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
 import {
   appendLineWithinOutputBudget,
@@ -8,6 +9,8 @@ import {
   splitLogicalLines,
 } from './output-budget';
 import type { TextReadResult } from './types';
+
+const STREAM_CHUNK_BYTES = 64 * 1024;
 
 function buildTextResult(
   resolvedPath: string,
@@ -40,8 +43,19 @@ async function readFastPath(
   offset: number,
   limit: number,
   mtimeMs: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
-  const raw = await readFile(resolvedPath, 'utf8');
+  signal?.throwIfAborted();
+  const file = handle ?? (await open(resolvedPath, 'r'));
+  const ownsHandle = !handle;
+  let raw: string;
+  try {
+    raw = (await readAllFileBytes(file, signal)).toString('utf8');
+  } finally {
+    if (ownsHandle) await file.close().catch(() => undefined);
+  }
+  signal?.throwIfAborted();
   const split = splitLogicalLines(raw);
   const { selected, truncatedByBytes, truncatedByLineLength, hasMore } =
     selectBudgetedLines(split, offset, limit);
@@ -58,13 +72,50 @@ async function readFastPath(
   );
 }
 
+// Read a file through explicitly positioned operations. Keeping the position
+// explicit makes this safe to reuse after a parser has consumed the same
+// descriptor and lets cancellation be checked between bounded chunks.
+export async function readAllFileBytes(
+  handle: FileHandle,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const chunkBuffer = Buffer.alloc(STREAM_CHUNK_BYTES);
+  let position = 0;
+
+  for (;;) {
+    signal?.throwIfAborted();
+    const { bytesRead } = await handle.read(
+      chunkBuffer,
+      0,
+      chunkBuffer.length,
+      position,
+    );
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    chunks.push(Buffer.from(chunkBuffer.subarray(0, bytesRead)));
+  }
+
+  signal?.throwIfAborted();
+  return Buffer.concat(chunks);
+}
+
+// Reads the file with explicitly positioned handle reads. A shared handle is
+// consumed without moving its cursor and never handed to a stream, so the
+// engine keeps single ownership of the descriptor lifecycle; when no handle
+// is provided (direct API use) a private one is opened and closed here.
 async function readStreamingPath(
   resolvedPath: string,
   offset: number,
   limit: number,
   mtimeMs: number,
+  signal?: AbortSignal,
+  sharedHandle?: FileHandle,
 ): Promise<TextReadResult> {
-  const stream = createReadStream(resolvedPath, { encoding: 'utf8' });
+  signal?.throwIfAborted();
+  const handle = sharedHandle ?? (await open(resolvedPath, 'r'));
+  const ownsHandle = !sharedHandle;
+  const decoder = new StringDecoder('utf8');
   const selected: string[] = [];
   const budget = createOutputBudgetState();
   let lineNumber = 0;
@@ -76,11 +127,18 @@ async function readStreamingPath(
   let currentLineStarted = false;
   let pendingCarriageReturn = false;
   let stopped = false;
+  let aborted = false;
+
+  const onAbort = (): void => {
+    aborted = true;
+    hasMore = true;
+    stopped = true;
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   function stopWithMore(): void {
     hasMore = true;
     stopped = true;
-    stream.destroy();
   }
 
   function appendChunkToCurrentLine(chunk: string): void {
@@ -188,20 +246,45 @@ async function readStreamingPath(
     }
   }
 
-  for await (const chunk of stream) {
-    processChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
-    if (stopped) {
-      break;
+  try {
+    signal?.throwIfAborted();
+    const chunkBuffer = Buffer.alloc(STREAM_CHUNK_BYTES);
+    let position = 0;
+    // Positioned reads: the shared handle cursor is never moved, and each
+    // short read just means fewer bytes this round.
+    for (;;) {
+      if (aborted) throw new Error('Read aborted');
+      const { bytesRead } = await handle.read(
+        chunkBuffer,
+        0,
+        chunkBuffer.length,
+        position,
+      );
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      processChunk(decoder.write(chunkBuffer.subarray(0, bytesRead)));
+      if (stopped) break;
     }
-  }
+    if (!stopped) {
+      const tail = decoder.end();
+      if (tail.length > 0) {
+        processChunk(tail);
+      }
+    }
 
-  if (!stopped) {
-    if (pendingCarriageReturn) {
-      pendingCarriageReturn = false;
-      finishCurrentLine();
-    } else if (currentLineStarted) {
-      finishCurrentLine();
+    if (aborted) throw new Error('Read aborted');
+
+    if (!stopped) {
+      if (pendingCarriageReturn) {
+        pendingCarriageReturn = false;
+        finishCurrentLine();
+      } else if (currentLineStarted) {
+        finishCurrentLine();
+      }
     }
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    if (ownsHandle) await handle.close().catch(() => undefined);
   }
 
   return buildTextResult(
@@ -220,19 +303,46 @@ export async function readTextFile(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
-  const fileStat = await stat(resolvedPath);
+  signal?.throwIfAborted();
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   if (fileStat.size <= FAST_PATH_MAX_BYTES) {
-    return readFastPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+    return readFastPath(
+      resolvedPath,
+      offset,
+      limit,
+      fileStat.mtimeMs,
+      signal,
+      handle,
+    );
   }
-  return readStreamingPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+  return readStreamingPath(
+    resolvedPath,
+    offset,
+    limit,
+    fileStat.mtimeMs,
+    signal,
+    handle,
+  );
 }
 
 export async function readTextFileStreaming(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
+  handle?: FileHandle,
 ): Promise<TextReadResult> {
-  const fileStat = await stat(resolvedPath);
-  return readStreamingPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+  signal?.throwIfAborted();
+  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
+  return readStreamingPath(
+    resolvedPath,
+    offset,
+    limit,
+    fileStat.mtimeMs,
+    signal,
+    handle,
+  );
 }

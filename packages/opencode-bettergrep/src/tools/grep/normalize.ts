@@ -59,12 +59,17 @@ function uniqueStrings(values: Iterable<string | undefined>): string[] {
   return normalized;
 }
 
-function normalizeSearchTarget(target: string, base: string): {
+function normalizeSearchTarget(
+  target: string,
+  base: string,
+): {
   requestedPath: string;
   resolvedPath: string;
   searchPath: string;
 } {
-  const resolvedPath = path.isAbsolute(target) ? target : path.resolve(base, target);
+  const resolvedPath = path.isAbsolute(target)
+    ? target
+    : path.resolve(base, target);
   if (!existsSync(resolvedPath)) {
     throw new Error(`Search path does not exist: ${target}`);
   }
@@ -130,16 +135,31 @@ export function normalizeGrepInput(
   }
   const base = cwd;
   const rawTargets = cleanStringArray(args.paths);
-  if (rawTargets.length === 0 && Array.isArray((args as { path?: unknown }).path)) {
-    throw new Error('path must be a string; use paths for multiple search targets');
+  if (
+    rawTargets.length === 0 &&
+    Array.isArray((args as { path?: unknown }).path)
+  ) {
+    throw new Error(
+      'path must be a string; use paths for multiple search targets',
+    );
   }
-  const requestedTargets = rawTargets.length > 0 ? uniqueStrings(rawTargets) : [cleanOptionalString(args.path) ?? '.'];
+  const requestedTargets =
+    rawTargets.length > 0
+      ? uniqueStrings(rawTargets)
+      : [cleanOptionalString(args.path) ?? '.'];
   const normalizedTargets = requestedTargets.map((target) =>
     normalizeSearchTarget(target, base),
   );
-  const primaryTarget = normalizedTargets[0] as (typeof normalizedTargets)[number];
-  const requestedPath = rawTargets.length > 0 ? requestedTargets.join(', ') : primaryTarget.requestedPath;
-  const resolvedPath = rawTargets.length > 0 ? primaryTarget.resolvedPath : primaryTarget.resolvedPath;
+  const primaryTarget =
+    normalizedTargets[0] as (typeof normalizedTargets)[number];
+  const requestedPath =
+    rawTargets.length > 0
+      ? requestedTargets.join(', ')
+      : primaryTarget.requestedPath;
+  const resolvedPath =
+    rawTargets.length > 0
+      ? primaryTarget.resolvedPath
+      : primaryTarget.resolvedPath;
   const searchPath = primaryTarget.searchPath;
   const include = cleanOptionalString(args.include);
   const globs = cleanStringArray(args.globs);

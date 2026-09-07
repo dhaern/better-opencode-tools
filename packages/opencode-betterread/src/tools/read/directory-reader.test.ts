@@ -9,11 +9,13 @@ const BOUNDED_SCAN_ENTRY_COUNT = 65_536;
 const tempDirs: string[] = [];
 const fileDirent = {
   isDirectory: () => false,
+  isSymbolicLink: () => false,
 } as any;
 let boundedScanEntries:
   | {
       name: string;
       dirent: typeof fileDirent;
+      dirLike: boolean;
     }[]
   | undefined;
 
@@ -23,6 +25,7 @@ function getBoundedScanEntries() {
     (_, index) => ({
       name: `entry-${String(BOUNDED_SCAN_ENTRY_COUNT - index - 1).padStart(5, '0')}.txt`,
       dirent: fileDirent,
+      dirLike: false,
     }),
   );
 
@@ -126,7 +129,7 @@ describe('readDirectory', () => {
     );
   });
 
-  test('does not add a trailing slash for symlinks to directories', async () => {
+  test('marks symlinks to directories with a trailing slash', async () => {
     const directory = await createTempDirectory();
     const outside = await createTempDirectory();
     const linkedDir = path.join(directory, 'linked-dir');
@@ -136,6 +139,6 @@ describe('readDirectory', () => {
 
     const result = await readDirectory(directory, 1, 10);
 
-    expect(result.entries).toEqual(['linked-dir']);
+    expect(result.entries).toEqual(['linked-dir/']);
   });
 });

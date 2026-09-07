@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MAX_OUTPUT_BYTES, MAX_PARSED_NOTEBOOK_BYTES } from './constants';
@@ -133,6 +133,53 @@ describe('readNotebook', () => {
     expect(result.kind).toBe('notebook');
     expect(result.mode).toBe('raw-fallback');
     expect(result.content).toContain('{not valid json');
+  });
+
+  test('falls back to raw text for valid JSON that is not a notebook', async () => {
+    const filePath = await createRawNotebookFile('{"hello":"not a notebook"}');
+    const result = await readNotebook(filePath, 1, 10);
+
+    expect(result.kind).toBe('notebook');
+    expect(result.mode).toBe('raw-fallback');
+    expect(result.content).toContain('"hello"');
+  });
+
+  test('restarts raw fallback from byte zero after a shared parse attempt', async () => {
+    const filePath = await createRawNotebookFile('{"hello":"not a notebook"}');
+    const handle = await open(filePath, 'r');
+
+    try {
+      const result = await readNotebook(filePath, 1, 10, undefined, handle);
+
+      expect(result.mode).toBe('raw-fallback');
+      expect(result.content).toContain('"hello"');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test('falls back to raw text when cells contain non-object values', async () => {
+    const filePath = await createNotebookFile({ cells: [42, null, 'oops'] });
+    const result = await readNotebook(filePath, 1, 10);
+
+    expect(result.mode).toBe('raw-fallback');
+    expect(result.content).toContain('42');
+  });
+
+  test('falls back to raw text when a cell type spans multiple lines', async () => {
+    const filePath = await createNotebookFile({
+      cells: [
+        {
+          cell_type: 'code\nextra',
+          source: ['print(1)'],
+        },
+      ],
+    });
+    const result = await readNotebook(filePath, 1, 10);
+
+    expect(result.kind).toBe('notebook');
+    expect(result.mode).toBe('raw-fallback');
+    expect(result.content).toContain('code');
   });
 
   test('supports CR-only line endings inside notebook cell sources', async () => {
