@@ -135,6 +135,31 @@ describe('readNotebook', () => {
     expect(result.content).toContain('{not valid json');
   });
 
+  test('falls back to raw text for valid JSON that is not a notebook', async () => {
+    const filePath = await createRawNotebookFile('{"hello":"not a notebook"}');
+    const result = await readNotebook(filePath, 1, 10);
+
+    expect(result.kind).toBe('notebook');
+    expect(result.mode).toBe('raw-fallback');
+    expect(result.content).toContain('"hello"');
+  });
+
+  test('falls back to raw text when a cell type spans multiple lines', async () => {
+    const filePath = await createNotebookFile({
+      cells: [
+        {
+          cell_type: 'code\nextra',
+          source: ['print(1)'],
+        },
+      ],
+    });
+    const result = await readNotebook(filePath, 1, 10);
+
+    expect(result.kind).toBe('notebook');
+    expect(result.mode).toBe('raw-fallback');
+    expect(result.content).toContain('code');
+  });
+
   test('supports CR-only line endings inside notebook cell sources', async () => {
     const filePath = await createNotebookFile({
       cells: [

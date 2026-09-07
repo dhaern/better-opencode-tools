@@ -33,7 +33,12 @@ function outputText(output: BufferedOutput): string {
   return Buffer.concat(output.chunks, output.size).toString('utf8');
 }
 
-export function runCommand(command: string, args: string[]): Promise<string> {
+export function runCommand(
+  command: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout: BufferedOutput = { chunks: [], size: 0, truncated: false };
@@ -43,6 +48,7 @@ export function runCommand(command: string, args: string[]): Promise<string> {
 
     function cleanup(): void {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
     }
 
     function rejectOnce(error: Error): void {
@@ -59,12 +65,24 @@ export function runCommand(command: string, args: string[]): Promise<string> {
       resolve(value);
     }
 
+    function onAbort(): void {
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      rejectOnce(new Error(`${command} aborted`));
+    }
+
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 250).unref();
     }, PDF_COMMAND_TIMEOUT_MS);
     timer.unref();
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (chunk: Buffer) => appendOutput(stdout, chunk));
     child.stderr.on('data', (chunk: Buffer) => appendOutput(stderr, chunk));
@@ -98,17 +116,21 @@ export function runCommand(command: string, args: string[]): Promise<string> {
 async function tryRun(
   command: string,
   args: string[],
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   try {
-    return await runCommand(command, args);
+    return await runCommand(command, args, signal);
   } catch {
     return undefined;
   }
 }
 
-export async function readPdf(resolvedPath: string): Promise<PdfReadResult> {
+export async function readPdf(
+  resolvedPath: string,
+  signal?: AbortSignal,
+): Promise<PdfReadResult> {
   const fileStat = await stat(resolvedPath);
-  const pageCountText = await tryRun('pdfinfo', [resolvedPath]);
+  const pageCountText = await tryRun('pdfinfo', [resolvedPath], signal);
   const pageCount = pageCountText?.match(/^Pages:\s+(\d+)/m)?.[1];
 
   return {

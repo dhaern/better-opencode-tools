@@ -14,6 +14,35 @@ function normalizeSource(source: string[] | string | undefined): string {
   return typeof source === 'string' ? source : '';
 }
 
+// A notebook cell header is a single logical line; multi-line cell types would
+// desynchronize the line accounting between generation and rendering.
+function isSupportedCell(cell: NotebookCell): boolean {
+  return (
+    typeof cell.cell_type === 'string' &&
+    cell.cell_type.length > 0 &&
+    !cell.cell_type.includes('\n') &&
+    !cell.cell_type.includes('\r')
+  );
+}
+
+function isParsedNotebookShape(value: unknown): value is {
+  cells: NotebookCell[];
+} {
+  if (typeof value !== 'object' || value === null) return false;
+  const cells = (value as { cells?: unknown }).cells;
+  if (!Array.isArray(cells)) return false;
+  return cells.every(
+    (cell) =>
+      typeof cell !== 'object' ||
+      cell === null ||
+      isSupportedCell(cell as NotebookCell),
+  );
+}
+
+export function isParsedNotebook(result: NotebookReadResult): boolean {
+  return result.mode === 'parsed';
+}
+
 function appendNotebookCell(
   lines: string[],
   cell: NotebookCell,
@@ -38,9 +67,10 @@ async function readNotebookFallback(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<NotebookReadResult> {
   return {
-    ...(await readTextFileStreaming(resolvedPath, offset, limit)),
+    ...(await readTextFileStreaming(resolvedPath, offset, limit, signal)),
     kind: 'notebook',
     mode: 'raw-fallback',
   };
@@ -53,10 +83,15 @@ async function readParsedNotebook(
   mtimeMs: number,
 ): Promise<NotebookReadResult> {
   const raw = await readFile(resolvedPath, 'utf8');
-  const parsed = JSON.parse(raw) as { cells?: NotebookCell[] };
+  const parsed: unknown = JSON.parse(raw);
+  // JSON that is valid but not a notebook (missing/invalid cells) falls back
+  // to the raw reader instead of silently rendering an empty document.
+  if (!isParsedNotebookShape(parsed)) {
+    throw new Error('Not a valid notebook structure');
+  }
   const lines: string[] = [];
 
-  for (const [index, cell] of (parsed.cells ?? []).entries()) {
+  for (const [index, cell] of parsed.cells.entries()) {
     appendNotebookCell(lines, cell, index);
   }
 
@@ -82,10 +117,12 @@ export async function readNotebook(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<NotebookReadResult> {
+  signal?.throwIfAborted();
   const fileStat = await stat(resolvedPath);
   if (!shouldParseNotebook(fileStat.size)) {
-    return readNotebookFallback(resolvedPath, offset, limit);
+    return readNotebookFallback(resolvedPath, offset, limit, signal);
   }
 
   try {
@@ -96,6 +133,6 @@ export async function readNotebook(
       fileStat.mtimeMs,
     );
   } catch {
-    return readNotebookFallback(resolvedPath, offset, limit);
+    return readNotebookFallback(resolvedPath, offset, limit, signal);
   }
 }

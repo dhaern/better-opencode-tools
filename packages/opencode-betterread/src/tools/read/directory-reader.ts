@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import { opendir } from 'node:fs/promises';
+import { opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { buildDirectoryFooter, buildDirectoryOutput } from './directory-output';
 import { getDirectoryLimit } from './limits';
@@ -12,6 +12,9 @@ const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;
 type ScannedDirectoryEntry = {
   name: string;
   dirent: Dirent;
+  // True for real directories and for symlinks that resolve to a directory,
+  // matching the trailing "/" convention of the native read tool.
+  dirLike: boolean;
 };
 
 type DirectoryScanResult = {
@@ -32,6 +35,19 @@ function directoryPaginationLimitMessage(resolvedPath: string): string {
   ].join(' ');
 }
 
+async function isDirLike(
+  resolvedPath: string,
+  entry: Dirent,
+): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(path.join(resolvedPath, entry.name))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function scanDirectoryEntries(
   resolvedPath: string,
 ): Promise<DirectoryScanResult> {
@@ -49,7 +65,11 @@ async function scanDirectoryEntries(
         };
       }
 
-      entries.push({ name: entry.name, dirent: entry });
+      entries.push({
+        name: entry.name,
+        dirent: entry,
+        dirLike: await isDirLike(resolvedPath, entry),
+      });
     }
 
     const nextEntry = await directory.read();
@@ -72,8 +92,42 @@ async function scanDirectoryEntries(
 }
 
 function formatDirectoryEntry(entry: ScannedDirectoryEntry): string {
-  if (entry.dirent.isDirectory()) return `${entry.name}/`;
-  return entry.name;
+  return entry.dirLike ? `${entry.name}/` : entry.name;
+}
+
+// Largest prefix of `entries` whose rendered output still fits the byte/char
+// budget, found by binary search instead of rebuilding the output once per
+// dropped entry (which is quadratic on large directories).
+function budgetedDirectoryEntries(
+  normalizedPath: string,
+  entries: string[],
+  buildFooter: (entriesCount: number) => string,
+): { selected: string[]; truncatedByBytes: boolean } {
+  const build = (count: number): string =>
+    buildDirectoryOutput(
+      normalizedPath,
+      entries.slice(0, count),
+      buildFooter(count),
+    );
+
+  if (entries.length === 0 || fitsOutputBudget(build(entries.length))) {
+    return { selected: entries, truncatedByBytes: false };
+  }
+  if (!fitsOutputBudget(build(0))) {
+    return { selected: [], truncatedByBytes: true };
+  }
+
+  let low = 0;
+  let high = entries.length;
+  while (low + 1 < high) {
+    const mid = low + ((high - low) >> 1);
+    if (fitsOutputBudget(build(mid))) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+  return { selected: entries.slice(0, low), truncatedByBytes: true };
 }
 
 export async function readDirectory(
@@ -95,34 +149,26 @@ export async function readDirectory(
   const sortedEntries = scan.entries.sort((left, right) =>
     left.name.localeCompare(right.name),
   );
-  const visible = sortedEntries.slice(startIndex, startIndex + directoryLimit);
-  const selected = visible.map(formatDirectoryEntry);
-  let truncatedByBytes = false;
+  const visible = sortedEntries
+    .slice(startIndex, startIndex + directoryLimit)
+    .map(formatDirectoryEntry);
   const normalizedPath = path.normalize(resolvedPath);
 
-  while (selected.length > 0) {
-    const hasMore =
-      truncatedByBytes ||
-      !scan.totalEntriesKnown ||
-      startIndex + selected.length < sortedEntries.length;
-    const footer = buildDirectoryFooter({
-      offset,
-      entriesCount: selected.length,
-      totalEntries: scan.totalEntries,
-      totalEntriesKnown: scan.totalEntriesKnown,
-      hasMore,
-      truncatedByBytes,
-    });
-
-    if (
-      fitsOutputBudget(buildDirectoryOutput(normalizedPath, selected, footer))
-    ) {
-      break;
-    }
-
-    selected.pop();
-    truncatedByBytes = true;
-  }
+  const { selected, truncatedByBytes } = budgetedDirectoryEntries(
+    normalizedPath,
+    visible,
+    (entriesCount) =>
+      buildDirectoryFooter({
+        offset,
+        entriesCount,
+        totalEntries: scan.totalEntries,
+        totalEntriesKnown: scan.totalEntriesKnown,
+        hasMore:
+          !scan.totalEntriesKnown ||
+          startIndex + entriesCount < sortedEntries.length,
+        truncatedByBytes: true,
+      }),
+  );
 
   const hasMore =
     truncatedByBytes ||

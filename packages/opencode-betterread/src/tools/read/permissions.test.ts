@@ -25,6 +25,18 @@ describe('tools/read/permissions', () => {
     ).toBe('/tmp/project/node_modules/@opencode-ai/plugin/*');
   });
 
+  test('allows bracket, brace and paren characters the host matches literally', () => {
+    // Wildcard.match treats []{}()+ as literals; only * ? \ are operators.
+    expect(assertSafePermissionPath('/tmp/app/(auth)/page.tsx')).toBe(
+      '/tmp/app/(auth)/page.tsx',
+    );
+    expect(assertSafePermissionPath('/tmp/app/[id]/page.tsx')).toBe(
+      '/tmp/app/[id]/page.tsx',
+    );
+    expect(assertSafePermissionPath('/tmp/lib/a+b.ts')).toBe('/tmp/lib/a+b.ts');
+    expect(permissionGlob('/tmp/app/(auth)')).toBe('/tmp/app/(auth)/*');
+  });
+
   test('rejects literal POSIX backslashes instead of using unsafe escapes', () => {
     expect(() => permissionGlob('/tmp/a\\b')).toThrow(
       /wildcard metacharacters/,
@@ -35,6 +47,30 @@ describe('tools/read/permissions', () => {
     expect(permissionGlob('C:\\Users\\ann\\docs\\file')).toBe(
       'C:/Users/ann/docs/file/*',
     );
+    // Backslash is an escape character in the host matcher, so raw
+    // Windows-style paths must be rejected; askReadPermission normalizes
+    // separators before the safety check.
+    expect(() => assertSafePermissionPath('C:\\Users\\ann\\file.txt')).toThrow(
+      /wildcard metacharacters/,
+    );
+  });
+
+  test('askReadPermission normalizes Windows separators and relativizes to the worktree', async () => {
+    const ask = mock(async () => undefined);
+
+    await askReadPermission({
+      ctx: { ask, worktree: 'C:\\repo' } as any,
+      requestedPath: 'C:\\repo\\src\\file.ts',
+      resolvedPath: 'C:\\repo\\src\\file.ts',
+      accessPath: 'C:\\repo\\src\\file.ts',
+      offset: 1,
+      limit: 10,
+    });
+
+    const request = (
+      ask.mock.calls[0] as unknown as [{ patterns: string[] }]
+    )[0];
+    expect(request.patterns).toEqual(['src/file.ts']);
   });
 
   test('allows non-ASCII paths and safe punctuation in permissions', () => {
@@ -46,11 +82,11 @@ describe('tools/read/permissions', () => {
     );
   });
 
-  test('rejects literal read permission paths with wildcard metacharacters', () => {
+  test('rejects real glob operators in read permission paths', () => {
     expect(() => assertSafePermissionPath('/tmp/a*.txt')).toThrow(
       /wildcard metacharacters/,
     );
-    expect(() => assertSafePermissionPath('/tmp/foo[bar].env')).toThrow(
+    expect(() => assertSafePermissionPath('/tmp/a?.txt')).toThrow(
       /wildcard metacharacters/,
     );
   });

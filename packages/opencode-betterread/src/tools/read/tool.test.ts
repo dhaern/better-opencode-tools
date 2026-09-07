@@ -52,8 +52,10 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(request.permission).toBe('read');
-    expect(request.patterns).toEqual([path.join(repoDir, 'src', 'example.ts')]);
-    expect(request.always).toEqual([path.join(repoDir, 'src', 'example.ts')]);
+    // The native tool asks with the worktree-relative path so host rules like
+    // `secrets/*` match; mirror that contract.
+    expect(request.patterns).toEqual(['src/example.ts']);
+    expect(request.always).toEqual(['src/example.ts']);
     expect(request.metadata.resolved_path).toBe(
       path.join(repoDir, 'src', 'example.ts'),
     );
@@ -99,8 +101,8 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(readPermission.permission).toBe('read');
-    expect(readPermission.patterns).toEqual([outside]);
-    expect(readPermission.always).toEqual([outside]);
+    expect(readPermission.patterns).toEqual([path.relative(worktree, outside)]);
+    expect(readPermission.always).toEqual([path.relative(worktree, outside)]);
   });
 
   test('keeps the separate read prompt for missing external paths but scopes it to the exact target', async () => {
@@ -134,8 +136,8 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(readPermission.permission).toBe('read');
-    expect(readPermission.patterns).toEqual([missing]);
-    expect(readPermission.always).toEqual([missing]);
+    expect(readPermission.patterns).toEqual([path.relative(worktree, missing)]);
+    expect(readPermission.always).toEqual([path.relative(worktree, missing)]);
   });
 
   test('asks external_directory when an internal symlink resolves outside the worktree', async () => {
@@ -174,8 +176,12 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(readPermission.permission).toBe('read');
-    expect(readPermission.patterns).toEqual([outsideFile]);
-    expect(readPermission.always).toEqual([outsideFile]);
+    expect(readPermission.patterns).toEqual([
+      path.relative(worktree, outsideFile),
+    ]);
+    expect(readPermission.always).toEqual([
+      path.relative(worktree, outsideFile),
+    ]);
     expect(readPermission.metadata.resolved_path).toBe(linked);
     expect(readPermission.metadata.access_path).toBe(outsideFile);
   });
@@ -220,9 +226,62 @@ describe('tools/read/tool', () => {
     )[0];
     expect(readPermission.permission).toBe('read');
     expect(readPermission.patterns).toEqual([
-      path.join(outside, 'secrett.txt'),
+      path.relative(worktree, path.join(outside, 'secrett.txt')),
     ]);
-    expect(readPermission.always).toEqual([path.join(outside, 'secrett.txt')]);
+    expect(readPermission.always).toEqual([
+      path.relative(worktree, path.join(outside, 'secrett.txt')),
+    ]);
+  });
+
+  test('rejects when the read target is swapped while awaiting permission', async () => {
+    const repoDir = temps.createRepo();
+    const target = path.join(repoDir, 'src', 'example.ts');
+    const read = createReadTool({
+      directory: repoDir,
+      worktree: repoDir,
+      client: {},
+    } as any);
+    // Swap the regular file for a symlink to a different real file while the
+    // permission ask is pending; the canonical target changes, so the read
+    // must fail instead of opening the substituted object.
+    const outside = temps.createDir('opencode-betterread-swap');
+    const outsideFile = path.join(outside, 'swapped.txt');
+    writeFileSync(outsideFile, 'swapped\n');
+    const ctx = {
+      ...createExecutionContext(repoDir),
+      ask: mock(async () => {
+        const { rmSync, symlinkSync } = await import('node:fs');
+        rmSync(target);
+        symlinkSync(outsideFile, target);
+      }),
+    };
+
+    await expect(
+      read.execute({ filePath: target }, ctx as any),
+    ).rejects.toThrow(/changed while awaiting permission/);
+  });
+
+  test('rejects immediately when the abort signal is already cancelled', async () => {
+    const repoDir = temps.createRepo();
+    const read = createReadTool({
+      directory: repoDir,
+      worktree: repoDir,
+      client: {},
+    } as any);
+    const controller = new AbortController();
+    controller.abort();
+    const ctx = {
+      ...createExecutionContext(repoDir),
+      abort: controller.signal,
+    };
+
+    await expect(
+      read.execute(
+        { filePath: path.join(repoDir, 'src', 'example.ts') },
+        ctx as any,
+      ),
+    ).rejects.toThrow();
+    expect(ctx.ask).not.toHaveBeenCalled();
   });
 
   test('supports ask implementations that return Effect', async () => {

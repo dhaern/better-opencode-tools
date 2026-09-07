@@ -1,6 +1,5 @@
-import { open, stat } from 'node:fs/promises';
+import { open, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   isImageMime,
   isNotebookPath,
@@ -43,7 +42,11 @@ import type {
   TextReadResult,
 } from './types';
 
-async function sampleFile(readPath: string): Promise<Buffer> {
+async function sampleFile(
+  readPath: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  signal?.throwIfAborted();
   const file = await open(readPath, 'r');
   try {
     const buffer = Buffer.alloc(SAMPLE_BYTES);
@@ -101,15 +104,43 @@ export async function inspectReadTarget(input: {
 
   try {
     const fileStat = await stat(accessPath);
+    const kind = classifyReadTarget(fileStat);
+    const capturedIdentity = {
+      dev: fileStat.dev,
+      ino: fileStat.ino,
+      realPath,
+    };
     return {
       args,
       resolvedPath,
       accessPath,
       realPath,
       exists: true,
-      kind: classifyReadTarget(fileStat),
+      kind,
       fileStat,
       similarPaths: [],
+      revalidate: async () => {
+        const currentRealPath = await safeRealpathInline(accessPath);
+        if (currentRealPath !== capturedIdentity.realPath) {
+          throw new Error(
+            `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(resolvedPath)}`,
+          );
+        }
+        const currentStat = await stat(accessPath);
+        if (
+          currentStat.dev !== capturedIdentity.dev ||
+          currentStat.ino !== capturedIdentity.ino
+        ) {
+          throw new Error(
+            `Read target changed while awaiting permission: ${escapeStructuredSingleLineValue(resolvedPath)}`,
+          );
+        }
+        if (classifyReadTarget(currentStat) !== kind) {
+          throw new Error(
+            `Read target type changed while awaiting permission: ${escapeStructuredSingleLineValue(resolvedPath)}`,
+          );
+        }
+      },
     };
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
@@ -126,6 +157,17 @@ export async function inspectReadTarget(input: {
   }
 }
 
+async function safeRealpathInline(
+  targetPath: string,
+): Promise<string | undefined> {
+  try {
+    return await realpath(targetPath);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    return undefined;
+  }
+}
+
 function metadataPath(input: ReadInspection): {
   filePath: string;
   realPath?: string;
@@ -136,14 +178,18 @@ function metadataPath(input: ReadInspection): {
   };
 }
 
-function fileAttachment(input: {
+// The host only delivers attachments whose URL is an embedded `data:` URL
+// (message-v2 filters `url.startsWith("data:")`), so embed bytes like the
+// native read tool does instead of returning `file://` URLs.
+async function dataFileAttachment(input: {
   path: string;
   mime: string;
-}): NonNullable<ReadExecutionResult['attachments']>[number] {
+}): Promise<NonNullable<ReadExecutionResult['attachments']>[number]> {
+  const bytes = await readFile(input.path);
   return {
     type: 'file',
     mime: input.mime,
-    url: pathToFileURL(input.path).href,
+    url: `data:${input.mime};base64,${bytes.toString('base64')}`,
     filename: path.basename(input.path),
   };
 }
@@ -164,7 +210,9 @@ export async function executeRead(input: {
   args: ReadArgs;
   directory: string;
   inspection?: ReadInspection;
+  signal?: AbortSignal;
 }): Promise<ReadExecutionResult> {
+  input.signal?.throwIfAborted();
   const inspection =
     input.inspection ??
     (await inspectReadTarget({ args: input.args, directory: input.directory }));
@@ -198,7 +246,7 @@ export async function executeRead(input: {
     throw new Error(specialFileMessage(inspection.resolvedPath));
   }
 
-  const sample = await sampleFile(readPath);
+  const sample = await sampleFile(readPath, input.signal);
   const mime = sniffMime(sample);
 
   if (isImageMime(mime)) {
@@ -214,14 +262,17 @@ export async function executeRead(input: {
       output: formatImageInfoResult(image),
       metadata: buildImageMetadata(metadataPath(inspection), image),
       attachments: [
-        fileAttachment({ path: inspection.accessPath, mime: image.mime }),
+        await dataFileAttachment({
+          path: inspection.accessPath,
+          mime: image.mime,
+        }),
       ],
     };
   }
 
   if (isPdfMime(mime)) {
     const pdf = {
-      ...(await readPdf(readPath)),
+      ...(await readPdf(readPath, input.signal)),
       path: inspection.resolvedPath,
     };
     return {
@@ -232,7 +283,7 @@ export async function executeRead(input: {
       output: formatPdfResult(pdf),
       metadata: buildPdfMetadata(metadataPath(inspection), pdf),
       attachments: [
-        fileAttachment({
+        await dataFileAttachment({
           path: inspection.accessPath,
           mime: 'application/pdf',
         }),
@@ -242,7 +293,7 @@ export async function executeRead(input: {
 
   if (isNotebookPath(inspection.resolvedPath)) {
     const notebook = {
-      ...(await readNotebook(readPath, args.offset, args.limit)),
+      ...(await readNotebook(readPath, args.offset, args.limit, input.signal)),
       path: inspection.resolvedPath,
     };
     assertReadableWindow(notebook);
@@ -276,7 +327,7 @@ export async function executeRead(input: {
   }
 
   const text = {
-    ...(await readTextFile(readPath, args.offset, args.limit)),
+    ...(await readTextFile(readPath, args.offset, args.limit, input.signal)),
     path: inspection.resolvedPath,
   };
   assertReadableWindow(text);

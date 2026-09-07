@@ -99,7 +99,7 @@ export function buildPdfMetadata(
   return {
     ...buildStaticMetadata({ ...input, kind: result.kind }, preview, false),
     page_count: result.pageCount,
-    attachment_support: 'unavailable',
+    attachment_support: 'embedded',
     attachment_note: ATTACHMENT_UNAVAILABLE_NOTE,
   };
 }
@@ -120,7 +120,7 @@ export function buildImageMetadata(
     size_bytes: result.sizeBytes,
     width: result.width,
     height: result.height,
-    attachment_support: 'unavailable',
+    attachment_support: 'embedded',
     attachment_note: ATTACHMENT_UNAVAILABLE_NOTE,
   };
 }

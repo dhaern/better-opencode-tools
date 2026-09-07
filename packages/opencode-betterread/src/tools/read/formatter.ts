@@ -117,6 +117,30 @@ function buildTextOutput(
   ].join('\n');
 }
 
+// Largest prefix of `lines` whose rendered output still fits the byte/char
+// budget, found by binary search instead of rebuilding the output once per
+// line (which is quadratic on large windows).
+function budgetedLineNumberedLines(
+  numberedLines: string[],
+  buildOutput: (candidateLines: string[]) => string,
+): string[] {
+  if (numberedLines.length === 0) return [];
+  if (fitsOutputBudget(buildOutput(numberedLines))) return [...numberedLines];
+  if (!fitsOutputBudget(buildOutput([]))) return [];
+
+  let low = 0;
+  let high = numberedLines.length;
+  while (low + 1 < high) {
+    const mid = low + ((high - low) >> 1);
+    if (fitsOutputBudget(buildOutput(numberedLines.slice(0, mid)))) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+  return numberedLines.slice(0, low);
+}
+
 export function renderTextResult(
   result: TextReadResult | NotebookReadResult,
 ): RenderedTextResult {
@@ -162,31 +186,23 @@ export function renderTextResult(
     };
   }
 
-  const selected: string[] = [];
-
-  for (const line of numberedLines) {
-    const candidateLines = [...selected, line];
-    const candidateFooter = formatFooter(
-      result.startLine,
-      result.startLine + candidateLines.length - 1,
-      result.totalLines,
-      true,
-    );
-    const candidateNotes = buildTextNotes({
-      truncatedByLineLength: result.truncatedByLineLength,
-      cappedByBudget: true,
-    });
-    const candidateOutput = buildTextOutput(
+  const selected = budgetedLineNumberedLines(numberedLines, (candidateLines) =>
+    buildTextOutput(
       result.path,
       type,
       candidateLines,
-      candidateFooter,
-      candidateNotes,
-    );
-
-    if (!fitsOutputBudget(candidateOutput)) break;
-    selected.push(line);
-  }
+      formatFooter(
+        result.startLine,
+        result.startLine + candidateLines.length - 1,
+        result.totalLines,
+        true,
+      ),
+      buildTextNotes({
+        truncatedByLineLength: result.truncatedByLineLength,
+        cappedByBudget: true,
+      }),
+    ),
+  );
 
   const endLine =
     selected.length === 0

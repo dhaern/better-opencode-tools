@@ -31,6 +31,7 @@ export function createReadTool(
     description: READ_DESCRIPTION,
     args: argsSchema,
     async execute(args, ctx) {
+      ctx.abort?.throwIfAborted();
       const rawArgs = args as unknown as ReadArgs;
       const normalized = normalizeReadArgs(rawArgs);
       const directory = ctx.directory ?? pluginCtx.directory;
@@ -73,10 +74,15 @@ export function createReadTool(
         limit: normalized.limit,
       });
 
+      // The permission ask can suspend for a long time; make sure the target
+      // we are about to open is still the object that was authorized.
+      await inspection.revalidate?.();
+
       const result = await execute({
         args: normalized,
         directory,
         inspection,
+        signal: ctx.abort,
       });
 
       return {

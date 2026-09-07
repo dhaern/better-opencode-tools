@@ -63,7 +63,9 @@ async function readStreamingPath(
   offset: number,
   limit: number,
   mtimeMs: number,
+  signal?: AbortSignal,
 ): Promise<TextReadResult> {
+  signal?.throwIfAborted();
   const stream = createReadStream(resolvedPath, { encoding: 'utf8' });
   const selected: string[] = [];
   const budget = createOutputBudgetState();
@@ -76,6 +78,16 @@ async function readStreamingPath(
   let currentLineStarted = false;
   let pendingCarriageReturn = false;
   let stopped = false;
+  let aborted = false;
+
+  const onAbort = (): void => {
+    aborted = true;
+    hasMore = true;
+    stopped = true;
+    stream.destroy();
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
 
   function stopWithMore(): void {
     hasMore = true;
@@ -188,12 +200,21 @@ async function readStreamingPath(
     }
   }
 
-  for await (const chunk of stream) {
-    processChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
-    if (stopped) {
-      break;
+  try {
+    for await (const chunk of stream) {
+      processChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+      if (stopped) {
+        break;
+      }
     }
+  } catch (error) {
+    if (aborted) throw new Error('Read aborted');
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
   }
+
+  if (aborted) throw new Error('Read aborted');
 
   if (!stopped) {
     if (pendingCarriageReturn) {
@@ -220,19 +241,35 @@ export async function readTextFile(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<TextReadResult> {
+  signal?.throwIfAborted();
   const fileStat = await stat(resolvedPath);
   if (fileStat.size <= FAST_PATH_MAX_BYTES) {
     return readFastPath(resolvedPath, offset, limit, fileStat.mtimeMs);
   }
-  return readStreamingPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+  return readStreamingPath(
+    resolvedPath,
+    offset,
+    limit,
+    fileStat.mtimeMs,
+    signal,
+  );
 }
 
 export async function readTextFileStreaming(
   resolvedPath: string,
   offset: number,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<TextReadResult> {
+  signal?.throwIfAborted();
   const fileStat = await stat(resolvedPath);
-  return readStreamingPath(resolvedPath, offset, limit, fileStat.mtimeMs);
+  return readStreamingPath(
+    resolvedPath,
+    offset,
+    limit,
+    fileStat.mtimeMs,
+    signal,
+  );
 }

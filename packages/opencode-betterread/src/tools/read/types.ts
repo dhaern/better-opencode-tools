@@ -78,6 +78,13 @@ export type ReadInspection = {
   kind: ReadTargetKind;
   fileStat?: Stats;
   similarPaths: string[];
+  /**
+   * Re-checks that the inspected target still matches the classification
+   * captured at inspection time. Throws when the path was swapped to a
+   * different object (different identity or file type) between the permission
+   * ask and the actual read, closing the authorize-then-open race.
+   */
+  revalidate?: () => Promise<void>;
 };
 
 export type ReadExecutionResult = {
