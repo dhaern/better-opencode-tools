@@ -66,15 +66,17 @@ describe('tools/grep/downloader', () => {
     expect(getInstalledRipgrepPath()).toBe(binaryPath);
   });
 
-  test('rejects cached ripgrep when metadata is missing', () => {
+  test('rejects cached ripgrep when metadata is missing without deleting it', () => {
     const binary = '#!/bin/sh\necho "ripgrep 15.1.0"\n';
     const binaryPath = setupCache(binary);
 
+    // Readers are non-destructive: cleanup happens under the install lock so
+    // a concurrent publisher cannot lose a valid install.
     expect(getInstalledRipgrepPath()).toBeNull();
-    expect(existsSync(binaryPath)).toBe(false);
+    expect(existsSync(binaryPath)).toBe(true);
   });
 
-  test('rejects cached ripgrep when binary digest does not match metadata', () => {
+  test('rejects cached ripgrep when binary digest does not match metadata without deleting it', () => {
     const binary = '#!/bin/sh\necho "ripgrep 15.1.0"\n';
     const binaryPath = setupCache(binary, {
       version: '15.1.0',
@@ -84,6 +86,6 @@ describe('tools/grep/downloader', () => {
     });
 
     expect(getInstalledRipgrepPath()).toBeNull();
-    expect(existsSync(binaryPath)).toBe(false);
+    expect(existsSync(binaryPath)).toBe(true);
   });
 });

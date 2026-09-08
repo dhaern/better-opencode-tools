@@ -66,6 +66,7 @@ function normalizeSearchTarget(
   requestedPath: string;
   resolvedPath: string;
   searchPath: string;
+  kind: 'file' | 'directory';
 } {
   const resolvedPath = path.isAbsolute(target)
     ? target
@@ -94,6 +95,7 @@ function normalizeSearchTarget(
     requestedPath: target,
     resolvedPath,
     searchPath,
+    kind: searchStat.isDirectory() ? 'directory' : 'file',
   };
 }
 
@@ -147,9 +149,14 @@ export function normalizeGrepInput(
     rawTargets.length > 0
       ? uniqueStrings(rawTargets)
       : [cleanOptionalString(args.path) ?? '.'];
-  const normalizedTargets = requestedTargets.map((target) =>
-    normalizeSearchTarget(target, base),
-  );
+  const normalizedTargets: Array<ReturnType<typeof normalizeSearchTarget>> = [];
+  const normalizedPaths = new Set<string>();
+  for (const target of requestedTargets) {
+    const normalized = normalizeSearchTarget(target, base);
+    if (normalizedPaths.has(normalized.searchPath)) continue;
+    normalizedPaths.add(normalized.searchPath);
+    normalizedTargets.push(normalized);
+  }
   const primaryTarget =
     normalizedTargets[0] as (typeof normalizedTargets)[number];
   const requestedPath =
@@ -242,6 +249,7 @@ export function normalizeGrepInput(
     ...(rawTargets.length > 0
       ? { searchTargets: normalizedTargets.map((target) => target.searchPath) }
       : {}),
+    searchTargetKinds: normalizedTargets.map((target) => target.kind),
     permissionPatterns: normalizedTargets.map((target) => target.searchPath),
   };
 }

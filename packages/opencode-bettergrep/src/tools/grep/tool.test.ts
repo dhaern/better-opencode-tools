@@ -1,5 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GREP_TIMEOUT_MS } from './constants';
 import {
@@ -75,15 +76,24 @@ describe('tools/grep/tool', () => {
       ctx as any,
     );
 
-    expect(output).toContain('Found 1 match across 1 file.');
-    expect(output).toContain('src/example.ts');
-    expect(output).toContain('2: const target = createTool();');
+    const structuredOutput = output as {
+      output: string;
+      title: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(structuredOutput.output).toContain('Found 1 match across 1 file.');
+    expect(structuredOutput.output).toContain('src/example.ts');
+    expect(structuredOutput.output).toContain(
+      '2: const target = createTool();',
+    );
+    expect(structuredOutput.title).toBe('createTool');
+    expect(structuredOutput.metadata.matches).toBe(1);
     expect(ctx.ask).toHaveBeenCalledTimes(1);
     expect(ctx.metadata).toHaveBeenCalledTimes(1);
 
     const askInput = getAskInput(ctx);
     expect(askInput.permission).toBe('grep');
-    expect(askInput.patterns).toEqual([path.join(repoDir, 'src')]);
+    expect(askInput.patterns).toEqual(['createTool']);
     expect(askInput.metadata.before_context).toBe(0);
     expect(askInput.metadata.after_context).toBe(0);
     expect(askInput.metadata.pattern).toBe('createTool');
@@ -160,6 +170,198 @@ describe('tools/grep/tool', () => {
     await expect(
       grep.execute({ pattern: 'createTool', path: 'src' }, ctx as any),
     ).rejects.toThrow('InstanceRef not provided');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test('asks external_directory before grep for targets outside the worktree', async () => {
+    const repoDir = temps.createRepo();
+    const externalDir = temps.createDir('opencode-bettergrep-external');
+    const run: GrepRunner = mock(async (input) => {
+      expect(input.searchPath).toBe(externalDir);
+      return buildResult(repoDir);
+    });
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = createExecutionContext(repoDir);
+
+    await grep.execute({ pattern: 'needle', path: externalDir }, ctx as any);
+
+    expect(ctx.ask).toHaveBeenCalledTimes(2);
+    const calls = ctx.ask.mock.calls as unknown as Array<
+      [
+        {
+          permission: string;
+          patterns: string[];
+          always: string[];
+        },
+      ]
+    >;
+    expect(calls[0]?.[0]).toMatchObject({
+      permission: 'external_directory',
+      patterns: [`${externalDir}/*`],
+      always: [`${externalDir}/*`],
+    });
+    expect(calls[1]?.[0]).toMatchObject({
+      permission: 'grep',
+      patterns: ['needle'],
+      always: ['*'],
+    });
+  });
+
+  test('authorizes external directories discovered by follow_symlinks walks', async () => {
+    const repoDir = temps.createRepo();
+    const externalDir = temps.createDir('opencode-bettergrep-ext-target');
+    writeFileSync(path.join(externalDir, 'outside.ts'), 'needle\n');
+    symlinkSync(
+      externalDir,
+      path.join(repoDir, 'src', 'linked-outside'),
+      'dir',
+    );
+    const run: GrepRunner = mock(async () => buildResult(repoDir));
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = createExecutionContext(repoDir);
+
+    await grep.execute(
+      { pattern: 'needle', path: 'src', follow_symlinks: true },
+      ctx as any,
+    );
+
+    const calls = ctx.ask.mock.calls as unknown as Array<
+      [{ permission: string; patterns: string[] }]
+    >;
+    expect(calls[0]?.[0]).toMatchObject({
+      permission: 'external_directory',
+      patterns: [`${externalDir}/*`],
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails closed when a walked directory contains a non-UTF-8 name', async () => {
+    const repoDir = temps.createRepo();
+    const externalDir = temps.createDir('opencode-bettergrep-ext-nonutf8');
+    writeFileSync(path.join(externalDir, 'outside.ts'), 'needle\n');
+    symlinkSync(
+      externalDir,
+      path.join(repoDir, 'src', 'linked-outside'),
+      'dir',
+    );
+    // A directory whose on-disk name contains a raw 0xff byte: readdir's
+    // lossy UTF-8 decoding yields U+FFFD, so realpath would resolve a
+    // different name than the backend (which matches by raw bytes).
+    const srcDir = Buffer.from(path.join(repoDir, 'src'));
+    const nonUtf8DirBuffer = Buffer.concat([
+      srcDir,
+      Buffer.from('/'),
+      Buffer.from([0x66, 0x69, 0x6c, 0x65, 0xff]),
+    ]);
+    mkdirSync(nonUtf8DirBuffer, { recursive: true });
+    const run: GrepRunner = mock(async () => buildResult(repoDir));
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = createExecutionContext(repoDir);
+
+    await expect(
+      grep.execute(
+        { pattern: 'needle', path: 'src', follow_symlinks: true },
+        ctx as any,
+      ),
+    ).rejects.toThrow(/non-UTF-8 name/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test('fails closed when a symlink destination contains a non-UTF-8 name', async () => {
+    if (process.platform === 'win32') return;
+
+    const repoDir = temps.createRepo();
+    const externalParent = temps.createDir(
+      'opencode-bettergrep-ext-dest-parent',
+    );
+    const secondExternal = temps.createDir(
+      'opencode-bettergrep-ext-dest-second',
+    );
+    const rawDestination = Buffer.concat([
+      Buffer.from(externalParent),
+      Buffer.from('/raw'),
+      Buffer.from([0xff]),
+    ]);
+    mkdirSync(rawDestination, { recursive: true });
+    symlinkSync(
+      secondExternal,
+      Buffer.concat([rawDestination, Buffer.from('/nested-link')]),
+      'dir',
+    );
+    symlinkSync(rawDestination, path.join(repoDir, 'src', 'ascii-link'), 'dir');
+
+    const run: GrepRunner = mock(async () => buildResult(repoDir));
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = createExecutionContext(repoDir);
+
+    await expect(
+      grep.execute(
+        { pattern: 'needle', path: 'src', follow_symlinks: true },
+        ctx as any,
+      ),
+    ).rejects.toThrow(/non-UTF-8 name/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test('denies follow_symlinks walks when the external directory is refused', async () => {
+    const repoDir = temps.createRepo();
+    const externalDir = temps.createDir('opencode-bettergrep-ext-denied');
+    writeFileSync(path.join(externalDir, 'outside.ts'), 'needle\n');
+    symlinkSync(
+      externalDir,
+      path.join(repoDir, 'src', 'linked-outside'),
+      'dir',
+    );
+    const run: GrepRunner = mock(async () => buildResult(repoDir));
+    const grep = createGrepTool(
+      {
+        directory: repoDir,
+        worktree: repoDir,
+        client: {},
+      } as any,
+      { run },
+    );
+    const ctx = {
+      ...createExecutionContext(repoDir),
+      ask: mock(async () => {
+        throw new Error('external directory denied');
+      }),
+    };
+
+    await expect(
+      grep.execute(
+        { pattern: 'needle', path: 'src', follow_symlinks: true },
+        ctx as any,
+      ),
+    ).rejects.toThrow('external directory denied');
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -285,7 +487,8 @@ describe('tools/grep/tool', () => {
       ctx as any,
     );
 
-    expect(output).toContain('Found 1 match across 1 file.');
+    const structuredOutput = output as { output: string };
+    expect(structuredOutput.output).toContain('Found 1 match across 1 file.');
   });
 
   test('emits metadata when permission step fails', async () => {

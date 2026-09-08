@@ -172,6 +172,9 @@ async function executeMode<TState>(
     const stderrStream = proc.proc.stderr ?? undefined;
     const stdoutPromise = options.consumeStdout(stdout, proc, state);
     const stderrPromise = readTextStream(stderrStream);
+    // Observe process exit from the start: a spawn failure can reject long
+    // before stdout finishes, and the rejection must have a handler attached.
+    const exitPromise = waitForExitAndStderr(proc, stderrPromise);
 
     let stdoutError: unknown;
     try {
@@ -180,10 +183,7 @@ async function executeMode<TState>(
       stdoutError = error;
     }
 
-    const { exitCode, stderr } = await waitForExitAndStderr(
-      proc,
-      stderrPromise,
-    );
+    const { exitCode, stderr, error: exitError } = await exitPromise;
     const result = options.buildResult(
       baseResult,
       state,
@@ -214,11 +214,16 @@ async function executeMode<TState>(
 
     applySuccessfulStderr(result, result.stderr, exitCode);
 
+    if (exitError && !options.isStopped(state, termination.state)) {
+      result.error = exitError;
+      return result;
+    }
+
     if (options.isStopped(state, termination.state)) {
       return result;
     }
 
-    const nonFatal = finalizeNonFatalExit(result, exitCode);
+    const nonFatal = finalizeNonFatalExit(result, exitCode, result.stderr);
     if (nonFatal) {
       return nonFatal;
     }
@@ -304,6 +309,10 @@ export async function executeCountMode(
       consumeNullCountPairsBytes(stdout, (filePath, countText) => {
         const file = parseCountRecordBytes(filePath, countText, input);
         if (!file) {
+          return true;
+        }
+
+        if (file.matchCount === 0) {
           return true;
         }
 

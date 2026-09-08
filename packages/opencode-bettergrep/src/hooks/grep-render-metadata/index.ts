@@ -72,6 +72,13 @@ export function createGrepRenderMetadataHook() {
         metadata.matches = counts.matches;
         metadata.files = counts.files;
       }
+      // The host adapter overwrites `truncated` with its own output-truncation
+      // flag. Preserve the plugin-owned search truncation under its own key
+      // and expose the combined state.
+      if (typeof metadata.search_truncated === 'boolean') {
+        metadata.truncated =
+          metadata.truncated === true || metadata.search_truncated;
+      }
       output.metadata = metadata;
 
       if (
