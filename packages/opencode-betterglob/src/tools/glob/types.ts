@@ -5,6 +5,7 @@ export interface GlobToolInput {
   sort_by?: GlobSortMode;
   sort_order?: GlobSortOrder;
   hidden?: boolean;
+  /** @deprecated Symlink traversal is rejected because it cannot be confined. */
   follow_symlinks?: boolean;
   timeout_ms?: number;
 }
@@ -19,7 +20,6 @@ export interface NormalizedGlobInput {
   requestedPath: string;
   resolvedPath: string;
   searchPath: string;
-  ignoreFiles: string[];
   limit: number;
   sortBy: GlobSortMode;
   sortOrder: GlobSortOrder;
@@ -28,6 +28,13 @@ export interface NormalizedGlobInput {
   timeoutMs: number;
   cwd: string;
   worktree: string;
+  /**
+   * True only after the install_ripgrep permission was granted for this
+   * execution. The auto-install resolver refuses to download or mutate the
+   * cache without it, so a preflight/system rg disappearing mid-run can
+   * never trigger an unauthorized install.
+   */
+  allowAutoInstall?: boolean;
 }
 
 export interface GlobSearchResult {

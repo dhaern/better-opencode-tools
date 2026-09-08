@@ -51,11 +51,13 @@
   "dependencies": {
     "@opencode-ai/plugin": "1.18.29",
     "effect": "4.0.0-beta.74",
+    "proper-lockfile": "^4.1.2",
     "which": "^6.0.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.11",
     "@types/node": "^24.6.1",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/which": "^3.0.4",
     "bun-types": "1.3.12",
     "typescript": "^5.9.3"

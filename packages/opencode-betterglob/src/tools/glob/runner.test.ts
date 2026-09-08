@@ -1,14 +1,27 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeGlobInput } from './normalize';
-import { runRipgrep } from './runner';
+import { createRipgrepRunner } from './runner';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobToolInput } from './types';
 
 describe('tools/glob/runner', () => {
-  const temps = createTempTracker({ resetResolver: true });
+  const temps = createTempTracker();
+
+  // Host integration is explicitly opt-in. Merely importing this suite must
+  // never probe PATH, the real resolver cache, or auto-install ripgrep.
+  const rgPath = process.env.BETTERGLOB_TEST_RG;
+  const testWithRg = (rgPath ? test : test.skip) as typeof test;
+  const runSystemRg = createRipgrepRunner({
+    resolve: async () => {
+      if (!rgPath) throw new Error('Set BETTERGLOB_TEST_RG to run host tests');
+      return { path: rgPath, backend: 'rg', source: 'system-rg' };
+    },
+    spawn: nodeSpawn,
+  });
 
   function createNormalized(
     input: GlobToolInput,
@@ -20,22 +33,28 @@ describe('tools/glob/runner', () => {
     };
   }
 
-  test('parses NUL-delimited paths with names containing newlines', async () => {
-    const repoDir = temps.createRepo();
-    const weird = path.join(repoDir, 'src', 'odd\nname.ts');
-    writeFileSync(weird, 'export const weird = true;\n');
+  testWithRg(
+    'parses NUL-delimited paths with names containing newlines',
+    async () => {
+      const repoDir = temps.createRepo();
+      const weird = path.join(repoDir, 'src', 'odd\nname.ts');
+      writeFileSync(weird, 'export const weird = true;\n');
 
-    const { normalized } = createNormalized(
-      { pattern: '*.ts', path: 'src', sort_by: 'path' },
-      repoDir,
-    );
-    const result = await runRipgrep(normalized, new AbortController().signal);
+      const { normalized } = createNormalized(
+        { pattern: '*.ts', path: 'src', sort_by: 'path' },
+        repoDir,
+      );
+      const result = await runSystemRg(
+        normalized,
+        new AbortController().signal,
+      );
 
-    expect(result.files).toContain(weird);
-    expect(result.error).toBeUndefined();
-  });
+      expect(result.files).toContain(weird);
+      expect(result.error).toBeUndefined();
+    },
+  );
 
-  test.each([
+  testWithRg.each([
     {
       name: 'mtime desc',
       input: { sort_by: 'mtime', sort_order: 'desc' } as const,
@@ -73,7 +92,7 @@ describe('tools/glob/runner', () => {
       { pattern: '*.ts', path: 'src', limit: 2, ...input },
       repoDir,
     );
-    const result = await runRipgrep(normalized, new AbortController().signal);
+    const result = await runSystemRg(normalized, new AbortController().signal);
 
     expect(result.files.map((file) => path.basename(file))).toEqual(
       expected.slice(0, 2),
@@ -82,29 +101,29 @@ describe('tools/glob/runner', () => {
     expect(result.count).toBe(2);
   });
 
-  test('returns no files for an unmatched pattern', async () => {
+  testWithRg('returns no files for an unmatched pattern', async () => {
     const { normalized } = createNormalized({
       pattern: '*.missing',
       path: 'src',
     });
-    const result = await runRipgrep(normalized, new AbortController().signal);
+    const result = await runSystemRg(normalized, new AbortController().signal);
 
     expect(result.files).toEqual([]);
     expect(result.count).toBe(0);
     expect(result.truncated).toBe(false);
   });
 
-  test('matches common brace and bracket extension globs', async () => {
+  testWithRg('matches common brace and bracket extension globs', async () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, 'src', 'extra.tsx'), 'tsx\n');
     writeFileSync(path.join(repoDir, 'src', 'plain.js'), 'js\n');
 
-    const brace = await runRipgrep(
+    const brace = await runSystemRg(
       createNormalized({ pattern: '*.{ts,tsx}', path: 'src' }, repoDir)
         .normalized,
       new AbortController().signal,
     );
-    const bracket = await runRipgrep(
+    const bracket = await runSystemRg(
       createNormalized({ pattern: '*.[jt]s', path: 'src' }, repoDir).normalized,
       new AbortController().signal,
     );
@@ -121,22 +140,46 @@ describe('tools/glob/runner', () => {
     ]);
   });
 
-  test('filters matched files without re-including ignored files', async () => {
+  testWithRg(
+    'delegates matching to rg, where an explicit positive glob overrides gitignore',
+    async () => {
+      // Native parity: OpenCode's glob tool passes --glob=<pattern> straight
+      // to ripgrep, and in rg an explicit positive glob re-includes files
+      // excluded by .gitignore. There is no JavaScript post-filter.
+      const repoDir = temps.createRepo();
+      mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+      writeFileSync(path.join(repoDir, '.gitignore'), 'src/ignored.ts\n');
+      writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'ignored\n');
+      writeFileSync(path.join(repoDir, 'src', 'ok.ts'), 'ok\n');
+      const { normalized } = createNormalized(
+        { pattern: '*.ts', path: 'src', sort_by: 'path' },
+        repoDir,
+      );
+      const result = await runSystemRg(
+        normalized,
+        new AbortController().signal,
+      );
+
+      expect(result.files.map((file) => path.basename(file))).toEqual([
+        'a.ts',
+        'b.ts',
+        'ignored.ts',
+        'ok.ts',
+      ]);
+    },
+  );
+
+  testWithRg('still excludes .git contents under hidden matching', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'), { recursive: true });
-    writeFileSync(path.join(repoDir, '.gitignore'), 'src/ignored.ts\n');
-    writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'ignored\n');
-    writeFileSync(path.join(repoDir, 'src', 'ok.ts'), 'ok\n');
+    writeFileSync(path.join(repoDir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+
     const { normalized } = createNormalized(
-      { pattern: '*.ts', path: 'src', sort_by: 'path' },
+      { pattern: 'HEAD', path: '.', hidden: true },
       repoDir,
     );
-    const result = await runRipgrep(normalized, new AbortController().signal);
+    const result = await runSystemRg(normalized, new AbortController().signal);
 
-    expect(result.files.map((file) => path.basename(file))).toEqual([
-      'a.ts',
-      'b.ts',
-      'ok.ts',
-    ]);
+    expect(result.files).toEqual([]);
   });
 });

@@ -1,20 +1,30 @@
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { O_NONBLOCK, O_RDONLY } from 'node:constants';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs';
 import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-} from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+  access,
+  chmod,
+  type FileHandle,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { sync as whichSync } from 'which';
-import { extractZip, getZipExtractionSupportError } from '../../utils';
-import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
+import { basename, dirname, join } from 'node:path';
+import { lock } from 'proper-lockfile';
+import { extractZip, getZipExtractionSupportErrorAsync } from '../../utils';
+import {
+  crossSpawn,
+  isMissingExecutableError,
+  waitForProcessOutputWithAbortGrace,
+} from '../../utils/compat';
+import { isSupervisorError } from '../../utils/process-supervisor';
+import { commandSucceeds } from '../../utils/zip-extractor';
 
 interface RipgrepReleaseAsset {
   name?: string;
@@ -28,8 +38,6 @@ interface RipgrepReleaseResponse {
 }
 
 type ArchiveExtension = 'tar.gz' | 'zip';
-const PROBE_TIMEOUT_MS = 5_000;
-
 interface PlatformCandidate {
   target: string;
   extension: ArchiveExtension;
@@ -49,30 +57,36 @@ function createAbortError(): Error {
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw createAbortError();
+  if (signal?.aborted) {
+    if (signal.reason instanceof Error) throw signal.reason;
+    throw createAbortError();
+  }
 }
 
-async function waitForExitAndStderr(
-  proc: CrossSpawnResult,
-  stderrPromise: Promise<string>,
-): Promise<{ exitCode: number; stderr: string }> {
-  const [exit, stderr] = await Promise.allSettled([proc.exited, stderrPromise]);
-
-  return {
-    exitCode: exit.status === 'fulfilled' ? exit.value : 1,
-    stderr: stderr.status === 'fulfilled' ? stderr.value : '',
-  };
+class InvalidCachedBinaryError extends Error {
+  constructor(detail: string, options?: ErrorOptions) {
+    super(detail, options);
+    this.name = 'InvalidCachedBinaryError';
+  }
 }
 
-function hasExecutable(name: string): boolean {
-  try {
-    const resolved = whichSync(name, { nothrow: true });
-    return Array.isArray(resolved)
-      ? (resolved[0] ?? '').length > 0
-      : (resolved ?? '').length > 0;
-  } catch {
+function isInstalledRipgrepMetadata(
+  value: unknown,
+): value is InstalledRipgrepMetadata {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
+  const metadata = value as Record<string, unknown>;
+  return (
+    typeof metadata.version === 'string' &&
+    metadata.version.length > 0 &&
+    typeof metadata.assetName === 'string' &&
+    metadata.assetName.length > 0 &&
+    typeof metadata.archiveSha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(metadata.archiveSha256) &&
+    typeof metadata.binarySha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(metadata.binarySha256)
+  );
 }
 
 function getCacheBaseDir(): string {
@@ -97,7 +111,7 @@ export function getRipgrepBinaryName(): string {
 }
 
 export function getInstalledRipgrepPath(
-  options: { repair?: boolean } = {},
+  _options: { repair?: boolean } = {},
 ): string | null {
   const binary = join(getRipgrepCacheDir(), getRipgrepBinaryName());
   if (!existsSync(binary)) return null;
@@ -106,10 +120,28 @@ export function getInstalledRipgrepPath(
     validateCachedBinary(binary);
     return binary;
   } catch {
-    if (options.repair === false) return null;
-    rmSync(binary, { force: true });
-    rmSync(getRipgrepMetadataPath(), { force: true });
+    // Non-destructive by default: a mid-publication cache (binary renamed,
+    // metadata not yet visible) must not trigger deletion by readers. Only
+    // the async publisher, held under the install lock, may purge. The
+    // synchronous compatibility option is retained as a safe no-op because
+    // it cannot acquire that lock without blocking.
     return null;
+  }
+}
+
+export async function getInstalledRipgrepPathAsync(
+  signal?: AbortSignal,
+): Promise<string | null> {
+  throwIfAborted(signal);
+  const binary = join(getRipgrepCacheDir(), getRipgrepBinaryName());
+
+  try {
+    await validateCachedBinaryAsync(binary, signal);
+    return binary;
+  } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof InvalidCachedBinaryError) return null;
+    throw error;
   }
 }
 
@@ -129,13 +161,300 @@ function parseSha256Digest(value: string | undefined): string {
 }
 
 function computeSha256(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
+  return createHash('sha256').update(readRegularFileSync(file)).digest('hex');
+}
+
+// Cross-process publication lock built on proper-lockfile: atomic acquisition
+// with an mtime heartbeat (stale detection) and compromise reporting. Held
+// only for the short publish phase (never during download). Acquisition is
+// raced against the caller's AbortSignal; a lock acquired after the signal
+// fired is released immediately instead of being used.
+const LOCK_STALE_MS = 60_000;
+const MAX_CACHE_METADATA_BYTES = 64 * 1024;
+const MAX_CACHE_BINARY_BYTES = 64 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const HASH_CHUNK_BYTES = 64 * 1024;
+
+async function withInstallLock<T>(
+  dir: string,
+  fn: (signal: AbortSignal, canonicalDir: string) => Promise<T>,
+  signal?: AbortSignal,
+  acquireLock: typeof lock = lock,
+): Promise<T> {
+  throwIfAborted(signal);
+  await mkdir(dir, { recursive: true });
+  throwIfAborted(signal);
+
+  // Lock and publish through the same canonical directory identity. A
+  // lexical alias may otherwise create a different `.lock` path for the
+  // same physical cache.
+  const canonicalDir = await realpath(dir);
+  throwIfAborted(signal);
+  const compromised = new AbortController();
+  const operationSignal = AbortSignal.any([
+    ...(signal ? [signal] : []),
+    compromised.signal,
+  ]);
+
+  const acquired = acquireLock(canonicalDir, {
+    stale: LOCK_STALE_MS,
+    update: Math.floor(LOCK_STALE_MS / 2),
+    retries: { retries: 60, factor: 1, minTimeout: 100, maxTimeout: 250 },
+    realpath: true,
+    onCompromised: (error) => {
+      if (!compromised.signal.aborted) compromised.abort(error);
+    },
+  });
+
+  let release: () => Promise<void>;
+  let removeAbortListener: () => void = () => undefined;
+  try {
+    const abort = new Promise<never>((_, reject) => {
+      if (operationSignal.aborted) reject(operationSignal.reason);
+      else {
+        const onAbort = () => reject(operationSignal.reason);
+        operationSignal.addEventListener('abort', onAbort, { once: true });
+        removeAbortListener = () =>
+          operationSignal.removeEventListener('abort', onAbort);
+      }
+    });
+    release = await Promise.race([acquired, abort]);
+  } catch (error) {
+    // The acquisition may still complete after the race was lost; release
+    // it so the lock is not held by a dead waiter.
+    acquired.then(
+      (rel: () => Promise<void>) => {
+        rel().catch(() => undefined);
+      },
+      () => undefined,
+    );
+    throw error;
+  } finally {
+    removeAbortListener();
+  }
+
+  try {
+    throwIfAborted(operationSignal);
+    const result = await fn(operationSignal, canonicalDir);
+    throwIfAborted(operationSignal);
+    return result;
+  } finally {
+    await release().catch(() => undefined);
+  }
+}
+
+async function withRegularFile<T>(
+  file: string,
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+  callback: (handle: FileHandle, size: number) => Promise<T>,
+): Promise<T> {
+  throwIfAborted(signal);
+  const flags = process.platform === 'win32' ? O_RDONLY : O_RDONLY | O_NONBLOCK;
+  let handle: FileHandle;
+  try {
+    handle = await open(file, flags);
+  } catch (error) {
+    if (isMissingExecutableError(error)) {
+      throw new InvalidCachedBinaryError(`Cached file is missing: ${file}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    throwIfAborted(signal);
+    const initial = await handle.stat();
+    if (!initial.isFile()) {
+      throw new InvalidCachedBinaryError(
+        `Cached file is not a regular file: ${file}`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(initial.size) ||
+      initial.size < 0 ||
+      initial.size > maxBytes
+    ) {
+      throw new InvalidCachedBinaryError(
+        `Cached file exceeds its size limit: ${file}`,
+      );
+    }
+
+    const result = await callback(handle, initial.size);
+    throwIfAborted(signal);
+    const final = await handle.stat();
+    if (final.size !== initial.size) {
+      throw new InvalidCachedBinaryError(
+        `Cached file changed while it was being read: ${file}`,
+      );
+    }
+    return result;
+  } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof InvalidCachedBinaryError) throw error;
+    if (isMissingExecutableError(error)) {
+      throw new InvalidCachedBinaryError(`Cached file disappeared: ${file}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function readRegularFile(
+  file: string,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return withRegularFile(file, maxBytes, signal, async (handle, size) => {
+    const chunks: Buffer[] = [];
+    let position = 0;
+    while (position < size) {
+      throwIfAborted(signal);
+      const length = Math.min(HASH_CHUNK_BYTES, size - position);
+      const buffer = Buffer.allocUnsafe(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      if (bytesRead === 0) {
+        throw new InvalidCachedBinaryError(
+          `Cached file ended before its declared size: ${file}`,
+        );
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    return Buffer.concat(chunks, size);
+  });
+}
+
+async function computeSha256Async(
+  file: string,
+  signal?: AbortSignal,
+  maxBytes = MAX_CACHE_BINARY_BYTES,
+): Promise<string> {
+  return withRegularFile(file, maxBytes, signal, async (handle, size) => {
+    const hash = createHash('sha256');
+    let position = 0;
+    while (position < size) {
+      throwIfAborted(signal);
+      const length = Math.min(HASH_CHUNK_BYTES, size - position);
+      const buffer = Buffer.allocUnsafe(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      if (bytesRead === 0) {
+        throw new InvalidCachedBinaryError(
+          `Cached file ended before its declared size: ${file}`,
+        );
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    return hash.digest('hex');
+  });
+}
+
+async function writeMetadataFile(
+  file: string,
+  contents: string,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  const handle = await open(file, 'wx', 0o600);
+  let written = false;
+  try {
+    throwIfAborted(signal);
+    await handle.writeFile(contents, { signal });
+    throwIfAborted(signal);
+    written = true;
+  } finally {
+    await handle.close().catch(() => undefined);
+    if (!written) await rm(file, { force: true }).catch(() => undefined);
+  }
+}
+
+function readRegularFileSync(
+  file: string,
+  maxBytes = MAX_CACHE_BINARY_BYTES,
+): Buffer {
+  const flags = process.platform === 'win32' ? O_RDONLY : O_RDONLY | O_NONBLOCK;
+  const fd = openSync(file, flags);
+  try {
+    const initial = fstatSync(fd);
+    if (!initial.isFile()) {
+      throw new Error(`Cached file is not a regular file: ${file}`);
+    }
+    if (
+      !Number.isSafeInteger(initial.size) ||
+      initial.size < 0 ||
+      initial.size > maxBytes
+    ) {
+      throw new Error(`Cached file exceeds its size limit: ${file}`);
+    }
+
+    const chunks: Buffer[] = [];
+    let position = 0;
+    while (position < initial.size) {
+      const length = Math.min(HASH_CHUNK_BYTES, initial.size - position);
+      const buffer = Buffer.allocUnsafe(length);
+      const bytesRead = readSync(fd, buffer, 0, length, position);
+      if (bytesRead === 0) {
+        throw new Error(`Cached file ended before its declared size: ${file}`);
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+
+    const final = fstatSync(fd);
+    if (final.size !== initial.size) {
+      throw new Error(`Cached file changed while it was being read: ${file}`);
+    }
+    return Buffer.concat(chunks, initial.size);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function readInstalledMetadata(): InstalledRipgrepMetadata {
-  return JSON.parse(
-    readFileSync(getRipgrepMetadataPath(), 'utf8'),
-  ) as InstalledRipgrepMetadata;
+  const parsed: unknown = JSON.parse(
+    readRegularFileSync(
+      getRipgrepMetadataPath(),
+      MAX_CACHE_METADATA_BYTES,
+    ).toString('utf8'),
+  );
+  if (!isInstalledRipgrepMetadata(parsed)) {
+    throw new InvalidCachedBinaryError(
+      'Cached ripgrep metadata has an invalid structure.',
+    );
+  }
+  return parsed;
+}
+
+async function readInstalledMetadataAsync(
+  signal?: AbortSignal,
+  metadata = getRipgrepMetadataPath(),
+): Promise<InstalledRipgrepMetadata> {
+  const data = await readRegularFile(
+    metadata,
+    MAX_CACHE_METADATA_BYTES,
+    signal,
+  );
+  try {
+    const parsed: unknown = JSON.parse(data.toString('utf8'));
+    if (!isInstalledRipgrepMetadata(parsed)) {
+      throw new InvalidCachedBinaryError(
+        `Cached ripgrep metadata has an invalid structure: ${metadata}`,
+      );
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new InvalidCachedBinaryError(
+        `Cached metadata is not valid JSON: ${metadata}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 function validateCachedBinary(binary: string): void {
@@ -144,10 +463,31 @@ function validateCachedBinary(binary: string): void {
     throw new Error('Cached ripgrep binary failed SHA-256 verification.');
   }
 
-  validateInstalledBinary(binary);
+  // The synchronous compatibility probe verifies cache integrity only. The
+  // execution path uses getInstalledRipgrepPathAsync(), which also validates
+  // that the executable identifies itself as ripgrep without blocking the
+  // event loop.
 }
 
-function detectLinuxLibc(): 'gnu' | 'musl' {
+async function validateCachedBinaryAsync(
+  binary: string,
+  signal?: AbortSignal,
+  metadataPath = getRipgrepMetadataPath(),
+): Promise<void> {
+  throwIfAborted(signal);
+  const metadata = await readInstalledMetadataAsync(signal, metadataPath);
+  if ((await computeSha256Async(binary, signal)) !== metadata.binarySha256) {
+    throw new InvalidCachedBinaryError(
+      'Cached ripgrep binary failed SHA-256 verification.',
+    );
+  }
+
+  await validateInstalledBinaryAsync(binary, signal);
+}
+
+async function detectLinuxLibcAsync(
+  signal?: AbortSignal,
+): Promise<'gnu' | 'musl'> {
   const loaders = [
     '/lib/ld-musl-x86_64.so.1',
     '/lib/ld-musl-aarch64.so.1',
@@ -155,23 +495,43 @@ function detectLinuxLibc(): 'gnu' | 'musl' {
     '/usr/glibc-compat/lib/ld-musl-aarch64.so.1',
   ];
 
-  if (loaders.some((file) => existsSync(file))) return 'musl';
-
-  try {
-    const result = spawnSync('ldd', ['--version'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: PROBE_TIMEOUT_MS,
-    });
-    if (result.error || result.status === null) return 'gnu';
-    const output =
-      `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`.toLowerCase();
-
-    if (output.includes('musl')) return 'musl';
-  } catch {
-    // Fall back to gnu.
+  throwIfAborted(signal);
+  for (const file of loaders) {
+    const exists = await access(file).then(
+      () => true,
+      () => false,
+    );
+    throwIfAborted(signal);
+    if (exists) return 'musl';
   }
 
-  return 'gnu';
+  try {
+    const proc = crossSpawn(['ldd', '--version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      detached: process.platform !== 'win32',
+      killProcessGroup: process.platform !== 'win32',
+    });
+    const stdoutPromise = proc.stdout();
+    const stderrPromise = proc.stderr();
+    const result = await waitForProcessOutputWithAbortGrace(
+      proc,
+      stderrPromise,
+      signal,
+      stdoutPromise,
+      { killGraceMs: 250, postCloseDrainMs: 250 },
+    );
+    if (signal?.aborted) throw createAbortError();
+    if (result.aborted) return 'gnu';
+    return `${result.stdout}\n${result.stderr}`.toLowerCase().includes('musl')
+      ? 'musl'
+      : 'gnu';
+  } catch (error) {
+    if (isSupervisorError(error)) throw error;
+    if (signal?.aborted) throw createAbortError();
+    if (isMissingExecutableError(error)) return 'gnu';
+    throw error;
+  }
 }
 
 function getPlatformCandidates(): PlatformCandidate[] {
@@ -195,52 +555,74 @@ function getPlatformCandidates(): PlatformCandidate[] {
     return [];
   }
 
-  if (process.platform === 'linux') {
-    const libc = detectLinuxLibc();
+  return [];
+}
 
-    if (process.arch === 'arm64') {
-      return libc === 'musl'
-        ? [
-            { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-            { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-          ]
-        : [
-            { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-            { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-          ];
-    }
+async function getPlatformCandidatesAsync(
+  signal?: AbortSignal,
+): Promise<PlatformCandidate[]> {
+  if (process.platform !== 'linux') return getPlatformCandidates();
 
-    if (process.arch === 'x64') {
-      return libc === 'musl'
-        ? [
-            { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-            { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-          ]
-        : [
-            { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-            { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-          ];
-    }
+  const libc = await detectLinuxLibcAsync(signal);
+  if (process.arch === 'arm64') {
+    return libc === 'musl'
+      ? [
+          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
+          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
+        ]
+      : [
+          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
+          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
+        ];
+  }
+
+  if (process.arch === 'x64') {
+    return libc === 'musl'
+      ? [
+          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
+          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
+        ]
+      : [
+          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
+          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
+        ];
   }
 
   return [];
 }
 
-function findBinaryRecursive(dir: string, binary: string): string | null {
+const MAX_EXTRACTED_ENTRIES = 100_000;
+
+async function findBinaryRecursive(
+  dir: string,
+  binary: string,
+  signal?: AbortSignal,
+  state: { entries: number } = { entries: 0 },
+): Promise<string | null> {
+  throwIfAborted(signal);
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
+    const entries = await readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
+      throwIfAborted(signal);
+      state.entries += 1;
+      if (state.entries > MAX_EXTRACTED_ENTRIES) {
+        throw new Error('ripgrep archive contains too many extracted entries.');
+      }
       const file = join(dir, entry.name);
 
       if (entry.isFile() && entry.name === binary) return file;
 
       if (entry.isDirectory()) {
-        const nested = findBinaryRecursive(file, binary);
+        const nested = await findBinaryRecursive(file, binary, signal, state);
         if (nested) return nested;
       }
     }
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw createAbortError();
+    if (error instanceof Error && error.message.includes('too many')) {
+      throw error;
+    }
     return null;
   }
 
@@ -276,16 +658,22 @@ async function fetchLatestRelease(
   return payload;
 }
 
-function selectReleaseAsset(release: RipgrepReleaseResponse): {
+async function selectReleaseAssetAsync(
+  release: RipgrepReleaseResponse,
+  signal?: AbortSignal,
+): Promise<{
   asset: RipgrepReleaseAsset;
   version: string;
   archiveSha256: string;
-} {
+}> {
+  throwIfAborted(signal);
   const version = release.tag_name?.replace(/^v/i, '');
-  if (!version)
+  if (!version) {
     throw new Error('Latest ripgrep release is missing a version tag.');
+  }
 
-  for (const candidate of getPlatformCandidates()) {
+  for (const candidate of await getPlatformCandidatesAsync(signal)) {
+    throwIfAborted(signal);
     const name = `ripgrep-${version}-${candidate.target}.${candidate.extension}`;
     const asset = release.assets?.find((item) => item.name === name);
 
@@ -318,7 +706,7 @@ async function downloadArchive(
 
   const buffer = await response.arrayBuffer();
   throwIfAborted(signal);
-  await writeFile(file, Buffer.from(buffer));
+  await writeFile(file, Buffer.from(buffer), { signal });
 }
 
 async function extractTarGz(
@@ -330,21 +718,16 @@ async function extractTarGz(
   const proc = crossSpawn(['tar', '-xzf', archive, '-C', dir], {
     stdout: 'ignore',
     stderr: 'pipe',
+    detached: process.platform !== 'win32',
+    killProcessGroup: process.platform !== 'win32',
   });
 
-  const onAbort = () => {
-    try {
-      proc.kill();
-    } catch {
-      // Process may have exited.
-    }
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
   const stderrPromise = proc.stderr();
-  const { exitCode, stderr } = await waitForExitAndStderr(proc, stderrPromise);
-  signal?.removeEventListener('abort', onAbort);
+  const { exitCode, stderr } = await waitForProcessOutputWithAbortGrace(
+    proc,
+    stderrPromise,
+    signal,
+  );
 
   if (signal?.aborted) throw createAbortError();
   if (exitCode !== 0) {
@@ -366,64 +749,207 @@ async function extractArchive(
   await extractTarGz(archive, dir, signal);
 }
 
-function ensureExecutable(binary: string): void {
-  if (process.platform !== 'win32') chmodSync(binary, 0o755);
+async function ensureExecutable(binary: string): Promise<void> {
+  if (process.platform !== 'win32') await chmod(binary, 0o755);
 }
 
-function validateInstalledBinary(binary: string, signal?: AbortSignal): void {
+async function validateInstalledBinaryAsync(
+  binary: string,
+  signal?: AbortSignal,
+): Promise<void> {
   throwIfAborted(signal);
-  const result = spawnSync(binary, ['--version'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: PROBE_TIMEOUT_MS,
+  const proc = crossSpawn([binary, '--version'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    detached: process.platform !== 'win32',
+    killProcessGroup: process.platform !== 'win32',
   });
+  const stdoutPromise = proc.stdout();
+  const stderrPromise = proc.stderr();
+  let result: Awaited<ReturnType<typeof waitForProcessOutputWithAbortGrace>>;
+  try {
+    result = await waitForProcessOutputWithAbortGrace(
+      proc,
+      stderrPromise,
+      signal,
+      stdoutPromise,
+      { killGraceMs: 250, postCloseDrainMs: 250 },
+    );
+  } catch (error) {
+    throwIfAborted(signal);
+    if (isSupervisorError(error)) throw error;
+    if (isMissingExecutableError(error)) {
+      throw new InvalidCachedBinaryError(
+        `Cached executable is missing: ${binary}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   throwIfAborted(signal);
 
-  if (result.error || result.status === null) {
-    throw new Error(
-      `Installed ripgrep binary failed validation: ${result.error?.message ?? 'validation timed out'}.`,
+  if (result.aborted || result.exitCode !== 0) {
+    throw new InvalidCachedBinaryError(
+      `Installed ripgrep binary failed validation with exit ${String(result.exitCode)}.`,
     );
   }
 
-  if (result.status !== 0) {
-    throw new Error(
-      `Installed ripgrep binary failed validation with exit ${String(result.status)}.`,
-    );
-  }
-
-  const output =
-    `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`.toLowerCase();
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
   if (!output.includes('ripgrep')) {
-    throw new Error('Installed binary did not identify itself as ripgrep.');
+    throw new InvalidCachedBinaryError(
+      'Installed binary did not identify itself as ripgrep.',
+    );
   }
 }
 
-function ensureArchiveSupport(extension: ArchiveExtension): void {
+async function ensureArchiveSupport(
+  extension: ArchiveExtension,
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
   if (extension === 'zip') {
-    const error = getZipExtractionSupportError();
+    const error = await getZipExtractionSupportErrorAsync(signal);
     if (error) throw new Error(error);
     return;
   }
 
-  if (!hasExecutable('tar')) {
+  if (!(await commandSucceeds('tar', ['--version'], signal))) {
     throw new Error(
       'ripgrep auto-install requires tar to extract .tar.gz archives.',
     );
   }
 }
 
+export interface PublishStagedBinaryInput {
+  dir: string;
+  final: string;
+  metadata: string;
+  staged: string;
+  version: string;
+  assetName: string;
+  archiveSha256: string;
+  binarySha256: string;
+  /** Test seam for exercising cancellation during the metadata write. */
+  writeMetadata?: (file: string, contents: string) => Promise<void>;
+  /** Test seam for deterministic lock compromise reporting. */
+  acquireLock?: typeof lock;
+}
+
+/**
+ * Publishes a staged binary under the cross-process install lock. An
+ * existing INVALID cache is repaired here — under the lock — instead of
+ * being left behind to block publication. Exported for deterministic
+ * concurrency/abort testing without network access.
+ */
+export async function publishStagedBinary(
+  input: PublishStagedBinaryInput,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { dir } = input;
+
+  await withInstallLock(
+    dir,
+    async (lockSignal, canonicalDir) => {
+      const final = join(canonicalDir, basename(input.final));
+      const metadata = join(canonicalDir, basename(input.metadata));
+      const stagedDir = await realpath(dirname(input.staged));
+      const staged = join(stagedDir, basename(input.staged));
+      throwIfAborted(lockSignal);
+      // Only the lock holder recovers abandoned attempts, including the old
+      // fixed-name temporary. New attempts never reuse a predecessor's path.
+      const temporaryPrefix = `${basename(metadata)}.tmp`;
+      const staleBefore = Date.now() - LOCK_STALE_MS;
+      for (const entry of await readdir(canonicalDir)) {
+        throwIfAborted(lockSignal);
+        if (
+          entry === temporaryPrefix ||
+          (entry.startsWith(`${temporaryPrefix}-`) &&
+            /^[0-9a-f-]{36}$/.test(entry.slice(temporaryPrefix.length + 1)))
+        ) {
+          const orphan = join(canonicalDir, entry);
+          try {
+            const details = await stat(orphan);
+            if (details.mtimeMs <= staleBefore) {
+              await rm(orphan, { force: true });
+            }
+          } catch {
+            // A concurrent cleanup may have removed it already.
+          }
+        }
+      }
+      throwIfAborted(lockSignal);
+      const existingValid = await (async () => {
+        try {
+          await validateCachedBinaryAsync(final, lockSignal, metadata);
+          return true;
+        } catch (error) {
+          throwIfAborted(lockSignal);
+          if (error instanceof InvalidCachedBinaryError) return false;
+          throw error;
+        }
+      })();
+      throwIfAborted(lockSignal);
+
+      if (!existingValid) {
+        const temporary = `${metadata}.tmp-${randomUUID()}`;
+        // Remove the invalid remnants first so a crash between the two
+        // renames leaves no binary-without-metadata combination.
+        try {
+          await rm(final, { force: true });
+          throwIfAborted(lockSignal);
+          await rm(metadata, { force: true });
+          throwIfAborted(lockSignal);
+          // Metadata first, binary second: a reader that sees the binary can
+          // always find matching metadata; readers are non-destructive, so
+          // intermediate states just read as "not installed".
+          const writeMetadata =
+            input.writeMetadata ??
+            ((file, contents) => writeMetadataFile(file, contents, lockSignal));
+          await writeMetadata(
+            temporary,
+            JSON.stringify({
+              version: input.version,
+              assetName: input.assetName,
+              archiveSha256: input.archiveSha256,
+              binarySha256: input.binarySha256,
+            } satisfies InstalledRipgrepMetadata),
+          );
+          // The abort race lands exactly here: a signal fired while the
+          // metadata write was pending must stop publication before the
+          // first rename makes anything visible.
+          throwIfAborted(lockSignal);
+          await rename(temporary, metadata);
+          throwIfAborted(lockSignal);
+          await rename(staged, final);
+          throwIfAborted(lockSignal);
+        } finally {
+          // Never clean shared paths here: after compromise they may belong
+          // to a successor. Partial publication is repaired under its lock.
+          await rm(temporary, { force: true }).catch(() => undefined);
+        }
+      }
+    },
+    signal,
+    input.acquireLock,
+  );
+}
+
 export async function installLatestStableRipgrep(
   signal?: AbortSignal,
 ): Promise<string> {
   throwIfAborted(signal);
-  const existing = getInstalledRipgrepPath();
+  const existing = await getInstalledRipgrepPathAsync(signal);
   if (existing) return existing;
 
   const release = await fetchLatestRelease(signal);
-  const { asset, version, archiveSha256 } = selectReleaseAsset(release);
+  const { asset, version, archiveSha256 } = await selectReleaseAssetAsync(
+    release,
+    signal,
+  );
   const extension = (
     asset.name?.endsWith('.zip') ? 'zip' : 'tar.gz'
   ) as ArchiveExtension;
-  ensureArchiveSupport(extension);
+  await ensureArchiveSupport(extension, signal);
 
   const dir = getRipgrepCacheDir();
   const binary = getRipgrepBinaryName();
@@ -437,8 +963,8 @@ export async function installLatestStableRipgrep(
   const extract = join(tmp, 'extract');
   const staged = join(tmp, binary);
 
-  mkdirSync(dir, { recursive: true });
-  mkdirSync(extract, { recursive: true });
+  await mkdir(dir, { recursive: true });
+  await mkdir(extract, { recursive: true });
 
   try {
     await downloadArchive(
@@ -446,7 +972,10 @@ export async function installLatestStableRipgrep(
       archive,
       signal,
     );
-    if (computeSha256(archive) !== archiveSha256) {
+    if (
+      (await computeSha256Async(archive, signal, MAX_ARCHIVE_BYTES)) !==
+      archiveSha256
+    ) {
       throw new Error(
         'Downloaded ripgrep archive failed SHA-256 verification.',
       );
@@ -454,35 +983,36 @@ export async function installLatestStableRipgrep(
     await extractArchive(archive, extract, extension, signal);
     throwIfAborted(signal);
 
-    const extracted = findBinaryRecursive(extract, binary);
+    const extracted = await findBinaryRecursive(extract, binary, signal);
     if (!extracted)
       throw new Error('ripgrep binary was not found after extraction.');
 
-    renameSync(extracted, staged);
-    ensureExecutable(staged);
-    validateInstalledBinary(staged, signal);
-    const binarySha256 = computeSha256(staged);
+    await rename(extracted, staged);
+    throwIfAborted(signal);
+    await ensureExecutable(staged);
+    await validateInstalledBinaryAsync(staged, signal);
+    const binarySha256 = await computeSha256Async(staged, signal);
     throwIfAborted(signal);
 
-    if (!existsSync(final)) {
-      renameSync(staged, final);
-      await writeFile(
+    await publishStagedBinary(
+      {
+        dir,
+        final,
         metadata,
-        JSON.stringify({
-          version,
-          assetName: asset.name ?? binary,
-          archiveSha256,
-          binarySha256,
-        } satisfies InstalledRipgrepMetadata),
-      );
-    }
+        staged,
+        version,
+        assetName: asset.name ?? binary,
+        archiveSha256,
+        binarySha256,
+      },
+      signal,
+    );
 
-    const installed = getInstalledRipgrepPath();
+    const installed = await getInstalledRipgrepPathAsync(signal);
     if (!installed)
       throw new Error('ripgrep binary was not installed successfully.');
     return installed;
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
-    mkdirSync(dirname(final), { recursive: true });
+    await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
   }
 }

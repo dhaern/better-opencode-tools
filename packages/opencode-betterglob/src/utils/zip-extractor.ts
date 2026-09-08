@@ -1,6 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { release } from 'node:os';
-import { crossSpawn } from './compat';
+import {
+  crossSpawn,
+  isMissingExecutableError,
+  waitForProcessOutputWithAbortGrace,
+} from './compat';
+import { isSupervisorError } from './process-supervisor';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
 
@@ -15,57 +19,84 @@ function getWindowsBuildNumber(): number | null {
   return null;
 }
 
-function isPwshAvailable(): boolean {
-  if (process.platform !== 'win32') return false;
-  const result = spawnSync('where', ['pwsh'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return result.status === 0;
-}
-
 function escapePowerShellPath(file: string): string {
   return file.replace(/'/g, "''");
 }
 
 type WindowsZipExtractor = 'tar' | 'pwsh' | 'powershell';
 
-function hasCommand(command: string, args: string[] = ['--version']): boolean {
+export async function commandSucceeds(
+  command: string,
+  args: string[] = ['--version'],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) throw createAbortError();
+
   try {
-    const result = spawnSync(command, args, {
-      stdio: ['ignore', 'ignore', 'ignore'],
+    const proc = crossSpawn([command, ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      detached: process.platform !== 'win32',
+      killProcessGroup: process.platform !== 'win32',
     });
-    return result.status === 0;
-  } catch {
-    return false;
+    const stdoutPromise = proc.stdout();
+    const stderrPromise = proc.stderr();
+    const result = await waitForProcessOutputWithAbortGrace(
+      proc,
+      stderrPromise,
+      signal,
+      stdoutPromise,
+      { killGraceMs: 250, postCloseDrainMs: 250 },
+    );
+    if (signal?.aborted) throw createAbortError();
+    return !result.aborted && result.exitCode === 0;
+  } catch (error) {
+    if (signal?.aborted) throw createAbortError();
+    if (isSupervisorError(error)) throw error;
+    if (isMissingExecutableError(error)) return false;
+    throw error;
   }
 }
 
-function getWindowsZipExtractor(): WindowsZipExtractor {
+async function getWindowsZipExtractorAsync(
+  signal?: AbortSignal,
+): Promise<WindowsZipExtractor> {
+  if (signal?.aborted) throw createAbortError();
   const build = getWindowsBuildNumber();
 
   if (build !== null && build >= WINDOWS_BUILD_WITH_TAR) return 'tar';
-  if (isPwshAvailable()) return 'pwsh';
+  if (await commandSucceeds('pwsh', ['-v'], signal)) return 'pwsh';
   return 'powershell';
 }
 
-export function getZipExtractionSupportError(): string | undefined {
+export async function getZipExtractionSupportErrorAsync(
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (signal?.aborted) throw createAbortError();
   if (process.platform === 'win32') {
-    const extractor = getWindowsZipExtractor();
+    const extractor = await getWindowsZipExtractorAsync(signal);
 
-    if (extractor === 'tar' && !hasCommand('tar')) {
+    if (
+      extractor === 'tar' &&
+      !(await commandSucceeds('tar', ['--version'], signal))
+    ) {
       return 'ripgrep auto-install requires tar on this Windows host to extract zip archives.';
     }
 
-    if (extractor === 'pwsh' && !hasCommand('pwsh', ['-v'])) {
+    if (
+      extractor === 'pwsh' &&
+      !(await commandSucceeds('pwsh', ['-v'], signal))
+    ) {
       return 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.';
     }
 
     if (
       extractor === 'powershell' &&
-      !hasCommand('powershell', [
-        '-Command',
-        '$PSVersionTable.PSVersion.ToString()',
-      ])
+      !(await commandSucceeds(
+        'powershell',
+        ['-Command', '$PSVersionTable.PSVersion.ToString()'],
+        signal,
+      ))
     ) {
       return 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
     }
@@ -73,9 +104,16 @@ export function getZipExtractionSupportError(): string | undefined {
     return undefined;
   }
 
-  return hasCommand('unzip')
+  return (await commandSucceeds('unzip', ['-v'], signal))
     ? undefined
     : 'ripgrep auto-install requires unzip to extract zip archives.';
+}
+
+export function getZipExtractionSupportError(): string | undefined {
+  // Kept for synchronous API compatibility. Runtime support checks belong to
+  // getZipExtractionSupportErrorAsync(), which can probe without blocking the
+  // tool deadline.
+  return undefined;
 }
 
 function createAbortError(): Error {
@@ -91,19 +129,24 @@ export async function extractZip(
 ): Promise<void> {
   if (signal?.aborted) throw createAbortError();
 
-  const proc = (() => {
+  const proc = await (async () => {
     if (process.platform !== 'win32') {
       return crossSpawn(['unzip', '-o', archivePath, '-d', destDir], {
         stdout: 'ignore',
         stderr: 'pipe',
+        detached: true,
+        killProcessGroup: true,
       });
     }
 
-    const extractor = getWindowsZipExtractor();
+    const extractor = await getWindowsZipExtractorAsync(signal);
+    if (signal?.aborted) throw createAbortError();
     if (extractor === 'tar') {
       return crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
         stdout: 'ignore',
         stderr: 'pipe',
+        detached: false,
+        killProcessGroup: false,
       });
     }
 
@@ -117,27 +160,21 @@ export async function extractZip(
       {
         stdout: 'ignore',
         stderr: 'pipe',
+        detached: false,
+        killProcessGroup: false,
       },
     );
   })();
 
-  const onAbort = () => {
-    try {
-      proc.kill();
-    } catch {
-      // Process may have exited.
-    }
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-
   const stderrPromise = proc.stderr();
-  const exitCode = await proc.exited;
-  signal?.removeEventListener('abort', onAbort);
+  const { exitCode, stderr } = await waitForProcessOutputWithAbortGrace(
+    proc,
+    stderrPromise,
+    signal,
+  );
 
   if (signal?.aborted) throw createAbortError();
 
-  const stderr = await stderrPromise;
   if (exitCode !== 0) {
     throw new Error(`zip extraction failed (exit ${exitCode}): ${stderr}`);
   }

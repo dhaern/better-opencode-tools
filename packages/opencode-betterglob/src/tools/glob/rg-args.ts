@@ -2,11 +2,11 @@ import { RG_BINARY } from './constants';
 import type { NormalizedGlobInput } from './types';
 
 export function buildRgArgs(input: NormalizedGlobInput): string[] {
-  const args = ['--files', '--null', '--no-config'];
-
-  for (const file of input.ignoreFiles) {
-    args.push('--ignore-file', file);
-  }
+  // Matching is delegated entirely to ripgrep's glob engine for native
+  // parity; there is no JavaScript post-filter. rg anchors globs containing
+  // "/" to the search root, while bare basenames match at any depth —
+  // normalize.ts root-anchors absolute patterns accordingly.
+  const args = ['--files', '--null', '--no-config', '--no-require-git'];
 
   if (input.sortBy === 'path') {
     args.push(input.sortOrder === 'desc' ? '--sortr' : '--sort', 'path');
@@ -20,9 +20,11 @@ export function buildRgArgs(input: NormalizedGlobInput): string[] {
     args.push('--hidden');
   }
 
-  if (input.followSymlinks) {
-    args.push('--follow');
-  }
+  args.push(`--glob=${input.relativePattern}`);
+
+  // Must come after the user pattern: the last matching glob wins, so .git
+  // stays excluded even when the user pattern matches it explicitly.
+  args.push('--glob=!**/.git/**');
 
   return args;
 }

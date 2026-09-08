@@ -22,7 +22,6 @@ It supports advanced options that make tool calls more predictable:
 - `sort_by`
 - `sort_order`
 - `hidden`
-- `follow_symlinks`
 - `timeout_ms`
 
 ### 🧯 Safer defaults
@@ -100,3 +99,6 @@ bun run check
   timeout.
 - First run may need network access if the plugin has to download a managed
   `ripgrep` binary.
+- Symlink traversal is disabled. `follow_symlinks: true` is rejected because
+  an `rg --follow` process cannot be confined to the destinations authorized
+  before it starts.

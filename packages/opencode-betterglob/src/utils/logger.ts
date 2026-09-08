@@ -1,4 +1,4 @@
-import * as fs from 'node:fs';
+import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -7,7 +7,7 @@ const LOG_SUFFIX = '.log';
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 let logFile: string | null = null;
-let initialized = false;
+let initialization: Promise<void> | null = null;
 
 function getLogDir(): string {
   return (
@@ -16,17 +16,17 @@ function getLogDir(): string {
   );
 }
 
-function cleanupOldLogs(dir: string): void {
+async function cleanupOldLogs(dir: string): Promise<void> {
   try {
-    const entries = fs.readdirSync(dir);
+    const entries = await fs.readdir(dir);
     const now = Date.now();
     for (const entry of entries) {
       if (entry.startsWith(LOG_PREFIX) && entry.endsWith(LOG_SUFFIX)) {
         const file = path.join(dir, entry);
         try {
-          const stat = fs.statSync(file);
+          const stat = await fs.stat(file);
           if (now - stat.mtimeMs > RETENTION_MS) {
-            fs.unlinkSync(file);
+            await fs.unlink(file);
           }
         } catch {
           // Skip individual file errors.
@@ -41,30 +41,39 @@ function cleanupOldLogs(dir: string): void {
 export function initLogger(sessionId: string): void {
   const dir = getLogDir();
   logFile = path.join(dir, `${LOG_PREFIX}${sessionId}${LOG_SUFFIX}`);
-  initialized = false;
+  initialization = null;
 }
 
-function ensureLoggerReady(): void {
-  if (!logFile || initialized) return;
-
-  const dir = path.dirname(logFile);
+async function ensureLoggerReady(file: string): Promise<void> {
+  const dir = path.dirname(file);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true });
   } catch {
     // Logging is best-effort.
   }
-  cleanupOldLogs(dir);
-  initialized = true;
+  await cleanupOldLogs(dir);
 }
 
 export function log(message: string, data?: unknown): void {
-  if (!logFile) return;
-  ensureLoggerReady();
+  void logAsync(message, data).catch(() => undefined);
+}
+
+export async function logAsync(
+  message: string,
+  data?: unknown,
+  signal?: AbortSignal,
+): Promise<void> {
+  const file = logFile;
+  if (!file || signal?.aborted) return;
   try {
+    initialization ??= ensureLoggerReady(file);
+    await initialization;
+    if (signal?.aborted) return;
     const suffix = data === undefined ? '' : ` ${JSON.stringify(data)}`;
-    fs.appendFileSync(
-      logFile,
+    await fs.writeFile(
+      file,
       `[${new Date().toISOString()}] ${message}${suffix}\n`,
+      { flag: 'a', signal },
     );
   } catch {
     // Ignore logging errors.

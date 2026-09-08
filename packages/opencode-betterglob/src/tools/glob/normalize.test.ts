@@ -3,7 +3,11 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
-import { containsPath, normalizeGlobInput } from './normalize';
+import {
+  containsPath,
+  normalizeGlobInput,
+  normalizeGlobInputAsync,
+} from './normalize';
 import { buildRgArgs } from './rg-args';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
@@ -54,6 +58,30 @@ describe('tools/glob/normalize', () => {
     expect(normalized.relativePattern).toBe('src/*.ts');
   });
 
+  test('preserves POSIX glob escapes instead of treating backslashes as separators', () => {
+    if (process.platform === 'win32') return;
+    const repoDir = temps.createRepo();
+    writeFileSync(path.join(repoDir, 'a[1].ts'), '');
+    const normalized = normalizeGlobInput(
+      { pattern: 'a\\[1\\].ts' },
+      createRepoContext(repoDir) as any,
+    );
+
+    expect(normalized.relativePattern).toBe('a\\[1\\].ts');
+  });
+
+  test('preserves POSIX glob escapes in the async execution path', async () => {
+    if (process.platform === 'win32') return;
+    const repoDir = temps.createRepo();
+    writeFileSync(path.join(repoDir, 'a[1].ts'), '');
+    const normalized = await normalizeGlobInputAsync(
+      { pattern: 'a\\[1\\].ts' },
+      createRepoContext(repoDir) as any,
+    );
+
+    expect(normalized.relativePattern).toBe('a\\[1\\].ts');
+  });
+
   test('treats nested names starting with dot-dot as contained paths', () => {
     const repoDir = temps.createRepo();
     const nested = path.join(repoDir, '..bar');
@@ -63,7 +91,7 @@ describe('tools/glob/normalize', () => {
     expect(containsPath(repoDir, path.dirname(repoDir))).toBe(false);
   });
 
-  test('extracts base directory and relative pattern from absolute patterns', () => {
+  test('extracts base directory and root-anchored pattern from absolute patterns', () => {
     const repoDir = temps.createRepo();
     const normalized = normalizeGlobInput(
       { pattern: path.join(repoDir, 'src', '*.ts') },
@@ -71,7 +99,9 @@ describe('tools/glob/normalize', () => {
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
-    expect(normalized.relativePattern).toBe('*.ts');
+    // Absolute patterns are root-anchored: a leading "/" makes rg match
+    // only at the search root instead of at any depth.
+    expect(normalized.relativePattern).toBe('/*.ts');
   });
 
   test('lets absolute patterns take precedence over path like Claude-style normalization', () => {
@@ -83,7 +113,24 @@ describe('tools/glob/normalize', () => {
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
-    expect(normalized.relativePattern).toBe('*.ts');
+    expect(normalized.relativePattern).toBe('/*.ts');
+  });
+
+  test('rejects timeout values that would overflow setTimeout', () => {
+    const repoDir = temps.createRepo();
+
+    expect(() =>
+      normalizeGlobInput(
+        { pattern: '*.ts', timeout_ms: 2_147_483_648 },
+        createRepoContext(repoDir) as any,
+      ),
+    ).toThrow(/timeout_ms must not exceed/);
+
+    const boundary = normalizeGlobInput(
+      { pattern: '*.ts', timeout_ms: 2_147_483_647 },
+      createRepoContext(repoDir) as any,
+    );
+    expect(boundary.timeoutMs).toBe(2_147_483_647);
   });
 
   test('rejects missing paths and file paths', () => {
@@ -104,29 +151,27 @@ describe('tools/glob/normalize', () => {
     ).toThrow(/Search path must be a directory/);
   });
 
-  test('builds rg args with NUL output, sorting, hidden and symlink flags', () => {
+  test('rejects unsupported symlink traversal and never emits --follow', () => {
+    expect(() =>
+      createNormalized({
+        pattern: '*.ts',
+        path: 'src',
+        sort_by: 'path',
+        sort_order: 'desc',
+        follow_symlinks: true,
+      }),
+    ).toThrow(/follow_symlinks:true is unsupported/);
+
     const { normalized } = createNormalized({
       pattern: '*.ts',
       path: 'src',
       sort_by: 'path',
       sort_order: 'desc',
-      follow_symlinks: true,
     });
-
-    expect(buildRgArgs(normalized)).toEqual(
-      expect.arrayContaining([
-        '--files',
-        '--null',
-        '--no-config',
-        '--sortr',
-        'path',
-        '--hidden',
-        '--follow',
-      ]),
-    );
+    expect(buildRgArgs(normalized)).not.toContain('--follow');
   });
 
-  test('uses local .gitignore as ignore-file outside git repos', () => {
+  test('honors .gitignore natively outside git repos via --no-require-git', () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
     const normalized = normalizeGlobInput(
@@ -134,16 +179,13 @@ describe('tools/glob/normalize', () => {
       createRepoContext(repoDir) as any,
     );
 
-    expect(normalized.ignoreFiles).toEqual([path.join(repoDir, '.gitignore')]);
-    expect(buildRgArgs(normalized)).toEqual(
-      expect.arrayContaining([
-        '--ignore-file',
-        path.join(repoDir, '.gitignore'),
-      ]),
-    );
+    // rg reads .gitignore hierarchies itself with correct bases; the
+    // plugin no longer reparents them through --ignore-file.
+    expect(buildRgArgs(normalized)).toContain('--no-require-git');
+    expect(buildRgArgs(normalized)).not.toContain('--ignore-file');
   });
 
-  test('uses root .gitignore for nested searches outside git repos', () => {
+  test('nested searches keep native hierarchical ignore semantics', () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
     const normalized = normalizeGlobInput(
@@ -151,10 +193,10 @@ describe('tools/glob/normalize', () => {
       createRepoContext(repoDir) as any,
     );
 
-    expect(normalized.ignoreFiles).toEqual([path.join(repoDir, '.gitignore')]);
+    expect(buildRgArgs(normalized)).toContain('--no-require-git');
   });
 
-  test('does not inherit worktree ignore files for external searches', () => {
+  test('external searches rely on rg defaults instead of worktree ignores', () => {
     const repoDir = temps.createRepo();
     const outside = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
@@ -163,7 +205,10 @@ describe('tools/glob/normalize', () => {
       createRepoContext(repoDir) as any,
     );
 
-    expect(normalized.ignoreFiles).toEqual([]);
+    // Outside the worktree there is no ignore inheritance to emulate:
+    // rg applies whatever .gitignore trees exist under the search path.
+    const args = buildRgArgs(normalized);
+    expect(args.find((arg) => arg.startsWith('--ignore-file'))).toBeUndefined();
   });
 
   test('supports absolute patterns with glob directory segments', () => {
@@ -176,7 +221,7 @@ describe('tools/glob/normalize', () => {
     );
 
     expect(normalized.searchPath).toBe(repoDir);
-    expect(normalized.relativePattern).toBe('pkg-*/*.ts');
+    expect(normalized.relativePattern).toBe('/pkg-*/*.ts');
   });
 
   test('supports absolute patterns with forward slashes', () => {
@@ -188,7 +233,7 @@ describe('tools/glob/normalize', () => {
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
-    expect(normalized.relativePattern).toBe('*.ts');
+    expect(normalized.relativePattern).toBe('/*.ts');
   });
 
   test('realpaths the worktree when it exists as a symlink', () => {
@@ -213,6 +258,6 @@ describe('tools/glob/normalize', () => {
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src]literal'));
-    expect(normalized.relativePattern).toBe('*.ts');
+    expect(normalized.relativePattern).toBe('/*.ts');
   });
 });
