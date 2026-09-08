@@ -13,7 +13,7 @@ export function resolveReadPath(filePath: string, directory: string): string {
   );
 }
 
-function isMissingPathError(error: unknown): boolean {
+export function isMissingPathError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&

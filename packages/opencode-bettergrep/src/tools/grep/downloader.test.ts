@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { getInstalledRipgrepPath, getRipgrepCacheDir } from './downloader';
+import { getInstalledRipgrepPath, getRipgrepCacheDir } from './rg-cache';
 import { createTempDir } from './test-helpers';
 
 const originalCacheHome = process.env.XDG_CACHE_HOME;

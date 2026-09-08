@@ -4,8 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { readBoundedBytes } from './attachments';
 import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
-import { executeRead, inspectReadTarget, readBoundedBytes } from './engine';
+import { executeRead, inspectReadTarget } from './engine';
 
 const tempDirs: string[] = [];
 const tinyPng = Buffer.from([

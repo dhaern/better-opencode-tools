@@ -1,77 +1,41 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
-import path from 'node:path';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
-  type SupervisedProcess,
   spawnSupervised,
 } from '../../utils/process-supervisor';
 import { AbortWaitError, resolveGlobCliWithAutoInstall } from './resolver';
 import { buildRgCommand } from './rg-args';
-import type {
-  GlobRunner,
-  GlobSearchResult,
-  NormalizedGlobInput,
-} from './types';
+import {
+  collectMatchedPaths,
+  emptyResult,
+  sliceLimit,
+  toErrorMessage,
+  watchStderr,
+} from './runner-output';
+import {
+  adaptSupervisedSearch,
+  DEFAULT_CLEANUP_WAIT_MS,
+  type ManagedSearch,
+  POST_EXIT_DRAIN_MS,
+  type SearchExit,
+  waitForManagedCleanup,
+} from './supervised-search';
+import type { GlobRunner } from './types';
 
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// Diagnostic cap mirroring the native core-ripgrep adapter (8 KiB). The
-// stream keeps being drained so a chatty child cannot block on a full pipe.
-const STDERR_CAP_BYTES = 8 * 1024;
-
-function sliceLimit(input: NormalizedGlobInput, files: string[]): string[] {
-  return files.slice(0, input.limit);
-}
-
-function emptyResult(
-  input: NormalizedGlobInput,
-  command: string[] | undefined,
-  extra: Partial<GlobSearchResult> = {},
-): GlobSearchResult {
-  return {
-    files: [],
-    count: 0,
-    backend: 'rg',
-    truncated: false,
-    incomplete: false,
-    timedOut: false,
-    cancelled: false,
-    exitCode: 0,
-    command,
-    cwd: input.searchPath,
-    stderr: '',
-    ...extra,
-  };
-}
+export { collectMatchedPaths } from './runner-output';
+export {
+  adaptSupervisedSearch,
+  DEFAULT_CLEANUP_WAIT_MS,
+  type ManagedSearch,
+  POST_EXIT_DRAIN_MS,
+} from './supervised-search';
 
 interface SpawnOptions {
   cwd: string;
   stdio: ['ignore', 'pipe', 'pipe'];
   killGraceMs?: number;
   postExitDrainMs?: number;
-}
-
-interface SearchExit {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  error?: string;
-}
-
-export interface ManagedSearch {
-  // stdout/stderr are the worker's unmodified pipes. This process owns the
-  // supervisor lifecycle, not just the worker lifecycle.
-  child: ChildProcess;
-  // Idempotent and safe after close/disconnect. Implementations must use an
-  // operation-bound capability, never fall back to a numeric PID/PGID lookup.
-  stop: () => void;
-  // Available once the task-exit promise settles. The runner allows its
-  // pending microtask to run before interpreting transport close.
-  readExit: () => SearchExit | undefined;
-  // Task status + bounded output drain + supervised cleanup, not raw close.
-  completed: Promise<SearchExit>;
 }
 
 interface RunnerDeps {
@@ -85,173 +49,6 @@ interface RunnerDeps {
   postExitDrainMs?: number;
   // Final-result budget after an early stop, independent of the search timeout.
   cleanupWaitMs?: number;
-}
-
-export const POST_EXIT_DRAIN_MS = 1_000;
-export const DEFAULT_CLEANUP_WAIT_MS =
-  DEFAULT_KILL_GRACE_MS + DEFAULT_CLEANUP_TIMEOUT_MS + POST_EXIT_DRAIN_MS;
-
-async function waitForManagedCleanup(
-  completed: Promise<SearchExit>,
-  timeoutMs: number,
-): Promise<SearchExit | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      completed,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// Adapt the common supervisor's lifecycle; do not duplicate its transport,
-// process creation, or termination policy here.
-export function adaptSupervisedSearch(
-  supervised: SupervisedProcess,
-  options: { postExitDrainMs?: number } = {},
-): ManagedSearch {
-  const child = supervised.proc;
-  let exit: SearchExit | undefined;
-  let stopped = false;
-  let released = false;
-  let closed = false;
-  let finished = false;
-  let cleanupError: string | undefined;
-  let drainError: string | undefined;
-  let pendingOutputs = 0;
-  let outputsDestroyed = false;
-  let drainTimer: ReturnType<typeof setTimeout> | undefined;
-  const drainMs = Math.max(0, options.postExitDrainMs ?? POST_EXIT_DRAIN_MS);
-  let resolveCompleted!: (exit: SearchExit) => void;
-  const completed = new Promise<SearchExit>((resolve) => {
-    resolveCompleted = resolve;
-  });
-  const cleanOutputs: (() => void)[] = [];
-  const finish = () => {
-    if (finished || !exit || !closed || pendingOutputs) return;
-    finished = true;
-    clearTimeout(drainTimer);
-    for (const clean of cleanOutputs) clean();
-    const error = [
-      ...new Set([exit.error, drainError, cleanupError].filter(Boolean)),
-    ].join('; ');
-    resolveCompleted({ ...exit, ...(error ? { error } : {}) });
-  };
-  const stop = (graceMs?: number) => {
-    if (stopped || closed) return;
-    stopped = true;
-    void supervised.stop(graceMs).catch((error) => {
-      cleanupError = `Supervisor cleanup failed: ${toErrorMessage(error)}`;
-      finish();
-    });
-  };
-  const release = () => {
-    if (!exit || pendingOutputs || stopped || released || closed) return;
-    released = true;
-    void supervised.release().catch((error) => {
-      cleanupError = `Supervisor release failed: ${toErrorMessage(error)}`;
-      stop();
-    });
-  };
-  const destroyOutputs = () => {
-    if (outputsDestroyed) return;
-    outputsDestroyed = true;
-    for (const output of [child.stdout, child.stderr]) {
-      if (!output || output.closed) continue;
-      // Destruction can fail asynchronously, after the run has completed.
-      const ignoreError = () => undefined;
-      output.on('error', ignoreError);
-      output.once('close', () => output.removeListener('error', ignoreError));
-      output.destroy();
-    }
-  };
-  const startDrain = () => {
-    if (!pendingOutputs || drainTimer || finished) return;
-    drainTimer = setTimeout(() => {
-      drainError = 'Output drain deadline exceeded after task exit';
-      stop(0);
-      destroyOutputs();
-    }, drainMs);
-    drainTimer.unref?.();
-  };
-  for (const output of [child.stdout, child.stderr]) {
-    if (!output || output.readableEnded || output.closed) continue;
-    pendingOutputs++;
-    const clean = () => {
-      output.removeListener('end', drained);
-      output.removeListener('close', drained);
-      output.removeListener('error', onError);
-    };
-    const drained = () => {
-      clean();
-      pendingOutputs--;
-      if (!pendingOutputs) clearTimeout(drainTimer);
-      release();
-      finish();
-    };
-    const onError = (error: unknown) => {
-      drainError ??= `Output reader failed: ${toErrorMessage(error)}`;
-      stop();
-      destroyOutputs();
-    };
-    output.once('end', drained);
-    output.once('close', drained);
-    output.on('error', onError);
-    cleanOutputs.push(clean);
-  }
-  void supervised.exited.then(
-    ({ code, signal }) => {
-      if (exit || finished) return;
-      exit = { code: signal ? null : code, signal };
-      startDrain();
-      release();
-      finish();
-    },
-    (error) => {
-      if (exit || finished) return;
-      exit = { code: null, signal: null, error: toErrorMessage(error) };
-      startDrain();
-      release();
-      finish();
-    },
-  );
-  const onCleanup = (confirmed: boolean, error?: unknown) => {
-    closed = true;
-    if (!confirmed) {
-      cleanupError =
-        error === undefined
-          ? 'Supervisor cleanup unconfirmed'
-          : toErrorMessage(error) || 'Supervisor cleanup unconfirmed';
-    } else if (!released && !stopped) {
-      cleanupError =
-        'Supervisor exited before cleanup was requested; cleanup unconfirmed';
-    }
-    if (!exit) {
-      exit = {
-        code: supervised.exitCode,
-        signal: null,
-        error: 'Search supervisor closed without task exit status',
-      };
-    }
-    startDrain();
-    finish();
-  };
-  // The common owner's closed promise now confirms the cleanup protocol and
-  // rejects on unexpected death/watchdog expiry. Never substitute proc.close.
-  void supervised.closed.then(
-    () => onCleanup(true),
-    (error) => onCleanup(false, error),
-  );
-  return {
-    child,
-    readExit: () => exit,
-    stop: () => stop(),
-    completed,
-  };
 }
 
 type Done =
@@ -272,147 +69,6 @@ function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
   } catch {
     // Process may have exited.
   }
-}
-
-interface StderrWatch {
-  read: () => string;
-  stop: () => void;
-}
-
-type DestroyableReadable = NodeJS.ReadableStream & {
-  destroy?: () => void;
-  closed?: boolean;
-};
-
-// destroy() may report its error asynchronously. Keep a harmless error
-// listener until close, independently of the run's settlement listeners.
-function watchReader(
-  stream: NodeJS.ReadableStream,
-  onData: (chunk: Buffer | string) => void,
-): () => void {
-  let stopped = false;
-  const ignoreError = () => undefined;
-  const onClose = () => {
-    stream.removeListener('data', onData);
-    stream.removeListener('error', ignoreError);
-    stream.removeListener('close', onClose);
-  };
-  stream.on('error', ignoreError);
-  stream.once('close', onClose);
-  stream.on('data', onData);
-  return () => {
-    if (stopped) return;
-    stopped = true;
-    stream.removeListener('data', onData);
-    const reader = stream as DestroyableReadable;
-    if (reader.closed || !reader.destroy) onClose();
-    else reader.destroy();
-  };
-}
-
-function watchStderr(stream: NodeJS.ReadableStream | null): StderrWatch {
-  if (!stream) {
-    return {
-      read: () => '',
-      stop: () => undefined,
-    };
-  }
-
-  let buffer = Buffer.alloc(0);
-  let truncated = false;
-  const chunks: Buffer[] = [];
-  let retained = 0;
-  const onData = (chunk: Buffer | string) => {
-    const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    if (retained >= STDERR_CAP_BYTES) {
-      truncated = true;
-      return;
-    }
-    if (retained + data.length > STDERR_CAP_BYTES) {
-      chunks.push(data.subarray(0, STDERR_CAP_BYTES - retained));
-      retained = STDERR_CAP_BYTES;
-      truncated = true;
-      return;
-    }
-    chunks.push(data);
-    retained += data.length;
-  };
-
-  const stop = watchReader(stream, onData);
-
-  return {
-    read: () => {
-      buffer = Buffer.concat(chunks);
-      const text = buffer.toString('utf-8');
-      return truncated ? `${text}\n[stderr truncated at 8192 bytes]` : text;
-    },
-    stop,
-  };
-}
-
-// rg emits NUL-delimited relative paths (--null). Records are split on the
-// raw byte stream and only complete records are decoded, so multibyte UTF-8
-// sequences split across stream chunks survive intact.
-export function collectMatchedPaths(
-  input: NormalizedGlobInput,
-  stream: NodeJS.ReadableStream | null,
-  options: { onOverflow?: () => void } = {},
-): {
-  read: () => string[];
-  stop: () => void;
-} {
-  if (!stream) {
-    return {
-      read: () => [],
-      stop: () => undefined,
-    };
-  }
-
-  const files: string[] = [];
-  let pending: Buffer = Buffer.alloc(0);
-  let overflowed = false;
-
-  const consume = (record: Buffer) => {
-    if (record.length === 0) return;
-    const relative = record.toString('utf-8');
-    files.push(path.resolve(input.searchPath, relative));
-    if (files.length > input.limit) {
-      overflowed = true;
-      options.onOverflow?.();
-    }
-  };
-
-  const onData = (chunk: Buffer | string) => {
-    if (overflowed) return;
-
-    const data =
-      typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
-    let searchable = Buffer.concat(
-      pending.length === 0 ? [data] : [pending, data],
-    );
-    pending = Buffer.alloc(0);
-
-    let separator = searchable.indexOf(0);
-    while (separator !== -1) {
-      consume(searchable.subarray(0, separator));
-      if (overflowed) return;
-      searchable = searchable.subarray(separator + 1);
-      separator = searchable.indexOf(0);
-    }
-
-    pending = searchable;
-  };
-
-  const stop = watchReader(stream, onData);
-
-  return {
-    // Only NUL-terminated records are ever published as paths. rg --null
-    // terminates every record; a leftover fragment means the process was
-    // cut mid-write (abort/timeout/limit), and publishing it would invent
-    // paths that may not exist.
-    read: () => [...files],
-    stop,
-  };
 }
 
 export function createRipgrepRunner(

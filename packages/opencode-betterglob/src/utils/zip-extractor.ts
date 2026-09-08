@@ -109,13 +109,6 @@ export async function getZipExtractionSupportErrorAsync(
     : 'ripgrep auto-install requires unzip to extract zip archives.';
 }
 
-export function getZipExtractionSupportError(): string | undefined {
-  // Kept for synchronous API compatibility. Runtime support checks belong to
-  // getZipExtractionSupportErrorAsync(), which can probe without blocking the
-  // tool deadline.
-  return undefined;
-}
-
 function createAbortError(): Error {
   const error = new Error('ripgrep auto-install was aborted');
   error.name = 'AbortError';

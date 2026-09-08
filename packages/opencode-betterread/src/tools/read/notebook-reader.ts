@@ -43,10 +43,6 @@ function isParsedNotebookShape(value: unknown): value is {
   );
 }
 
-export function isParsedNotebook(result: NotebookReadResult): boolean {
-  return result.mode === 'parsed';
-}
-
 function appendNotebookCell(
   lines: string[],
   cell: NotebookCell,

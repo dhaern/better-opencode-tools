@@ -1,6 +1,2 @@
-export { initLogger, log } from './logger';
-export {
-  extractZip,
-  getZipExtractionSupportError,
-  getZipExtractionSupportErrorAsync,
-} from './zip-extractor';
+export { initLogger } from './logger';
+export { extractZip, getZipExtractionSupportErrorAsync } from './zip-extractor';
