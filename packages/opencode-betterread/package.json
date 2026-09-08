@@ -1,6 +1,6 @@
 {
   "name": "opencode-betterread",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Standalone OpenCode plugin that replaces the native read tool with a real plugin implementation.",
   "repository": {
     "type": "git",

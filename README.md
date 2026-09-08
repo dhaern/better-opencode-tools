@@ -15,11 +15,14 @@ runtime behavior behind them.
 | [`opencode-bettergrep`](./packages/opencode-bettergrep) | `grep` | Advanced local search with `ripgrep`, fallback handling, rich filters, and hard-kill timeouts. |
 | [`opencode-betterread`](./packages/opencode-betterread) | `read` | Real plugin replacement for file/directory/notebook reading with stricter permissions and robust output budgeting. |
 
-## 🆕 Release 0.2.2
+## 🆕 Release 0.3.0
 
-- `betterread`: `@` is now allowed in scoped paths, with safer permission glob handling.
-- `bettergrep`: added explicit `paths: string[]` support and stricter mixed-target normalization.
-- All packages are aligned to OpenCode `1.17.3` and `effect` `4.0.0-beta.74`.
+- Security audit fixes across all three plugins (multi-round review): hardened process lifecycle and cleanup confirmation, atomic ripgrep cache publication under inter-process locks, fail-closed symlink traversal, strict ERE translation, byte-exact sorting, and preserved partial results with authoritative metadata.
+- `betterglob`: `follow_symlinks: true` is now explicitly rejected to avoid unsafe traversal races; supervised POSIX process groups with watchdog; `proper-lockfile` for cache installation.
+- `bettergrep`: deterministic top-K admission with context preservation, LF rejection in literal search, binary-match truncation, GNU grep fallback hardened under `LC_ALL=C.UTF-8`.
+- `betterread`: descriptor-safe reads with single-handle ownership and streaming-abort race fixes.
+- Codebase modularized per phase 3 review: oversized modules split into focused units with identical public surface.
+- All packages are aligned to OpenCode `1.18.29`.
 
 ## 🚀 Why use these instead of the native tools?
 
