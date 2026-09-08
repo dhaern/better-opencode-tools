@@ -1,11 +1,13 @@
 export const GLOB_TOOL_ID = 'glob';
 export const RG_BINARY = 'rg';
+export const UNSUPPORTED_FOLLOW_SYMLINKS_ERROR =
+  'follow_symlinks:true is unsupported: the rg process cannot be confined to destinations authorized before execution.';
 
 export const GLOB_DESCRIPTION = `Fast file pattern matching tool backed by ripgrep.
 
 Usage:
 - Base args: pattern, path?
-- Optional args: limit, sort_by, sort_order, hidden, follow_symlinks, timeout_ms
+- Optional args: limit, sort_by, sort_order, hidden, timeout_ms
 - Returns absolute file paths, one per line
 - Use this tool for file name/path matching, not content search`;
 

@@ -1,5 +1,6 @@
 import { tool } from '@opencode-ai/plugin';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
+import { MAX_TIMEOUT_MS } from './normalize';
 
 const z = tool.schema;
 
@@ -34,14 +35,13 @@ export const globArgsSchema: Record<string, unknown> = {
     .describe(
       'Include hidden files and directories while respecting rg ignore rules.',
     ),
-  follow_symlinks: z
-    .boolean()
-    .default(false)
-    .describe('Follow symbolic links.'),
   timeout_ms: z
     .number()
     .int()
     .positive()
+    .max(MAX_TIMEOUT_MS)
     .default(DEFAULT_GLOB_TIMEOUT_MS)
-    .describe('Timeout in milliseconds for the rg process after it starts.'),
+    .describe(
+      'Deadline in milliseconds covering automatic work: path preparation, binary resolution (including auto-install) and the rg process. Time spent waiting for permission prompts is excluded.',
+    ),
 };

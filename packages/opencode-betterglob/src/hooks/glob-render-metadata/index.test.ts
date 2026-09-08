@@ -74,7 +74,11 @@ describe('glob render metadata hook', () => {
     );
 
     expect(output.title).toBe('**/*.ts');
-    expect(output.metadata).toEqual({ count: 2, truncated: false });
+    expect(output.metadata).toEqual({
+      count: 2,
+      truncated: false,
+      search_truncated: false,
+    });
   });
 
   test('preserves existing metadata values', async () => {
@@ -96,7 +100,7 @@ describe('glob render metadata hook', () => {
     expect(output).toEqual({
       title: 'existing',
       output: '/tmp/repo/a.ts\n/tmp/repo/b.ts',
-      metadata: { count: 7, truncated: true },
+      metadata: { count: 7, truncated: true, search_truncated: false },
     });
   });
 
@@ -120,7 +124,11 @@ describe('glob render metadata hook', () => {
       output,
     );
 
-    expect(output.metadata).toEqual({ count: 1, truncated: true });
+    expect(output.metadata).toEqual({
+      count: 1,
+      truncated: true,
+      search_truncated: true,
+    });
   });
 
   test('ignores non-glob tools', async () => {
