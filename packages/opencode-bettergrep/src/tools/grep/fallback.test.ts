@@ -2,11 +2,9 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import {
-  buildGrepCommand,
-  executeGrepFallback,
-  translatePatternToEre,
-} from './fallback';
+import { executeGrepFallback } from './fallback';
+import { buildGrepCommand } from './fallback-command';
+import { translatePatternToEre } from './fallback-ere';
 import { normalizeGrepInput } from './normalize';
 import { createRepoContext, createTempTracker } from './test-helpers';
 

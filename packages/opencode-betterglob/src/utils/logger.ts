@@ -54,10 +54,6 @@ async function ensureLoggerReady(file: string): Promise<void> {
   await cleanupOldLogs(dir);
 }
 
-export function log(message: string, data?: unknown): void {
-  void logAsync(message, data).catch(() => undefined);
-}
-
 export async function logAsync(
   message: string,
   data?: unknown,

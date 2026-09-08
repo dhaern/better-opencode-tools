@@ -4,7 +4,8 @@ import {
   executeCountMode,
   executeFilesMode,
 } from './direct';
-import { buildGrepCommand, executeGrepFallback } from './fallback';
+import { executeGrepFallback } from './fallback';
+import { buildGrepCommand } from './fallback-command';
 import { buildDiscoveryInput, executeMtimeMode } from './mtime';
 import {
   type ResolvedGrepCli,

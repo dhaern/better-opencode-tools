@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
-import {
-  probeExecutable,
-  resolveGrepCli,
-  resolveGrepCliWithAutoInstall,
-} from './resolver';
+import { probeExecutable } from './cli-probe';
+import { resolveGrepCli, resolveGrepCliWithAutoInstall } from './resolver';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
