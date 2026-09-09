@@ -15,6 +15,10 @@ runtime behavior behind them.
 | [`opencode-bettergrep`](./packages/opencode-bettergrep) | `grep` | Advanced local search with `ripgrep`, fallback handling, rich filters, and hard-kill timeouts. |
 | [`opencode-betterread`](./packages/opencode-betterread) | `read` | Real plugin replacement for file/directory/notebook reading with stricter permissions and robust output budgeting. |
 
+## 🆕 Release 0.3.1
+
+- `bettergrep`/`betterglob`: rg now runs with `--no-mmap`, so a search no longer aborts when a file is truncated while another process edits it. On many-small-files trees this is also cheaper than mmap; large single-file searches may be slightly slower.
+
 ## 🆕 Release 0.3.0
 
 - Security audit fixes across all three plugins (multi-round review): hardened process lifecycle and cleanup confirmation, atomic ripgrep cache publication under inter-process locks, fail-closed symlink traversal, strict ERE translation, byte-exact sorting, and preserved partial results with authoritative metadata.
