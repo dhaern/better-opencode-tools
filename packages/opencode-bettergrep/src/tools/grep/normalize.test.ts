@@ -49,6 +49,9 @@ describe('tools/grep/normalize', () => {
     expect(normalized.invertMatch).toBe(false);
     expect(normalized.fileTypes).toEqual([]);
     expect(normalized.excludeFileTypes).toEqual([]);
+    const args = buildRgArgs(normalized);
+    expect(args).toContain('--no-config');
+    expect(args).toContain('--no-mmap');
   });
 
   test('resolves relative path against current directory when it differs from worktree', () => {

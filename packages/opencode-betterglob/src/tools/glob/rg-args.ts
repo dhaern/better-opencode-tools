@@ -6,7 +6,13 @@ export function buildRgArgs(input: NormalizedGlobInput): string[] {
   // parity; there is no JavaScript post-filter. rg anchors globs containing
   // "/" to the search root, while bare basenames match at any depth —
   // normalize.ts root-anchors absolute patterns accordingly.
-  const args = ['--files', '--null', '--no-config', '--no-require-git'];
+  const args = [
+    '--files',
+    '--null',
+    '--no-config',
+    '--no-mmap',
+    '--no-require-git',
+  ];
 
   if (input.sortBy === 'path') {
     args.push(input.sortOrder === 'desc' ? '--sortr' : '--sort', 'path');
