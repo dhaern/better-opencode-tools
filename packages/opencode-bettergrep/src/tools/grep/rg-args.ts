@@ -44,7 +44,7 @@ function appendFileTypeArgs(
 }
 
 export function buildRgArgs(input: NormalizedGrepInput): string[] {
-  const args = ['--no-config', '--color', 'never'];
+  const args = ['--no-config', '--no-mmap', '--color', 'never'];
 
   if (input.outputMode === 'files_with_matches') {
     args.push('--null', '--files-with-matches', '--with-filename');

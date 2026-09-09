@@ -34,6 +34,8 @@ describe('tools/glob/normalize', () => {
     expect(normalized.hidden).toBe(true);
     expect(normalized.followSymlinks).toBe(false);
     expect(normalized.timeoutMs).toBe(DEFAULT_GLOB_TIMEOUT_MS);
+    expect(buildRgArgs(normalized)).toContain('--no-mmap');
+    expect(buildRgArgs(normalized)).toContain('--no-config');
   });
 
   test('resolves relative path against current directory', () => {
