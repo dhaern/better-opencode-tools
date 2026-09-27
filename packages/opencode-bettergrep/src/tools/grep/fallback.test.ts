@@ -194,6 +194,16 @@ describe('tools/grep/fallback', () => {
     );
   });
 
+  test('caps long GNU grep content records before normalization', () => {
+    const text = `needle${'x'.repeat(10_000)}`;
+    const parsed = parseContentLine(
+      Buffer.from('file'),
+      Buffer.from(`1:${text}`),
+      false,
+    );
+    expect(parsed?.text.length).toBe(4004);
+  });
+
   test('GNU grep content search preserves CRLF matches without unparsable warnings', async () => {
     const repoDir = temps.createRepo();
     const crlfFile = path.join(repoDir, 'src', 'crlf.txt');

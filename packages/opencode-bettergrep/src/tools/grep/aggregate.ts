@@ -1,6 +1,10 @@
 import { CONTEXT_BUFFER_MULTIPLIER } from './constants';
 import { decodeRgPayload } from './json-stream';
-import { buildPathFromBytes, normalizeDisplayText } from './path-utils';
+import {
+  buildPathFromBytes,
+  capRawLine,
+  normalizeDisplayText,
+} from './path-utils';
 import { appendContextLine, createFileMatch } from './result-utils';
 import type {
   GrepContextLine,
@@ -40,7 +44,7 @@ function trimLineEnd(text: string | undefined): string {
     return '';
   }
 
-  const normalized = normalizeDisplayText(text);
+  const normalized = normalizeDisplayText(capRawLine(text));
   return normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
 }
 

@@ -5,6 +5,7 @@ import {
 } from './fallback-results';
 import { type BinaryReadableStream, consumeBufferedBytes } from './json-stream';
 import {
+  capRawLine,
   formatNonUtf8TextDisplay,
   normalizeDisplayText,
   stripSingleLineEnding,
@@ -46,7 +47,7 @@ export function parseContentLine(
   return {
     filePath,
     lineNumber: Number.parseInt(match[1], 10),
-    text: normalizeDisplayText(match[3]),
+    text: normalizeDisplayText(capRawLine(match[3])),
     isMatch: match[2] === ':',
   };
 }

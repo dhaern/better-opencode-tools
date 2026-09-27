@@ -46,7 +46,11 @@ function formatLine(
   marker: ':' | '-',
   text: string,
 ): string {
-  const escapedText = escapeControlCharsPreservingNewlines(text);
+  let escapedText = '';
+  for (const char of text) {
+    escapedText += escapeControlCharsPreservingNewlines(char);
+    if (escapedText.length > MAX_LINE_LENGTH) break;
+  }
   const visibleText =
     escapedText.length > MAX_LINE_LENGTH
       ? `${escapedText.slice(0, MAX_LINE_LENGTH)}...`

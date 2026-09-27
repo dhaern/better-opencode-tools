@@ -1,4 +1,11 @@
 import path from 'node:path';
+import { MAX_LINE_LENGTH } from './constants';
+
+export function capRawLine(value: string): string {
+  // Even CRLF collapsing two raw units into one visible unit leaves enough
+  // content to detect truncation beyond the 2000-unit output boundary.
+  return value.slice(0, (MAX_LINE_LENGTH + 2) * 2);
+}
 
 const CONTROL_ESCAPES: Record<number, string> = {
   9: '\\t',
