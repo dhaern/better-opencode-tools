@@ -27,6 +27,18 @@ export function createTempRepo(): string {
   return dir;
 }
 
+export async function until(
+  predicate: () => boolean,
+  { timeoutMs = 1000, intervalMs = 5 } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline)
+      throw new Error('Condition was not met before timeout');
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 export function createTempTracker(options: { resetResolver?: boolean } = {}) {
   const dirs: string[] = [];
 

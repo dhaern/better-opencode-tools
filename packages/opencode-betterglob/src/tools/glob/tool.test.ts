@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, jest, mock, test } from 'bun:test';
 import { symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
@@ -439,10 +439,12 @@ describe('tools/glob/tool', () => {
   test('waits for bounded runner cleanup after the execution deadline', async () => {
     const repoDir = temps.createRepo();
     let receivedSignal: AbortSignal | undefined;
+    const started = Promise.withResolvers<void>();
     const run: GlobRunner = mock(
       async (input, signal) =>
         new Promise<GlobSearchResult>((resolve) => {
           receivedSignal = signal;
+          started.resolve();
           signal.addEventListener(
             'abort',
             () => {
@@ -472,23 +474,32 @@ describe('tools/glob/tool', () => {
       { run, resolveCli: resolveSystem },
     );
     const ctx = createExecutionContext(repoDir);
+    jest.useFakeTimers();
+    try {
+      const pending = tool.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: 20 },
+        ctx as any,
+      );
+      await started.promise;
+      jest.advanceTimersByTime(20);
+      await Promise.resolve();
+      jest.advanceTimersByTime(1100);
+      const result = await pending;
 
-    const result = await tool.execute(
-      { pattern: '*.ts', path: 'src', timeout_ms: 20 },
-      ctx as any,
-    );
-
-    expect(receivedSignal?.aborted).toBe(true);
-    expect(result).toEqual({
-      title: '*.ts',
-      output: expect.stringContaining(path.join(repoDir, 'src', 'a.ts')),
-      metadata: expect.objectContaining({
-        timed_out: true,
-        incomplete: true,
-        count: 1,
-        error: undefined,
-      }),
-    });
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(result).toEqual({
+        title: '*.ts',
+        output: expect.stringContaining(path.join(repoDir, 'src', 'a.ts')),
+        metadata: expect.objectContaining({
+          timed_out: true,
+          incomplete: true,
+          count: 1,
+          error: undefined,
+        }),
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('asks permission before auto-installing ripgrep when missing', async () => {

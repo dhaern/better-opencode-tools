@@ -16,7 +16,7 @@ import {
   createRipgrepRunner,
   type ManagedSearch,
 } from './runner';
-import { createRepoContext, createTempTracker } from './test-helpers';
+import { createRepoContext, createTempTracker, until } from './test-helpers';
 
 function spawnTestSearch(
   cmd: string,
@@ -1181,6 +1181,7 @@ describe('tools/glob/runner spawn failures', () => {
   test('terminates the child when a stream error fires mid-run', async () => {
     const repoDir = temps.createRepo();
     let child: ReturnType<typeof nodeSpawn> | undefined;
+    let firstRecordReceived = false;
     const runRipgrep = createRipgrepRunner({
       resolve: async () => ({
         path: process.execPath,
@@ -1196,6 +1197,12 @@ describe('tools/glob/runner spawn failures', () => {
           ],
           { stdio: ['pipe', 'pipe', 'pipe'] },
         );
+        child.stdout?.once('data', () => {
+          firstRecordReceived = true;
+          setImmediate(() =>
+            child?.stdout?.emit('error', new Error('injected pipe error')),
+          );
+        });
         return child;
       },
       killGraceMs: 20,
@@ -1205,12 +1212,11 @@ describe('tools/glob/runner spawn failures', () => {
       createRepoContext(repoDir) as any,
     );
 
-    // Inject a stream error after the child emits its first record.
-    setTimeout(() => {
-      child?.stdout?.emit('error', new Error('injected pipe error'));
-    }, 40);
-
-    const result = await runRipgrep(input, new AbortController().signal);
+    // Inject only after the first data event; a wall-clock delay may fire
+    // before a slow child has produced any bytes.
+    const pending = runRipgrep(input, new AbortController().signal);
+    await until(() => firstRecordReceived);
+    const result = await pending;
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     expect(result.error).toContain('injected pipe error');
@@ -1236,7 +1242,6 @@ describe('tools/glob/runner spawn failures', () => {
             `
             process.stderr.write('x'.repeat(1_048_576));
             process.stdout.write('a.ts\\0');
-            setInterval(() => {}, 1000);
             `,
           ],
           { stdio: ['pipe', 'pipe', 'pipe'] },

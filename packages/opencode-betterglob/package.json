@@ -42,11 +42,11 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external effect && tsc --emitDeclarationOnly",
     "prepack": "bun run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "bun test",
     "lint": "biome lint src package.json README.md biome.json tsconfig.json",
-    "check": "biome check src package.json README.md biome.json tsconfig.json",
-    "format": "biome format src package.json README.md biome.json tsconfig.json --write"
+    "check": "biome check src package.json README.md biome.json tsconfig.json tsconfig.test.json",
+    "format": "biome format src package.json README.md biome.json tsconfig.json tsconfig.test.json --write"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.29",
