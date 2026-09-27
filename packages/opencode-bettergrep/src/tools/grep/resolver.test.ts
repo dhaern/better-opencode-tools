@@ -4,8 +4,6 @@ import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { probeExecutable } from './cli-probe';
 import {
-  AUTO_INSTALL_RETRY_AFTER_MS,
-  AUTO_INSTALL_TIMEOUT_MS,
   invalidateGrepCliResolverCache,
   resolveGrepCli,
   resolveGrepCliWithAutoInstall,
@@ -294,7 +292,7 @@ describe('tools/grep/resolver', () => {
         );
       }
       expect(install).toHaveBeenCalledTimes(1);
-      jest.advanceTimersByTime(AUTO_INSTALL_RETRY_AFTER_MS + 1);
+      jest.advanceTimersByTime(600_001);
       expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
       expect(install).toHaveBeenCalledTimes(2);
     } finally {
@@ -340,9 +338,9 @@ describe('tools/grep/resolver', () => {
       };
       const pending = resolveGrepCliWithAutoInstall(deps);
       await startedPromise;
-      jest.advanceTimersByTime(AUTO_INSTALL_TIMEOUT_MS);
-      expect((await pending).backend).toBe('grep');
+      jest.advanceTimersByTime(30_000);
       expect(installSignal?.aborted).toBe(true);
+      expect((await pending).backend).toBe('grep');
     } finally {
       jest.useRealTimers();
     }
@@ -502,62 +500,67 @@ describe('tools/grep/resolver', () => {
   });
 
   test('resolveGrepCliWithAutoInstall aborts the shared install when the last waiter cancels', async () => {
-    let installSignal: AbortSignal | undefined;
-    let markStarted: (() => void) | undefined;
-    let markAborted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const aborted = new Promise<void>((resolve) => {
-      markAborted = resolve;
-    });
-    const controller = new AbortController();
+    jest.useFakeTimers();
+    try {
+      let installSignal: AbortSignal | undefined;
+      let markStarted: (() => void) | undefined;
+      let markAborted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const aborted = new Promise<void>((resolve) => {
+        markAborted = resolve;
+      });
+      const controller = new AbortController();
 
-    const firstAttempt = resolveGrepCliWithAutoInstall(
-      {
+      const firstAttempt = resolveGrepCliWithAutoInstall(
+        {
+          findExecutable: () => null,
+          getInstalledRipgrepPath: () => null,
+          installLatestStableRipgrep: async (signal?: AbortSignal) => {
+            installSignal = signal;
+            markStarted?.();
+            await new Promise<never>((_, reject) => {
+              signal?.addEventListener(
+                'abort',
+                () => {
+                  markAborted?.();
+                  const error = new Error('aborted');
+                  error.name = 'AbortError';
+                  reject(error);
+                },
+                { once: true },
+              );
+            });
+            return '/tmp/unreachable';
+          },
+        },
+        controller.signal,
+      );
+
+      await started;
+      controller.abort();
+
+      await expect(firstAttempt).rejects.toThrow(
+        /cancelled before execution started/i,
+      );
+      expect(installSignal?.aborted).toBe(true);
+      await aborted;
+
+      const retry = await resolveGrepCliWithAutoInstall({
         findExecutable: () => null,
         getInstalledRipgrepPath: () => null,
-        installLatestStableRipgrep: async (signal?: AbortSignal) => {
-          installSignal = signal;
-          markStarted?.();
-          await new Promise<never>((_, reject) => {
-            signal?.addEventListener(
-              'abort',
-              () => {
-                markAborted?.();
-                const error = new Error('aborted');
-                error.name = 'AbortError';
-                reject(error);
-              },
-              { once: true },
-            );
-          });
-          return '/tmp/unreachable';
-        },
-      },
-      controller.signal,
-    );
+        installLatestStableRipgrep: async () => '/tmp/managed-rg',
+      });
 
-    await started;
-    controller.abort();
-
-    await expect(firstAttempt).rejects.toThrow(
-      /cancelled before execution started/i,
-    );
-    await aborted;
-    expect(installSignal?.aborted).toBe(true);
-
-    const retry = await resolveGrepCliWithAutoInstall({
-      findExecutable: () => null,
-      getInstalledRipgrepPath: () => null,
-      installLatestStableRipgrep: async () => '/tmp/managed-rg',
-    });
-
-    expect(retry).toEqual({
-      path: '/tmp/managed-rg',
-      backend: 'rg',
-      source: 'managed-rg',
-    });
+      expect(retry).toEqual({
+        path: '/tmp/managed-rg',
+        backend: 'rg',
+        source: 'managed-rg',
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('resolveGrepCliWithAutoInstall throws a clear error when rg and grep are unavailable', async () => {
