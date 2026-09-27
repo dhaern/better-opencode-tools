@@ -131,6 +131,7 @@ exports[`public exports and server shape stay stable 2`] = `
 exports[`public exports and server shape stay stable 3`] = `
 {
   "keys": [
+    "config",
     "tool",
     "tool.execute.after",
   ],

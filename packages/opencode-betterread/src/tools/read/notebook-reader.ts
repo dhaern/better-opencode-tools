@@ -1,7 +1,12 @@
 import type { FileHandle } from 'node:fs/promises';
 import { readBoundedBytes } from './attachments';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
-import { selectBudgetedLines, splitLogicalLines } from './limits';
+import type { ReadOutputLimits } from './limits';
+import {
+  LEGACY_OUTPUT_LIMITS,
+  selectBudgetedLines,
+  splitLogicalLines,
+} from './limits';
 import { readTextWindow } from './text-reader';
 import type { NotebookReadResult } from './types';
 
@@ -50,6 +55,7 @@ export async function readNotebook(
   handle: FileHandle,
   size: number,
   signal?: AbortSignal,
+  outputLimits: ReadOutputLimits = LEGACY_OUTPUT_LIMITS,
 ): Promise<Omit<NotebookReadResult, 'path'>> {
   signal?.throwIfAborted();
   if (shouldParseNotebook(size)) {
@@ -61,7 +67,12 @@ export async function readNotebook(
         size,
       );
       const lines = notebookLines(raw.toString('utf8'));
-      const selection = selectBudgetedLines(lines, offset, limit);
+      const selection = selectBudgetedLines(
+        lines,
+        offset,
+        Math.min(limit, outputLimits.maxLines),
+        outputLimits.maxBytes,
+      );
       return {
         kind: 'notebook',
         mode: 'parsed',
@@ -79,7 +90,13 @@ export async function readNotebook(
     }
   }
   return {
-    ...(await readTextWindow(handle, offset, limit, { size }, signal)),
+    ...(await readTextWindow(
+      handle,
+      offset,
+      limit,
+      { size, outputLimits },
+      signal,
+    )),
     kind: 'notebook',
     mode: 'raw-fallback',
   };

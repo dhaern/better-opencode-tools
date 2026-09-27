@@ -1,6 +1,11 @@
 import type { FileHandle } from 'node:fs/promises';
 import { MAX_LINE_LENGTH } from './constants';
-import { createOutputBudget, truncateLine } from './limits';
+import type { ReadOutputLimits } from './limits';
+import {
+  createOutputBudget,
+  LEGACY_OUTPUT_LIMITS,
+  truncateLine,
+} from './limits';
 import type { TextReadResult } from './types';
 
 const CHUNK_BYTES = 1024 * 1024;
@@ -10,7 +15,11 @@ const CR = 0x0d;
 // units from any UTF-8 input, so truncation is decided exactly.
 const MAX_LINE_BYTES = (MAX_LINE_LENGTH + 1) * 4;
 
-export type ReadTextOptions = { countAll?: boolean; size: number };
+export type ReadTextOptions = {
+  countAll?: boolean;
+  size: number;
+  outputLimits?: ReadOutputLimits;
+};
 
 // Decode only the selected window; count earlier lines on raw CR/LF bytes.
 // Positioned reads keep the caller's file descriptor cursor untouched.
@@ -22,9 +31,13 @@ export async function readTextWindow(
   signal?: AbortSignal,
 ): Promise<Omit<TextReadResult, 'path'>> {
   signal?.throwIfAborted();
-  const { size, countAll = false } = options;
+  const {
+    size,
+    countAll = false,
+    outputLimits = LEGACY_OUTPUT_LIMITS,
+  } = options;
   const selected: string[] = [];
-  const budget = createOutputBudget();
+  const budget = createOutputBudget(outputLimits.maxBytes);
   const buffer = Buffer.allocUnsafe(
     Math.min(CHUNK_BYTES, Math.max(size + 1, 64 * 1024)),
   );
@@ -58,7 +71,8 @@ export async function readTextWindow(
       truncatedByLineLength = true;
       firstTruncatedLine ??= lines;
     }
-    if (selected.length >= limit) closed = true;
+    if (selected.length >= Math.min(limit, outputLimits.maxLines))
+      closed = true;
   };
 
   scan: for (;;) {

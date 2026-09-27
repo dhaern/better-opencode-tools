@@ -14,6 +14,24 @@ export type OutputBudget = {
   tryAdd(line: string): boolean;
 };
 
+export type ReadOutputLimits = { maxLines: number; maxBytes: number };
+export const LEGACY_OUTPUT_LIMITS: ReadOutputLimits = {
+  maxLines: Number.POSITIVE_INFINITY,
+  maxBytes: MAX_OUTPUT_BYTES,
+};
+export function hostOutputLimits(config?: unknown): ReadOutputLimits {
+  const output = (config as { tool_output?: Record<string, unknown> } | null)
+    ?.tool_output;
+  const valid = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? value
+      : fallback;
+  return {
+    maxLines: valid(output?.max_lines, 2000),
+    maxBytes: Math.min(MAX_OUTPUT_BYTES, valid(output?.max_bytes, 51_200)),
+  };
+}
+
 function clampInteger(
   value: unknown,
   fallback: number,
@@ -66,7 +84,7 @@ export function splitLogicalLines(raw: string): string[] {
 
 // Single budget accumulator: tracks joined output cost (including the
 // newline separator) and accepts a line only when chars and bytes both fit.
-export function createOutputBudget(): OutputBudget {
+export function createOutputBudget(maxBytes = MAX_OUTPUT_BYTES): OutputBudget {
   let chars = 0;
   let bytes = 0;
   let count = 0;
@@ -76,7 +94,7 @@ export function createOutputBudget(): OutputBudget {
       const nextChars = chars + separatorCost + line.length;
       if (nextChars > MAX_OUTPUT_CHARS) return false;
       const nextBytes = bytes + separatorCost + Buffer.byteLength(line, 'utf8');
-      if (nextBytes > MAX_OUTPUT_BYTES) return false;
+      if (nextBytes > maxBytes) return false;
       chars = nextChars;
       bytes = nextBytes;
       count += 1;
@@ -89,6 +107,7 @@ export function selectBudgetedLines(
   lines: string[],
   offset: number,
   limit: number,
+  maxBytes = MAX_OUTPUT_BYTES,
 ): {
   selected: string[];
   truncatedByBytes: boolean;
@@ -98,7 +117,7 @@ export function selectBudgetedLines(
 } {
   const startIndex = Math.max(offset - 1, 0);
   const selected: string[] = [];
-  const budget = createOutputBudget();
+  const budget = createOutputBudget(maxBytes);
   let truncatedByBytes = false;
   let truncatedByLineLength = false;
   let firstTruncatedLine: number | undefined;

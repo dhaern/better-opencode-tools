@@ -26,7 +26,8 @@ import {
   formatPdfResult,
   renderTextResult,
 } from './formatter';
-import { normalizeReadArgs } from './limits';
+import type { ReadOutputLimits } from './limits';
+import { LEGACY_OUTPUT_LIMITS, normalizeReadArgs } from './limits';
 import { readNotebook } from './notebook-reader';
 import {
   isMissingPathError,
@@ -88,8 +89,10 @@ export async function executeRead(input: {
   directory: string;
   inspection?: ReadInspection;
   signal?: AbortSignal;
+  outputLimits?: ReadOutputLimits;
 }): Promise<ReadExecutionResult> {
   const { signal } = input;
+  const outputLimits = input.outputLimits ?? LEGACY_OUTPUT_LIMITS;
   signal?.throwIfAborted();
   const inspection =
     input.inspection ??
@@ -125,7 +128,7 @@ export async function executeRead(input: {
       readPath,
       args.offset,
       args.limit,
-      { displayPath: resolvedPath },
+      { displayPath: resolvedPath, outputLimits },
       signal,
     );
     return done(
@@ -216,6 +219,7 @@ export async function executeRead(input: {
           handle,
           handleStat.size,
           signal,
+          outputLimits,
         )
       : await readTextWindow(
           handle,
@@ -224,6 +228,7 @@ export async function executeRead(input: {
           {
             countAll: handleStat.size <= FAST_PATH_MAX_BYTES,
             size: handleStat.size,
+            outputLimits,
           },
           signal,
         );
@@ -237,7 +242,7 @@ export async function executeRead(input: {
         `Offset ${visible.startLine} is out of range for this file (${visible.totalLines} lines)`,
       );
     }
-    const rendered = renderTextResult(visible);
+    const rendered = renderTextResult(visible, outputLimits);
     return done(
       rendered.output,
       buildTextMetadata(pathInfo, visible, rendered),

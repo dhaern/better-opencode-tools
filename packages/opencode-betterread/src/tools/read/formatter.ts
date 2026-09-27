@@ -6,6 +6,8 @@ import {
   MAX_OUTPUT_CHARS,
   OUTPUT_CAPPED_NOTE,
 } from './constants';
+import type { ReadOutputLimits } from './limits';
+import { LEGACY_OUTPUT_LIMITS } from './limits';
 import type {
   DirectoryReadResult,
   ImageInfoResult,
@@ -82,6 +84,7 @@ function buildTextOutput(
 // output budget, walks line costs once and keeps the largest fitting prefix.
 export function renderTextResult(
   result: TextReadResult | NotebookReadResult,
+  outputLimits: ReadOutputLimits = LEGACY_OUTPUT_LIMITS,
 ): RenderedTextResult {
   const rawLines =
     result.endLine < result.startLine ? [] : result.content.split('\n');
@@ -93,6 +96,7 @@ export function renderTextResult(
   const frame = `<path>${escapeStructuredTagValue(result.path)}</path>\n<type>${result.kind === 'notebook' ? 'notebook' : 'file'}</type>\n<content>\n</content>\n`;
   const baseChars = frame.length;
   const baseBytes = Buffer.byteLength(frame, 'utf8');
+  const maxBytes = Math.min(MAX_OUTPUT_BYTES, outputLimits.maxBytes);
   const noteChars = 1 + LINE_TRUNCATED_NOTE.length;
   const cappedFooterChars =
     `(Showing lines ${result.startLine}-`.length +
@@ -110,34 +114,23 @@ export function renderTextResult(
     result.totalLines,
     true,
   );
+  const emptyTail = `${emptyFooter}${truncatedLineShown(0) ? `\n${LINE_TRUNCATED_NOTE}` : ''}\n${OUTPUT_CAPPED_NOTE}`;
   let chars = 0;
   let bytes = 0;
   const asciiContent =
     Buffer.byteLength(result.content, 'utf8') === result.content.length;
   let selected = 0;
   let checking =
-    baseChars +
-      emptyFooter.length +
-      (truncatedLineShown(0) ? noteChars : 0) +
-      1 +
-      OUTPUT_CAPPED_NOTE.length <=
-      MAX_OUTPUT_CHARS &&
-    baseBytes +
-      emptyFooter.length +
-      (truncatedLineShown(0) ? noteChars : 0) +
-      1 +
-      OUTPUT_CAPPED_NOTE.length <=
-      MAX_OUTPUT_BYTES;
+    baseChars + emptyTail.length <= MAX_OUTPUT_CHARS &&
+    baseBytes + Buffer.byteLength(emptyTail, 'utf8') <= maxBytes &&
+    6 + (truncatedLineShown(0) ? 1 : 0) <= outputLimits.maxLines;
   let fullTooLarge = false;
   for (let index = 0; index < rawLines.length; index += 1) {
     const line = `${result.startLine + index}: ${rawLines[index]}`;
     numberedLines.push(line);
     chars += line.length + 1;
     bytes += (asciiContent ? line.length : Buffer.byteLength(line, 'utf8')) + 1;
-    if (
-      baseChars + chars > MAX_OUTPUT_CHARS ||
-      baseBytes + bytes > MAX_OUTPUT_BYTES
-    ) {
+    if (baseChars + chars > MAX_OUTPUT_CHARS || baseBytes + bytes > maxBytes) {
       fullTooLarge = true;
       break;
     }
@@ -160,14 +153,17 @@ export function renderTextResult(
       (truncatedLineShown(index + 1) ? noteChars : 0);
     checking =
       baseChars + chars + footerCost <= MAX_OUTPUT_CHARS &&
-      baseBytes + bytes + footerCost <= MAX_OUTPUT_BYTES;
+      baseBytes + bytes + footerCost <= maxBytes &&
+      7 + index + (truncatedLineShown(index + 1) ? 1 : 0) <=
+        outputLimits.maxLines;
     if (checking) selected = index + 1;
   }
   const fullTail = `${formatFooter(result.startLine, result.endLine, result.totalLines, result.hasMore)}${truncatedLineShown(rawLines.length) ? `\n${LINE_TRUNCATED_NOTE}` : ''}${result.truncatedByBytes ? `\n${OUTPUT_CAPPED_NOTE}` : ''}`;
   const fullFits =
     !fullTooLarge &&
     baseChars + chars + fullTail.length <= MAX_OUTPUT_CHARS &&
-    baseBytes + bytes + Buffer.byteLength(fullTail, 'utf8') <= MAX_OUTPUT_BYTES;
+    baseBytes + bytes + Buffer.byteLength(fullTail, 'utf8') <= maxBytes &&
+    4 + rawLines.length + fullTail.split('\n').length <= outputLimits.maxLines;
   const count = fullFits ? numberedLines.length : selected;
   const visible = numberedLines.slice(0, count);
   const hasMore = fullFits ? result.hasMore : true;

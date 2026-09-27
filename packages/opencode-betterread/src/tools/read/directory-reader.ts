@@ -11,7 +11,8 @@ import {
   escapeStructuredSingleLineValue,
   escapeStructuredTagValue,
 } from './formatter';
-import { getDirectoryLimit } from './limits';
+import type { ReadOutputLimits } from './limits';
+import { getDirectoryLimit, LEGACY_OUTPUT_LIMITS } from './limits';
 import type { DirectoryReadResult } from './types';
 
 const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;
@@ -32,6 +33,7 @@ type DirectoryScanResult = {
 type ReadDirectoryOptions = {
   scanDirectoryEntries?: (resolvedPath: string) => Promise<DirectoryScanResult>;
   displayPath?: string;
+  outputLimits?: ReadOutputLimits;
 };
 
 function directoryPaginationLimitMessage(resolvedPath: string): string {
@@ -153,16 +155,20 @@ function budgetedDirectoryEntries(
   normalizedPath: string,
   entries: string[],
   buildFooter: (entriesCount: number, truncatedByBytes: boolean) => string,
+  outputLimits: ReadOutputLimits,
 ): { selected: string[]; truncatedByBytes: boolean; formattedOutput: string } {
   const escapedPath = escapeStructuredTagValue(normalizedPath);
   const frame = `<path>${escapedPath}</path>\n<type>directory</type>\n<entries>\n\n</entries>\n`;
   let chars = frame.length;
   let bytes = Buffer.byteLength(frame, 'utf8');
-  const fits = (footer: string): boolean =>
+  const maxBytes = Math.min(MAX_OUTPUT_BYTES, outputLimits.maxBytes);
+  const fits = (footer: string, count: number): boolean =>
     chars + footer.length <= MAX_OUTPUT_CHARS &&
-    bytes + Buffer.byteLength(footer, 'utf8') <= MAX_OUTPUT_BYTES;
+    bytes + Buffer.byteLength(footer, 'utf8') <= maxBytes &&
+    5 + Math.max(1, count) + (footer.includes('\n') ? 1 : 0) <=
+      outputLimits.maxLines;
   let selectedCount = 0;
-  let checking = fits(buildFooter(0, true));
+  let checking = fits(buildFooter(0, true), 0);
   const escapedEntries: string[] = [];
   for (const entry of entries) {
     const escaped = escapeDirectoryEntry(entry);
@@ -171,14 +177,18 @@ function budgetedDirectoryEntries(
       Buffer.byteLength(escaped, 'utf8') +
       (escapedEntries.length === 0 ? 0 : 1);
     escapedEntries.push(escaped);
-    if (checking && fits(buildFooter(escapedEntries.length, true))) {
+    if (
+      checking &&
+      fits(buildFooter(escapedEntries.length, true), escapedEntries.length)
+    ) {
       selectedCount = escapedEntries.length;
     } else {
       checking = false;
     }
   }
   const truncatedByBytes =
-    entries.length > 0 && !fits(buildFooter(entries.length, false));
+    entries.length > 0 &&
+    !fits(buildFooter(entries.length, false), entries.length);
   const selected = truncatedByBytes ? entries.slice(0, selectedCount) : entries;
   return {
     selected,
@@ -202,7 +212,11 @@ export async function readDirectory(
   signal?: AbortSignal,
 ): Promise<DirectoryReadResult> {
   signal?.throwIfAborted();
-  const directoryLimit = getDirectoryLimit(limit);
+  const outputLimits = options.outputLimits ?? LEGACY_OUTPUT_LIMITS;
+  const directoryLimit = Math.min(
+    getDirectoryLimit(limit),
+    outputLimits.maxLines,
+  );
   const startIndex = Math.max(offset - 1, 0);
   const scan = await (options.scanDirectoryEntries ?? scanDirectoryEntries)(
     resolvedPath,
@@ -252,6 +266,7 @@ export async function readDirectory(
           hasMore: hasMore(entriesCount, truncated),
           truncatedByBytes: truncated,
         }),
+      outputLimits,
     );
 
   return {

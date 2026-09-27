@@ -10,6 +10,8 @@ import {
   READ_DESCRIPTION,
 } from './constants';
 import { executeRead, inspectReadTarget } from './engine';
+import type { ReadOutputLimits } from './limits';
+import { hostOutputLimits } from './limits';
 import {
   askExternalDirectoryPermission,
   askReadPermission,
@@ -43,7 +45,11 @@ export const readArgsSchema: Record<string, unknown> = {
     ),
 };
 
-export function createReadTool(pluginCtx: PluginInput): ToolDefinition {
+export function createReadTool(
+  pluginCtx: PluginInput & {
+    readOutputLimits?: () => ReadOutputLimits;
+  },
+): ToolDefinition {
   return tool({
     description: READ_DESCRIPTION,
     args: readArgsSchema as Parameters<typeof tool>[0]['args'],
@@ -101,6 +107,7 @@ export function createReadTool(pluginCtx: PluginInput): ToolDefinition {
         directory,
         inspection,
         signal: ctx.abort,
+        outputLimits: pluginCtx.readOutputLimits?.() ?? hostOutputLimits(),
       });
       return {
         output: result.output,
