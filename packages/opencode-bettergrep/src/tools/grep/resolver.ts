@@ -11,7 +11,7 @@ import {
   getInstalledRipgrepPath,
   getInstalledRipgrepPathAsync,
 } from './rg-cache';
-import { AbortWaitError } from './runtime';
+import { AbortWaitError, createSearchAbortError } from './runtime';
 import type { GrepBackend } from './types';
 
 export interface ResolvedGrepCli {
@@ -186,16 +186,12 @@ function raceWithAbort<T>(
   }
 
   if (signal.aborted) {
-    return Promise.reject(
-      new AbortWaitError('Search was cancelled before execution started.'),
-    );
+    return Promise.reject(createSearchAbortError());
   }
 
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
-      reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
+      reject(createSearchAbortError());
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
@@ -272,9 +268,7 @@ function createSharedAutoInstall(
       };
     } catch (error) {
       if (isAbortLikeError(error) || controller.signal.aborted) {
-        throw new AbortWaitError(
-          'Search was cancelled before execution started.',
-        );
+        throw createSearchAbortError();
       }
 
       const fallback = await resolveAsync(deps, controller.signal);
@@ -312,7 +306,7 @@ export async function resolveGrepCliWithAutoInstall(
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
   if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw createSearchAbortError();
   }
 
   const current = await resolveAsync(deps, signal);

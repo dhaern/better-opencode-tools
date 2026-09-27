@@ -1,5 +1,11 @@
 import path from 'node:path';
 
+const CONTROL_ESCAPES: Record<number, string> = {
+  9: '\\t',
+  10: '\\n',
+  13: '\\r',
+};
+
 export function tryDecodeUtf8(bytes: Uint8Array): string | undefined {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -53,16 +59,14 @@ export function sanitizeTitle(value: string, maxLength = 160): string {
   return `${singleLine.slice(0, Math.max(1, maxLength - 3))}...`;
 }
 
-export function escapeControlChars(value: string): string {
+function escapeText(value: string, preserveNewlines: boolean): string {
   let output = '';
   for (const char of value) {
     const code = char.charCodeAt(0);
-    if (code === 0x0d) {
-      output += '\\r';
-    } else if (code === 0x0a) {
-      output += '\\n';
-    } else if (code === 0x09) {
-      output += '\\t';
+    if (code === 0x0a && preserveNewlines) {
+      output += char;
+    } else if (code === 0x0a || code === 0x0d || code === 0x09) {
+      output += CONTROL_ESCAPES[code];
     } else if (code < 0x20 || code === 0x7f) {
       output += `\\x${code.toString(16).padStart(2, '0')}`;
     } else {
@@ -72,69 +76,36 @@ export function escapeControlChars(value: string): string {
   return output;
 }
 
+export function escapeControlChars(value: string): string {
+  return escapeText(value, false);
+}
+
 export function escapeControlCharsPreservingNewlines(value: string): string {
+  return escapeText(value, true);
+}
+
+function escapeBytes(bytes: Uint8Array, escapeControls: boolean): string {
   let output = '';
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code === 0x0d) {
-      output += '\\r';
-    } else if (code === 0x09) {
-      output += '\\t';
-    } else if ((code < 0x20 || code === 0x7f) && code !== 0x0a) {
-      output += `\\x${code.toString(16).padStart(2, '0')}`;
+  for (const byte of bytes) {
+    if (byte === 0x0a || byte === 0x0d || byte === 0x09) {
+      output += escapeControls
+        ? CONTROL_ESCAPES[byte]
+        : String.fromCharCode(byte);
+    } else if (byte >= 0x20 && byte <= 0x7e) {
+      output += String.fromCharCode(byte);
     } else {
-      output += char;
+      output += `\\x${byte.toString(16).padStart(2, '0')}`;
     }
   }
   return output;
 }
 
 export function escapePathBytes(bytes: Uint8Array): string {
-  let output = '';
-  for (const byte of bytes) {
-    if (byte === 0x0a) {
-      output += '\\n';
-      continue;
-    }
-    if (byte === 0x0d) {
-      output += '\\r';
-      continue;
-    }
-    if (byte === 0x09) {
-      output += '\\t';
-      continue;
-    }
-    if (byte >= 0x20 && byte <= 0x7e) {
-      output += String.fromCharCode(byte);
-      continue;
-    }
-    output += `\\x${byte.toString(16).padStart(2, '0')}`;
-  }
-  return output;
+  return escapeBytes(bytes, true);
 }
 
 export function escapeBinaryText(bytes: Uint8Array): string {
-  let output = '';
-  for (const byte of bytes) {
-    if (byte === 0x0a) {
-      output += '\n';
-      continue;
-    }
-    if (byte === 0x0d) {
-      output += '\r';
-      continue;
-    }
-    if (byte === 0x09) {
-      output += '\t';
-      continue;
-    }
-    if (byte >= 0x20 && byte <= 0x7e) {
-      output += String.fromCharCode(byte);
-      continue;
-    }
-    output += `\\x${byte.toString(16).padStart(2, '0')}`;
-  }
-  return output;
+  return escapeBytes(bytes, false);
 }
 
 export function formatNonUtf8TextDisplay(bytes: Uint8Array): string {

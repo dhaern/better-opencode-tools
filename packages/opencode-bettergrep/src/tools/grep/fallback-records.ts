@@ -1,5 +1,4 @@
-import { Readable } from 'node:stream';
-import { GrowableByteBuffer } from './json-stream';
+import { type BinaryReadableStream, consumeBufferedBytes } from './json-stream';
 import {
   formatNonUtf8TextDisplay,
   normalizeDisplayText,
@@ -21,22 +20,6 @@ interface RawContentRecord {
 
 type ContentRecord = RawContentRecord | '--';
 
-function toWebReadableStream(
-  stream: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
-): ReadableStream<Uint8Array> | undefined {
-  if (!stream) {
-    return undefined;
-  }
-
-  if ('getReader' in stream && typeof stream.getReader === 'function') {
-    return stream as ReadableStream<Uint8Array>;
-  }
-
-  return Readable.toWeb(
-    stream as unknown as Readable,
-  ) as unknown as ReadableStream<Uint8Array>;
-}
-
 export function parseContentLine(
   filePath: Uint8Array,
   lineBytes: Uint8Array,
@@ -45,71 +28,37 @@ export function parseContentLine(
   const line = stripSingleLineEnding(
     tryDecodeUtf8(lineBytes) ?? formatNonUtf8TextDisplay(lineBytes),
   );
-  const match = withContext
-    ? line.match(/^(\d+)([:-])(.*)$/)
-    : line.match(/^(\d+):(.*)$/);
-
-  if (!match) {
-    return null;
-  }
-
-  if (withContext) {
-    const [, lineNumberText, separator, text] = match;
-    return {
-      filePath,
-      lineNumber: Number.parseInt(lineNumberText, 10),
-      text: normalizeDisplayText(text),
-      isMatch: separator === ':',
-    };
-  }
-
-  const [, lineNumberText, text] = match;
+  const match = line.match(/^(\d+)([:-])(.*)$/);
+  if (!match || (!withContext && match[2] !== ':')) return null;
   return {
     filePath,
-    lineNumber: Number.parseInt(lineNumberText, 10),
-    text: normalizeDisplayText(text),
-    isMatch: true,
+    lineNumber: Number.parseInt(match[1], 10),
+    text: normalizeDisplayText(match[3]),
+    isMatch: match[2] === ':',
   };
 }
 
 export async function consumeNullPrefixedLinesStream(
-  stream: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
+  stream: BinaryReadableStream,
   onRecord: (record: ContentRecord) => boolean | undefined,
 ): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
-  const buffer = new GrowableByteBuffer();
   let currentPath: Uint8Array | undefined;
   const separator = Uint8Array.from([0x2d, 0x2d, 0x0a]);
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer.append(value);
-
+  return consumeBufferedBytes(stream, (buffer) => {
     while (true) {
       if (currentPath === undefined) {
         // The context group separator must be recognized BEFORE scanning
         // for the next NUL, or it gets glued onto the following path.
         if (buffer.startsWith(separator)) {
           buffer.takePrefix(separator.length);
-          if (onRecord('--') === false) {
-            await reader.cancel();
-            return;
-          }
+          if (onRecord('--') === false) return false;
           continue;
         }
 
         const pathBytes = buffer.takeUntil(0);
-        if (pathBytes !== undefined) {
-          currentPath = pathBytes;
-          continue;
-        }
-
-        break;
+        if (pathBytes === undefined) break;
+        currentPath = pathBytes;
+        continue;
       }
 
       const lineBytes = buffer.takeUntil(0x0a);
@@ -120,24 +69,7 @@ export async function consumeNullPrefixedLinesStream(
         line: lineBytes,
       };
       currentPath = undefined;
-      if (onRecord(record) === false) {
-        await reader.cancel();
-        return;
-      }
+      if (onRecord(record) === false) return false;
     }
-
-    if (done) {
-      break;
-    }
-  }
-
-  if (currentPath !== undefined) {
-    const lineBytes = buffer.takeUntil(0x0a);
-    if (lineBytes !== undefined) {
-      onRecord({
-        filePath: currentPath,
-        line: lineBytes,
-      });
-    }
-  }
+  });
 }

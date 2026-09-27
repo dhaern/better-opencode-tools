@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { AbortWaitError, createSearchAbortError } from '../../utils/abort';
 import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
 import {
   DEFAULT_GREP_MAX_CONCURRENCY,
@@ -8,8 +9,9 @@ import {
 } from './constants';
 import type { GrepBackend } from './types';
 
+export { AbortWaitError, createSearchAbortError } from '../../utils/abort';
+
 export class RetryableRipgrepError extends Error {}
-export class AbortWaitError extends Error {}
 
 export type GrepProcess = CrossSpawnResult & {
   proc: ChildProcess;
@@ -72,9 +74,7 @@ class Semaphore {
 
   private acquire(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) {
-      return Promise.reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
+      return Promise.reject(createSearchAbortError());
     }
 
     if (this.active < this.limit) {
@@ -93,9 +93,7 @@ class Semaphore {
         if (index >= 0) {
           this.queue.splice(index, 1);
         }
-        reject(
-          new AbortWaitError('Search was cancelled before execution started.'),
-        );
+        reject(createSearchAbortError());
       };
 
       this.queue.push(entry);

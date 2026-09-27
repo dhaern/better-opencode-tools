@@ -16,6 +16,7 @@ import { buildRgCommand } from './rg-args';
 import {
   AbortWaitError,
   createGlobalAbortState,
+  createSearchAbortError,
   getRetryBackoffMs,
   RetryableRipgrepError,
   RUNNER_SEMAPHORE,
@@ -88,7 +89,7 @@ async function resolveCliForExecution(
   signal: AbortSignal,
 ): Promise<ResolvedGrepCli> {
   if (signal.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw createSearchAbortError();
   }
 
   return resolveGrepCliWithAutoInstall({}, signal);

@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { readTextStream } from '../tools/grep/json-stream';
 
 export interface CrossSpawnResult {
   proc: ChildProcess;
@@ -130,59 +131,19 @@ function collectStream(
   stream: NodeJS.ReadableStream | null,
   maxChars = MAX_COLLECTED_OUTPUT_CHARS,
 ): () => Promise<string> {
-  if (!stream) return () => Promise.resolve('');
   let collected: Promise<string> | undefined;
-
   return () => {
-    if (collected) return collected;
-
-    collected = new Promise<string>((resolve, reject) => {
-      let text = '';
-      let settled = false;
-
-      const cleanup = () => {
-        stream.removeListener('data', onData);
-        stream.removeListener('end', onEnd);
-        stream.removeListener('close', onClose);
-        stream.removeListener('error', onError);
-      };
-      const finish = (value: string) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      };
-      const onData = (chunk: Buffer | string | Uint8Array) => {
-        const next =
-          typeof chunk === 'string'
-            ? chunk
-            : Buffer.from(chunk).toString('utf8');
-        const remaining = maxChars - text.length;
-        if (next.length > remaining) {
-          text += next.slice(0, Math.max(0, remaining));
-          finish(`${text}\n[process output truncated]`);
-          // Keep draining the pipe without retaining the rest in memory.
-          stream.removeListener('data', onData);
-          stream.resume?.();
-          return;
-        }
-        text += next;
-      };
-      const onEnd = () => finish(text);
-      const onClose = () => finish(text);
-      const onError = (error: Error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-
-      stream.on('data', onData);
-      stream.on('end', onEnd);
-      stream.on('close', onClose);
-      stream.on('error', onError);
-    });
-
+    // Node buffers the paused stream until its first collector call.
+    if (!collected) {
+      collected = readTextStream(
+        stream,
+        maxChars,
+        '[process output truncated]',
+        false,
+        false,
+      );
+      void collected.catch(() => undefined);
+    }
     return collected;
   };
 }

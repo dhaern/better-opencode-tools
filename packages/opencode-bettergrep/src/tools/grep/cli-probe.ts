@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { sync as whichSync } from 'which';
+import { createSearchAbortError } from '../../utils/abort';
 import {
   type CrossSpawnResult,
   crossSpawn,
@@ -8,7 +9,6 @@ import {
   withTimeout,
 } from '../../utils/compat';
 import { readTextStream } from './json-stream';
-import { AbortWaitError } from './runtime';
 
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -24,7 +24,7 @@ export async function probeExecutable(
   timedOut: boolean;
 }> {
   if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw createSearchAbortError();
   }
 
   let proc: CrossSpawnResult;
@@ -92,7 +92,7 @@ export async function probeExecutable(
   const [stdoutResult, stderrResult] = await drain;
 
   if (stopKind === 'cancel') {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw createSearchAbortError();
   }
 
   return {

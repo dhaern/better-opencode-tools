@@ -2,7 +2,7 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolContext } from '@opencode-ai/plugin';
 import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
-import { AbortWaitError } from './runtime';
+import { createSearchAbortError } from './runtime';
 import type { NormalizedGrepInput } from './types';
 
 function contains(root: string, target: string): boolean {
@@ -77,9 +77,7 @@ export async function collectExternalSymlinkDestinations(
 
   const walk = async (dirPath: string): Promise<void> => {
     if (signal?.aborted) {
-      throw new AbortWaitError(
-        'Search was cancelled before execution started.',
-      );
+      throw createSearchAbortError();
     }
 
     let realDir: string;

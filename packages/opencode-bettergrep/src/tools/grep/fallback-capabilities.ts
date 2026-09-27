@@ -1,6 +1,6 @@
 import { probeExecutable } from './cli-probe';
 import {
-  AbortWaitError,
+  createSearchAbortError,
   isTransientFailure,
   isTransientStderr,
 } from './runtime';
@@ -105,16 +105,12 @@ function raceWithAbort<T>(
   signal: AbortSignal,
 ): Promise<T> {
   if (signal.aborted) {
-    return Promise.reject(
-      new AbortWaitError('Search was cancelled before execution started.'),
-    );
+    return Promise.reject(createSearchAbortError());
   }
 
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
-      reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
+      reject(createSearchAbortError());
     };
     signal.addEventListener('abort', onAbort, { once: true });
     promise.then(

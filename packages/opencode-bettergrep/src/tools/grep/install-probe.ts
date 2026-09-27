@@ -1,4 +1,5 @@
 import { sync as whichSync } from 'which';
+import { throwIfAborted } from '../../utils/abort';
 import {
   type CrossSpawnResult,
   crossSpawn,
@@ -8,19 +9,9 @@ import {
 } from '../../utils/compat';
 import { readTextStream } from './json-stream';
 
+export { createAbortError, throwIfAborted } from '../../utils/abort';
+
 const PROBE_TIMEOUT_MS = 5_000;
-
-export function createAbortError(): Error {
-  const error = new Error('ripgrep auto-install was aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
-export function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
-}
 
 export async function waitForExitAndStderr(
   proc: CrossSpawnResult,

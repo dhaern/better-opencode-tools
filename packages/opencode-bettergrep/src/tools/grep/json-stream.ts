@@ -3,34 +3,16 @@ import { MAX_STDERR_CHARS, RG_BINARY } from './constants';
 import { formatNonUtf8TextDisplay, tryDecodeUtf8 } from './path-utils';
 import type { RgJsonEvent, RgPathPayload, RgTextPayload } from './types';
 
-function decodeChunk(decoder: TextDecoder, chunk?: Uint8Array): string {
-  return chunk ? decoder.decode(chunk, { stream: true }) : decoder.decode();
-}
-
-function decodeBase64Text(value: string): string {
-  const bytes = Buffer.from(value, 'base64');
-  return tryDecodeUtf8(bytes) ?? formatNonUtf8TextDisplay(bytes);
-}
-
 export function decodeRgPayload(
   payload: RgTextPayload | RgPathPayload | undefined,
 ): string {
-  if (!payload) {
-    return '';
-  }
-
-  if (typeof payload.text === 'string') {
-    return payload.text;
-  }
-
-  if (typeof payload.bytes === 'string') {
-    return decodeBase64Text(payload.bytes);
-  }
-
-  return '';
+  if (typeof payload?.text === 'string') return payload.text;
+  if (typeof payload?.bytes !== 'string') return '';
+  const bytes = Buffer.from(payload.bytes, 'base64');
+  return tryDecodeUtf8(bytes) ?? formatNonUtf8TextDisplay(bytes);
 }
 
-type BinaryReadableStream =
+export type BinaryReadableStream =
   | NodeJS.ReadableStream
   | ReadableStream<Uint8Array>
   | null
@@ -39,17 +21,12 @@ type BinaryReadableStream =
 function toWebReadableStream(
   stream: BinaryReadableStream,
 ): ReadableStream<Uint8Array> | null {
-  if (!stream) {
-    return null;
-  }
-
-  if ('getReader' in stream && typeof stream.getReader === 'function') {
-    return stream as ReadableStream<Uint8Array>;
-  }
-
-  return Readable.toWeb(
-    stream as unknown as Readable,
-  ) as unknown as ReadableStream<Uint8Array>;
+  if (!stream) return null;
+  return 'getReader' in stream && typeof stream.getReader === 'function'
+    ? (stream as ReadableStream<Uint8Array>)
+    : (Readable.toWeb(
+        stream as unknown as Readable,
+      ) as unknown as ReadableStream<Uint8Array>);
 }
 
 export class GrowableByteBuffer {
@@ -59,30 +36,38 @@ export class GrowableByteBuffer {
   private searchStart = 0;
 
   append(chunk?: Uint8Array): void {
-    if (!chunk || chunk.length === 0) {
-      return;
+    if (!chunk?.length) return;
+    if (this.end + chunk.length > this.buffer.length) {
+      const length = this.end - this.start;
+      if (length + chunk.length <= this.buffer.length) {
+        this.buffer.copyWithin(0, this.start, this.end);
+      } else {
+        const next = new Uint8Array(
+          Math.max(64, this.buffer.length * 2, length + chunk.length),
+        );
+        next.set(this.buffer.subarray(this.start, this.end));
+        this.buffer = next;
+      }
+      this.searchStart = Math.max(0, this.searchStart - this.start);
+      this.start = 0;
+      this.end = length;
     }
-
-    this.ensureCapacity(chunk.length);
     this.buffer.set(chunk, this.end);
     this.end += chunk.length;
   }
 
   takeUntil(delimiter: number): Uint8Array | undefined {
-    const scanStart = Math.max(this.start, this.searchStart);
     const relativeIndex = this.buffer
-      .subarray(scanStart, this.end)
+      .subarray(this.searchStart, this.end)
       .indexOf(delimiter);
     if (relativeIndex < 0) {
       this.searchStart = this.end;
       return undefined;
     }
 
-    const absoluteIndex = scanStart + relativeIndex;
+    const absoluteIndex = this.searchStart + relativeIndex;
     const item = this.buffer.slice(this.start, absoluteIndex);
-    this.start = absoluteIndex + 1;
-    this.searchStart = this.start;
-    this.compactIfNeeded();
+    this.advance(absoluteIndex + 1);
     return item;
   }
 
@@ -97,63 +82,41 @@ export class GrowableByteBuffer {
   takePrefix(length: number): Uint8Array | undefined {
     if (length < 0 || this.end - this.start < length) return undefined;
     const item = this.buffer.slice(this.start, this.start + length);
-    this.start += length;
-    this.searchStart = this.start;
-    this.compactIfNeeded();
+    this.advance(this.start + length);
     return item;
   }
 
-  private ensureCapacity(additional: number): void {
-    const currentLength = this.end - this.start;
-    const requiredLength = currentLength + additional;
-
-    if (this.buffer.length === 0) {
-      this.buffer = new Uint8Array(Math.max(64, requiredLength));
-      return;
-    }
-
-    if (requiredLength <= this.buffer.length) {
-      if (this.end + additional <= this.buffer.length) {
-        return;
-      }
-
-      const previousStart = this.start;
-      this.buffer.copyWithin(0, this.start, this.end);
-      this.start = 0;
-      this.end = currentLength;
-      this.searchStart = Math.max(0, this.searchStart - previousStart);
-      return;
-    }
-
-    const next = new Uint8Array(
-      Math.max(this.buffer.length * 2, requiredLength),
-    );
-    next.set(this.buffer.subarray(this.start, this.end), 0);
-    this.searchStart = Math.max(0, this.searchStart - this.start);
-    this.buffer = next;
-    this.start = 0;
-    this.end = currentLength;
+  drain(): Uint8Array {
+    return this.takePrefix(this.end - this.start) ?? new Uint8Array();
   }
 
-  private compactIfNeeded(): void {
-    const currentLength = this.end - this.start;
-
-    if (currentLength === 0) {
+  private advance(position: number): void {
+    this.start = position;
+    this.searchStart = position;
+    if (position === this.end) {
       this.start = 0;
       this.end = 0;
       this.searchStart = 0;
+    }
+  }
+}
+
+export async function consumeBufferedBytes(
+  stream: BinaryReadableStream,
+  onBuffer: (buffer: GrowableByteBuffer, done: boolean) => boolean | undefined,
+): Promise<void> {
+  const readable = toWebReadableStream(stream);
+  if (!readable) return;
+  const reader = readable.getReader();
+  const buffer = new GrowableByteBuffer();
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer.append(value);
+    if (onBuffer(buffer, done) === false) {
+      await reader.cancel();
       return;
     }
-
-    if (this.start < this.buffer.length / 2) {
-      return;
-    }
-
-    const previousStart = this.start;
-    this.buffer.copyWithin(0, this.start, this.end);
-    this.start = 0;
-    this.end = currentLength;
-    this.searchStart = Math.max(0, this.searchStart - previousStart);
+    if (done) return;
   }
 }
 
@@ -161,158 +124,80 @@ export async function consumeNullItemsBytes(
   stream: BinaryReadableStream,
   onItem: (item: Uint8Array) => boolean | undefined,
 ): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
-  const buffer = new GrowableByteBuffer();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer.append(value);
-
-    let item = buffer.takeUntil(0);
-    while (item !== undefined) {
-      if (onItem(item) === false) {
-        await reader.cancel();
-        return;
-      }
-
-      item = buffer.takeUntil(0);
+  return consumeBufferedBytes(stream, (buffer) => {
+    while (true) {
+      const item = buffer.takeUntil(0);
+      if (item === undefined) break;
+      if (onItem(item) === false) return false;
     }
-
-    if (done) {
-      return;
-    }
-  }
+  });
 }
 
 export async function consumeNullCountPairsBytes(
   stream: BinaryReadableStream,
   onPair: (filePath: Uint8Array, countText: string) => boolean | undefined,
 ): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
   const decoder = new TextDecoder();
-  const buffer = new GrowableByteBuffer();
   let currentPath: Uint8Array | undefined;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer.append(value);
-
+  return consumeBufferedBytes(stream, (buffer) => {
     while (true) {
       if (currentPath === undefined) {
         const pathBytes = buffer.takeUntil(0);
-        if (pathBytes === undefined) {
-          break;
-        }
-
+        if (pathBytes === undefined) break;
         currentPath = pathBytes;
         continue;
       }
-
       const countBytes = buffer.takeUntil(0x0a);
-      if (countBytes === undefined) {
-        break;
-      }
-
+      if (countBytes === undefined) break;
       const pathBytes = currentPath;
       currentPath = undefined;
       const countText = decoder.decode(countBytes).replace(/\r$/, '');
-
-      if (onPair(pathBytes, countText) === false) {
-        await reader.cancel();
-        return;
-      }
+      if (onPair(pathBytes, countText) === false) return false;
     }
-
-    if (done) {
-      return;
-    }
-  }
+  });
 }
 
 export async function consumeRgJsonStream(
   stream: BinaryReadableStream,
   onEvent: (event: RgJsonEvent) => boolean | undefined,
 ): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return;
-  }
-
-  const reader = readable.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decodeChunk(decoder, value);
-
-    let newlineIndex = buffer.indexOf('\n');
-    while (newlineIndex >= 0) {
-      const rawLine = buffer.slice(0, newlineIndex).replace(/\r$/, '');
-      buffer = buffer.slice(newlineIndex + 1);
-
-      if (rawLine.length > 0) {
-        let parsed: RgJsonEvent;
-        try {
-          parsed = JSON.parse(rawLine) as RgJsonEvent;
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `${RG_BINARY} returned invalid JSON: ${message}. Line: ${rawLine.slice(0, 200)}`,
-          );
-        }
-
-        if (onEvent(parsed) === false) {
-          await reader.cancel();
-          return;
-        }
+  return consumeBufferedBytes(stream, (buffer, done) => {
+    const parse = (
+      bytes: Uint8Array,
+      trailing: boolean,
+    ): boolean | undefined => {
+      const line = decoder.decode(bytes).replace(/\r$/, '');
+      if (!line) return;
+      let event: RgJsonEvent;
+      try {
+        event = JSON.parse(line) as RgJsonEvent;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${RG_BINARY} returned invalid ${trailing ? 'trailing JSON' : 'JSON'}: ${message}. Line: ${line.slice(0, 200)}`,
+        );
       }
-
-      newlineIndex = buffer.indexOf('\n');
+      return onEvent(event);
+    };
+    while (true) {
+      const line = buffer.takeUntil(0x0a);
+      if (line === undefined) break;
+      if (parse(line, false) === false) return false;
     }
-
-    if (done) {
-      break;
-    }
-  }
-
-  buffer += decodeChunk(decoder);
-  const trailing = buffer.replace(/\r$/, '');
-  if (trailing.length === 0) {
-    return;
-  }
-
-  try {
-    if (onEvent(JSON.parse(trailing) as RgJsonEvent) === false) {
-      await reader.cancel();
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `${RG_BINARY} returned invalid trailing JSON: ${message}. Line: ${trailing.slice(0, 200)}`,
-    );
-  }
+    if (done && parse(buffer.drain(), true) === false) return false;
+  });
 }
 
 export async function readTextStream(
   stream: BinaryReadableStream,
   maxChars = MAX_STDERR_CHARS,
+  suffix = '[stderr truncated]',
+  preserveOnError = true,
+  cancelOnLimit = true,
 ): Promise<string> {
   const readable = toWebReadableStream(stream);
-  if (!readable) {
-    return '';
-  }
+  if (!readable) return '';
 
   const reader = readable.getReader();
   const decoder = new TextDecoder();
@@ -322,23 +207,35 @@ export async function readTextStream(
     let result: Awaited<ReturnType<typeof reader.read>>;
     try {
       result = await reader.read();
-    } catch {
-      // Stream was destroyed (e.g. force-closed after a probe timeout):
-      // keep whatever was collected instead of rejecting.
+    } catch (error) {
+      // Preserve partial output after a forced pipe close.
+      if (!preserveOnError) throw error;
       break;
     }
     const { done, value } = result;
-    text += decodeChunk(decoder, value);
+    text += value ? decoder.decode(value, { stream: true }) : decoder.decode();
 
     if (text.length > maxChars) {
-      text = `${text.slice(0, maxChars)}\n[stderr truncated]`;
-      await reader.cancel();
+      text = `${text.slice(0, maxChars)}\n${suffix}`;
+      if (cancelOnLimit) {
+        await reader.cancel();
+      } else {
+        // Keep the child's pipe drained without retaining output or waiting
+        // for its exit; cancelling a Node pipe would cause a child EPIPE.
+        void (async () => {
+          try {
+            while (!(await reader.read()).done) {
+              /* drain */
+            }
+          } catch {
+            /* stream closed */
+          }
+        })();
+      }
       break;
     }
 
-    if (done) {
-      break;
-    }
+    if (done) break;
   }
 
   return text;
