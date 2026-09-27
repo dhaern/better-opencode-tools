@@ -2,6 +2,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   chmodSync,
+  closeSync,
+  copyFileSync,
+  openSync,
   readFileSync,
   symlinkSync,
   utimesSync,
@@ -111,6 +114,46 @@ describe('tools/grep/runner', () => {
       expect(result.totalMatches).toBeGreaterThan(0);
     } finally {
       process.env.PATH = previousPath;
+    }
+  });
+
+  test('synchronous transient GNU grep spawn failure retains the resolved backend', async () => {
+    const repo = temps.createRepo();
+    const binDir = temps.createDir('bettergrep-busy-grep');
+    const cacheDir = temps.createDir('bettergrep-busy-cache');
+    const binary = path.join(binDir, 'grep');
+    copyFileSync(which.sync('grep', { nothrow: false }), binary);
+    chmodSync(binary, 0o755);
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repo, fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    const previousCache = process.env.XDG_CACHE_HOME;
+    const previousFetch = globalThis.fetch;
+    let writer: number | undefined;
+    try {
+      process.env.PATH = binDir;
+      process.env.XDG_CACHE_HOME = cacheDir;
+      globalThis.fetch = Object.assign(
+        async () => {
+          throw new Error('offline auto-install');
+        },
+        { preconnect: previousFetch.preconnect },
+      );
+      const first = await runRipgrep(input, new AbortController().signal);
+      expect(first.backend).toBe('grep');
+      expect(first.error).toBeUndefined();
+      writer = openSync(binary, 'r+');
+
+      const result = await runRipgrep(input, new AbortController().signal);
+      expect(result.error).toContain('ETXTBSY');
+      expect(result.backend).toBe('grep');
+    } finally {
+      if (writer !== undefined) closeSync(writer);
+      process.env.PATH = previousPath;
+      process.env.XDG_CACHE_HOME = previousCache;
+      globalThis.fetch = previousFetch;
     }
   });
 

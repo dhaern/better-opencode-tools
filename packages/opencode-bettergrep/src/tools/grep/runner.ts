@@ -205,6 +205,7 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
       finalResult = {
         ...createEmptyResult(input, command),
         ...buildFailureMeta(input, previewCli),
+        backend: previewCli.backend,
         error: toErrorMessage(error),
       };
     }
