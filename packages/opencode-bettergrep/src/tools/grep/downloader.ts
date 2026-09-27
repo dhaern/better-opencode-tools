@@ -11,7 +11,7 @@ import {
   hasExecutable,
   throwIfAborted,
   waitForExitAndStderr,
-} from './install-probe';
+} from './cli-probe';
 import {
   acquireInstallLock,
   computeSha256Async,

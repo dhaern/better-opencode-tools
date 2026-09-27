@@ -4,8 +4,8 @@ import {
   throwIfAborted as assertNotAborted,
   createSearchAbortError,
 } from '../../utils/abort';
+import { createAbortError, throwIfAborted } from './cli-probe';
 import { consumeNullPrefixedLinesStream } from './fallback-records';
-import { createAbortError, throwIfAborted } from './install-probe';
 import {
   consumeNullCountPairsBytes,
   consumeNullItemsBytes,

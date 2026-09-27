@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { probeCommand, throwIfAborted } from './install-probe';
+import { probeCommand, throwIfAborted } from './cli-probe';
 
 interface RipgrepReleaseAsset {
   name?: string;

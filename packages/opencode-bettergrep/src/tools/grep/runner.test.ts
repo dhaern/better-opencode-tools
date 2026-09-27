@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { utimesSync, writeFileSync } from 'node:fs';
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { executeFilesMode } from './direct';
 import { normalizeGrepInput } from './normalize';
@@ -11,6 +11,42 @@ import type { GrepToolInput } from './types';
 
 describe('tools/grep/runner', () => {
   const temps = createTempTracker();
+
+  test('invalidates the memoized probe after an ENOENT execution failure', async () => {
+    const repoDir = temps.createRepo();
+    const wrapperDir = temps.createDir('bettergrep-spawn-failure');
+    const calls = path.join(wrapperDir, 'probes');
+    const binary = path.join(wrapperDir, 'rg');
+    writeFileSync(
+      binary,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        `  printf 'probe\\n' >> "${calls}"`,
+        "  printf 'ripgrep 15.2.0\\n'",
+        '  exit 0',
+        'fi',
+        "printf 'spawn failed: ENOENT\\n' >&2",
+        'exit 2',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repoDir, fixed_strings: true },
+      createRepoContext(repoDir) as any,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = `${wrapperDir}${path.delimiter}${previousPath ?? ''}`;
+      const first = await runRipgrep(input, new AbortController().signal);
+      const second = await runRipgrep(input, new AbortController().signal);
+      expect(first.error).toContain('ENOENT');
+      expect(second.error).toContain('ENOENT');
+      expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(2);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
 
   function createNormalized(
     input: GrepToolInput,

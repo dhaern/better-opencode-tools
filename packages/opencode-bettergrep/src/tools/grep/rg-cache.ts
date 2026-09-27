@@ -11,7 +11,7 @@ import {
 import { readFile as readFileAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { probeCommand, throwIfAborted } from './install-probe';
+import { probeCommand, throwIfAborted } from './cli-probe';
 
 const INSTALL_LOCK_WAIT_MS = 50;
 

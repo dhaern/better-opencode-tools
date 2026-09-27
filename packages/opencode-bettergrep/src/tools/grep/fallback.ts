@@ -1,4 +1,4 @@
-import { ensureGnuGrep } from './fallback-capabilities';
+import { ensureGnuGrep } from './cli-probe';
 import { buildGrepCommand } from './fallback-command';
 import { consumeContentOutput } from './fallback-content';
 import {

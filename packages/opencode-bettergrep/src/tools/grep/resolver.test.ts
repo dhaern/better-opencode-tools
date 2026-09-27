@@ -1,11 +1,58 @@
 /// <reference types="bun-types" />
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, jest, mock, test } from 'bun:test';
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { probeExecutable } from './cli-probe';
 import { resolveGrepCli, resolveGrepCliWithAutoInstall } from './resolver';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
-  createTempTracker({ resetResolver: true });
+  const temps = createTempTracker({ resetResolver: true });
+
+  test('memo reuses a valid probe per deps, then invalidates on stat, PATH, and deps changes', async () => {
+    const dir = temps.createDir('bettergrep-probe-memo');
+    const binary = path.join(dir, 'rg-stub');
+    const calls = path.join(dir, 'calls');
+    const script = (tag: string) =>
+      `#!/bin/sh\nprintf 'hit\\n' >> "${calls}"\nprintf 'ripgrep ${tag}\\n'\n`;
+    writeFileSync(binary, script('v1'), { mode: 0o755 });
+    const deps = {
+      findExecutable: (name: string) => (name === 'rg' ? binary : null),
+    };
+    const run = () => resolveGrepCliWithAutoInstall(deps);
+    const count = () => readFileSync(calls, 'utf8').trim().split('\n').length;
+
+    expect((await run()).path).toBe(binary);
+    expect((await run()).path).toBe(binary);
+    expect(count()).toBe(1);
+
+    writeFileSync(binary, script('v222222'), { mode: 0o755 });
+    utimesSync(
+      binary,
+      new Date('2020-01-01T00:00:00Z'),
+      new Date('2020-01-01T00:00:00Z'),
+    );
+    await run();
+    expect(count()).toBe(2);
+
+    const previousPath = process.env.PATH;
+    const previousCache = process.env.XDG_CACHE_HOME;
+    try {
+      process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`;
+      await run();
+      expect(count()).toBe(3);
+      process.env.XDG_CACHE_HOME = dir;
+      await run();
+      expect(count()).toBe(4);
+    } finally {
+      process.env.PATH = previousPath;
+      process.env.XDG_CACHE_HOME = previousCache;
+    }
+    await run();
+    expect(count()).toBe(5);
+    await resolveGrepCliWithAutoInstall({ ...deps });
+    expect(count()).toBe(6);
+  });
 
   test.each([
     {
@@ -121,6 +168,48 @@ describe('tools/grep/resolver', () => {
     );
 
     expect(result.timedOut).toBe(true);
+  });
+
+  test('probeExecutable timeout uses one deadline with a stub process and fake timers', async () => {
+    jest.useFakeTimers();
+    try {
+      let resolveExit!: (code: number) => void;
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      const empty = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        });
+      const kill = mock(() => {
+        resolveExit(1);
+        return true;
+      });
+      const proc = {
+        proc: { stdout: empty(), stderr: empty() },
+        exited,
+        kill,
+        get exitCode() {
+          return null;
+        },
+      };
+      const pending = probeExecutable(
+        'stub',
+        ['--version'],
+        undefined,
+        500,
+        () => proc as never,
+      );
+      jest.advanceTimersByTime(499);
+      expect(kill).toHaveBeenCalledTimes(0);
+      jest.advanceTimersByTime(1);
+      expect((await pending).timedOut).toBe(true);
+      expect(kill).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('probeExecutable aborts a running probe without leaving it pending', async () => {

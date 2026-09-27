@@ -8,6 +8,7 @@ import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
 import { buildDiscoveryInput, executeMtimeMode } from './mtime';
 import {
+  invalidateGrepCliResolverCache,
   type ResolvedGrepCli,
   resolveGrepCliWithAutoInstall,
 } from './resolver';
@@ -29,6 +30,15 @@ import type {
   GrepSearchResult,
   NormalizedGrepInput,
 } from './types';
+
+function invalidateIfSpawnFailed(result: GrepSearchResult): void {
+  if (
+    result.error &&
+    /\b(?:ENOENT|EACCES)\b|not available/i.test(result.error)
+  ) {
+    invalidateGrepCliResolverCache();
+  }
+}
 
 function buildFailureMeta(
   input: NormalizedGrepInput,
@@ -92,7 +102,7 @@ async function resolveCliForExecution(
     throw createSearchAbortError();
   }
 
-  return resolveGrepCliWithAutoInstall({}, signal);
+  return resolveGrepCliWithAutoInstall(undefined, signal);
 }
 
 export const runRipgrep: GrepRunner = async (input, signal) => {
@@ -144,6 +154,7 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
           timeoutMs: Math.max(1, remainingTimeout(deadline)),
         };
         const result = await executeOnce(grepInput, globalAbort.signal, cli);
+        invalidateIfSpawnFailed(result);
         result.retryCount = attempt;
         return result;
       }
@@ -168,6 +179,7 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
             globalAbort.signal,
             cli,
           );
+          invalidateIfSpawnFailed(result);
           result.retryCount = attempt;
           return result;
         } catch (error) {
