@@ -111,40 +111,39 @@ export function imageDimensions(mime: string, bytes: Buffer): Dimensions {
   }
 }
 
-// Reads up to cap+1 bytes through explicitly positioned operations without
-// moving the shared handle's cursor, including when the handle returns short reads.
+// Read straight into a single positioned buffer sized for the known file,
+// growing only when a size hint is stale. One extra byte detects an over-cap
+// file, while short reads and cancellation remain supported.
 export async function readBoundedBytes(
   handle: FileHandle,
   cap: number,
   signal?: AbortSignal,
+  sizeHint = 64 * 1024,
 ): Promise<Buffer> {
-  const chunks: Buffer[] = [];
+  let buffer = Buffer.allocUnsafe(Math.min(cap, sizeHint) + 1);
   let total = 0;
-  const chunkBuffer = Buffer.alloc(Math.min(1024 * 1024, cap + 1));
-  let position = 0;
-
   for (;;) {
     signal?.throwIfAborted();
-    const remaining = cap + 1 - total;
-    if (remaining <= 0) break;
+    if (total === buffer.length) {
+      if (total > cap) break;
+      const grown = Buffer.allocUnsafe(Math.min(cap + 1, buffer.length * 2));
+      buffer.copy(grown, 0, 0, total);
+      buffer = grown;
+    }
     const { bytesRead } = await handle.read(
-      chunkBuffer,
-      0,
-      Math.min(chunkBuffer.length, remaining),
-      position,
+      buffer,
+      total,
+      buffer.length - total,
+      total,
     );
     if (bytesRead === 0) break;
-    position += bytesRead;
     total += bytesRead;
-    chunks.push(Buffer.from(chunkBuffer.subarray(0, bytesRead)));
-    if (total > cap) break;
   }
-
   if (total > cap) {
     throw new Error(`Embedded attachment exceeds the ${cap} byte limit`);
   }
   signal?.throwIfAborted();
-  return Buffer.concat(chunks, total);
+  return buffer.subarray(0, total);
 }
 
 // The host only delivers attachments whose URL is an embedded `data:` URL

@@ -175,6 +175,7 @@ export async function executeRead(input: {
         handle,
         MAX_EMBEDDED_ATTACHMENT_BYTES,
         signal,
+        handleStat.size,
       );
       const attachments = [dataAttachment(readPath, mime, bytes)];
       if (mime === 'application/pdf') {

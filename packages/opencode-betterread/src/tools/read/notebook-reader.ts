@@ -62,6 +62,7 @@ export async function readNotebook(
           file,
           MAX_PARSED_NOTEBOOK_BYTES,
           signal,
+          size,
         );
         const lines = notebookLines(raw.toString('utf8'));
         const selection = selectBudgetedLines(lines, offset, limit);

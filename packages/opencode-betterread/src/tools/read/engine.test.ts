@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readBoundedBytes } from './attachments';
@@ -34,6 +34,62 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('grows past a stale attachment size hint and still enforces the cap', async () => {
+    const payload = Buffer.from('0123456789abcdefghijklmn');
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        const bytesRead = Math.max(
+          0,
+          Math.min(length, payload.length - position),
+        );
+        payload.copy(buffer, offset, position, position + bytesRead);
+        return { buffer, bytesRead };
+      },
+    } as any;
+
+    expect(await readBoundedBytes(handle, 64, undefined, 4)).toEqual(payload);
+    expect(
+      await readBoundedBytes(handle, payload.length, undefined, 4),
+    ).toEqual(payload);
+    await expect(readBoundedBytes(handle, 10, undefined, 4)).rejects.toThrow(
+      'Embedded attachment exceeds the 10 byte limit',
+    );
+  });
+
+  test('reads an attachment of known size with one data read', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'large.png');
+    const bytes = Buffer.concat([tinyPng, Buffer.alloc(3 * 1024 * 1024, 1)]);
+    await writeFile(filePath, bytes);
+    const file = await open(filePath, 'r');
+    let reads = 0;
+    const handle = {
+      read: (...args: Parameters<typeof file.read>) => {
+        reads += 1;
+        return file.read(...args);
+      },
+    } as any;
+
+    try {
+      expect(
+        await readBoundedBytes(
+          handle,
+          20 * 1024 * 1024,
+          undefined,
+          bytes.length,
+        ),
+      ).toEqual(bytes);
+      expect(reads).toBeLessThanOrEqual(3);
+    } finally {
+      await file.close();
+    }
+  });
+
   test('does not misclassify text with BM or high-bit signatures as images/PDFs', async () => {
     const directory = await createWorkspace();
     const cases: [string, Buffer | string][] = [
