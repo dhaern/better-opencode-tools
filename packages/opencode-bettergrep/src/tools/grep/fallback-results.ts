@@ -10,7 +10,11 @@ import {
   trimFilesToLineLimit,
 } from './result-utils';
 import { type GrepProcess, killProcess } from './runtime';
-import type { GrepFileMatch, NormalizedGrepInput } from './types';
+import type {
+  GrepFileMatch,
+  GrepSearchResult,
+  NormalizedGrepInput,
+} from './types';
 
 type FileListInput = Pick<
   NormalizedGrepInput,
@@ -166,9 +170,8 @@ export function admitFileBytes(
 export async function collectFileEntries(
   proc: GrepProcess,
   input: FileListInput,
-  visit: (
-    yieldFile: (filePath: Uint8Array, matchCount: number) => boolean,
-  ) => Promise<void>,
+  stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
+  mode: 'count' | 'files',
   dropFalseNonUtf8 = false,
 ): Promise<{
   files: GrepFileMatch[];
@@ -177,6 +180,7 @@ export async function collectFileEntries(
 }> {
   const files = new Map<string, GrepFileMatch>();
   let limitReached = false;
+  let skippedLines = 0;
   const sorted = input.sortBy === 'path';
   const admission = sorted
     ? createSortedAdmission(
@@ -186,7 +190,7 @@ export async function collectFileEntries(
       )
     : null;
 
-  await visit((filePath, matchCount) => {
+  const yieldFile = (filePath: Uint8Array, matchCount: number): boolean => {
     const file = admitFileBytes(
       files,
       admission,
@@ -204,7 +208,29 @@ export async function collectFileEntries(
       return false;
     }
     return true;
-  });
+  };
+
+  if (mode === 'count') {
+    await consumeNullCountPairsBytes(stdout, (filePath, countText) => {
+      if (!/^\d+$/.test(countText)) {
+        skippedLines += 1;
+        return true;
+      }
+
+      const count = Number.parseInt(countText, 10);
+      if (count === 0) {
+        return true;
+      }
+      return yieldFile(filePath, count);
+    });
+  } else {
+    await consumeNullItemsBytes(stdout, (filePath) => {
+      if (filePath.length === 0) {
+        return true;
+      }
+      return yieldFile(filePath, 1);
+    });
+  }
 
   if (sorted && admission?.dropped()) {
     limitReached = true;
@@ -212,63 +238,39 @@ export async function collectFileEntries(
 
   return {
     files: [...files.values()],
-    skippedLines: 0,
+    skippedLines,
     limitReached,
   };
 }
 
-export async function consumeCountOutput(
-  stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
-  proc: GrepProcess,
-  input: FileListInput,
-): Promise<{
-  files: GrepFileMatch[];
-  skippedLines: number;
-  limitReached: boolean;
-}> {
-  let skippedLines = 0;
-  const collected = await collectFileEntries(
-    proc,
-    input,
-    (yieldFile) =>
-      consumeNullCountPairsBytes(stdout, (filePath, countText) => {
-        if (!/^\d+$/.test(countText)) {
-          skippedLines += 1;
-          return true;
-        }
-
-        const count = Number.parseInt(countText, 10);
-        if (count === 0) {
-          return true;
-        }
-        return yieldFile(filePath, count);
-      }),
-    true,
-  );
-  return { ...collected, skippedLines };
-}
-
-export async function consumeFilesOutput(
-  stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
-  proc: GrepProcess,
-  input: FileListInput,
-): Promise<{
-  files: GrepFileMatch[];
-  skippedLines: number;
-  limitReached: boolean;
-}> {
-  return collectFileEntries(
-    proc,
-    input,
-    (yieldFile) =>
-      consumeNullItemsBytes(stdout, (filePath) => {
-        if (filePath.length === 0) {
-          return true;
-        }
-        return yieldFile(filePath, 1);
-      }),
-    true,
-  );
+export function finishFileListMode(
+  baseResult: GrepSearchResult,
+  files: GrepFileMatch[],
+  input: NormalizedGrepInput,
+  killedForLimit: boolean,
+  termination: { timedOut: boolean; cancelled: boolean },
+  exitCode: number,
+  stderr: string,
+  extra?: { sort?: boolean; warnings?: string[] },
+): GrepSearchResult {
+  const ordered = extra?.sort ? sortFiles(files, input) : files;
+  const finalized = finalizeFiles(ordered, input);
+  const limitReached = finalized.limitReached || killedForLimit;
+  return {
+    ...baseResult,
+    ...finalized,
+    truncated:
+      baseResult.truncated ||
+      limitReached ||
+      termination.timedOut ||
+      termination.cancelled,
+    limitReached,
+    timedOut: termination.timedOut,
+    cancelled: termination.cancelled,
+    exitCode,
+    stderr,
+    warnings: extra?.warnings ?? [],
+  };
 }
 
 export function sortFiles(

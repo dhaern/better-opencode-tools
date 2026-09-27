@@ -9,11 +9,16 @@ import {
   type CrossSpawnResult,
   crossSpawn,
   TERMINATE_HARD_WAIT_MS,
-  terminateProcess,
   withTimeout,
 } from '../../utils/compat';
 import { readTextStream } from './json-stream';
-import { isTransientStderr } from './runtime';
+import {
+  attachTerminationHandlers,
+  isTransientStderr,
+  waitForExitAndStderr,
+} from './runtime';
+
+const NEVER_ABORTED = new AbortController().signal;
 
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -60,66 +65,45 @@ async function runProbe(
     return { exitCode: 1, stdout: '', stderr: '', timedOut: false };
   }
 
-  const stdoutPromise = readTextStream(proc.proc.stdout, 1_000_000);
-  const stderrPromise = readTextStream(proc.proc.stderr, 1_000_000);
-  const exitPromise = proc.exited.then(
-    (exitCode) => ({ kind: 'exit' as const, exitCode }),
-    () => ({ kind: 'exit' as const, exitCode: 1 }),
-  );
-  let stopKind: 'timeout' | 'cancel' | undefined;
-  let resolveStop!: () => void;
-  const stopPromise = new Promise<{ kind: 'stop' }>((resolve) => {
-    resolveStop = () => resolve({ kind: 'stop' });
-  });
-  const onAbort = () => {
-    stopKind = 'cancel';
-    resolveStop();
-  };
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-  const timeoutId = setTimeout(
-    () => {
-      stopKind = 'timeout';
-      resolveStop();
-    },
+  const termination = attachTerminationHandlers(
+    proc,
     Math.max(1, timeoutMs),
+    signal ?? NEVER_ABORTED,
   );
-  timeoutId.unref?.();
-
-  let outcome: { kind: 'exit'; exitCode: number } | { kind: 'stop' };
-  try {
-    outcome = await Promise.race([exitPromise, stopPromise]);
-  } finally {
-    clearTimeout(timeoutId);
-    signal?.removeEventListener('abort', onAbort);
-  }
-
-  if (outcome.kind === 'stop') {
-    // Escalate SIGTERM -> SIGKILL so probes never hang on stubborn children.
-    await terminateProcess(proc);
-  }
+  const stdoutPromise = readTextStream(proc.proc.stdout, 1_000_000).catch(
+    () => '',
+  );
+  const stderrPromise = readTextStream(proc.proc.stderr, 1_000_000).catch(
+    () => '',
+  );
+  const { exitCode: rawExitCode } = await waitForExitAndStderr(
+    proc,
+    stderrPromise,
+  );
+  const stopped = termination.state.timedOut || termination.state.cancelled;
+  termination.cleanup();
 
   // Bound the post-stop drain too: descendants inheriting the pipes can keep
   // stdout/stderr open long after the direct child is gone. When the drain
   // deadline passes, force-destroy the pipes; readers keep whatever was
   // already collected instead of waiting for the descendants.
-  const drain = Promise.all([
-    stdoutPromise.catch(() => ''),
-    stderrPromise.catch(() => ''),
-  ]) as Promise<[string, string]>;
-  if ((await withTimeout(drain, TERMINATE_HARD_WAIT_MS)) === 'timeout') {
+  const drain = Promise.all([stdoutPromise, stderrPromise]);
+  if (
+    stopped &&
+    (await withTimeout(drain, TERMINATE_HARD_WAIT_MS)) === 'timeout'
+  ) {
     proc.proc.stdout?.destroy();
     proc.proc.stderr?.destroy();
   }
   const [stdoutResult, stderrResult] = await drain;
 
-  if (stopKind === 'cancel' || signal?.aborted) throw abortError();
+  if (termination.state.cancelled || signal?.aborted) throw abortError();
 
   return {
-    exitCode: outcome.kind === 'exit' ? outcome.exitCode : 1,
+    exitCode: stopped ? 1 : rawExitCode,
     stdout: stdoutResult,
     stderr: stderrResult,
-    timedOut: stopKind === 'timeout',
+    timedOut: termination.state.timedOut,
   };
 }
 

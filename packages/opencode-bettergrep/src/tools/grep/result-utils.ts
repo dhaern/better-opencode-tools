@@ -213,27 +213,3 @@ export function finalizeMtimeContentResult(
     limitReached,
   };
 }
-
-export function finalizeMtimeSimpleResult(
-  input: NormalizedGrepInput,
-  files: GrepFileMatch[],
-  baseResult: GrepSearchResult,
-  moreDueToLimit: boolean,
-): GrepSearchResult {
-  const limitedFiles = files.slice(0, input.maxResults);
-  const totalMatches =
-    input.outputMode === 'count'
-      ? countOccurrences(limitedFiles)
-      : limitedFiles.length;
-  const limitReached = baseResult.limitReached || moreDueToLimit;
-
-  return {
-    ...baseResult,
-    files: limitedFiles,
-    totalMatches,
-    totalFiles: limitedFiles.length,
-    matchKind: getMatchKind(input.outputMode),
-    truncated: baseResult.truncated || limitReached,
-    limitReached,
-  };
-}

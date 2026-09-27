@@ -5,13 +5,13 @@ import {
   executeCountMode,
   executeFilesMode,
 } from './direct';
+import { finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
 import {
   countOccurrences,
   countVisibleMatches,
   createEmptyResult,
   finalizeMtimeContentResult,
-  finalizeMtimeSimpleResult,
 } from './result-utils';
 import { buildRgCommand } from './rg-args';
 import {
@@ -243,9 +243,7 @@ export async function executeMtimeMode(
   };
 
   if (input.outputMode === 'files_with_matches') {
-    return finalizeMtimeSimpleResult(
-      input,
-      sortedFiles,
+    return finishFileListMode(
       {
         ...baseMtimeResult,
         ...fullStrategyMeta,
@@ -257,7 +255,6 @@ export async function executeMtimeMode(
         timedOut: discovery.timedOut || sortedDiscovery.timedOut,
         cancelled: discovery.cancelled || sortedDiscovery.cancelled,
         stderr: discovery.stderr,
-        warnings: [...discovery.warnings, ...sortedDiscovery.warnings],
         retryCount: discovery.retryCount,
         exitCode: discovery.exitCode,
         summary: undefined,
@@ -268,7 +265,16 @@ export async function executeMtimeMode(
               ? 'mtime-sort'
               : undefined,
       },
+      sortedFiles,
+      input,
       discovery.files.length > input.maxResults,
+      {
+        timedOut: discovery.timedOut || sortedDiscovery.timedOut,
+        cancelled: discovery.cancelled || sortedDiscovery.cancelled,
+      },
+      discovery.exitCode,
+      discovery.stderr,
+      { warnings: [...discovery.warnings, ...sortedDiscovery.warnings] },
     );
   }
 
@@ -425,11 +431,15 @@ export async function executeMtimeMode(
   };
 
   if (input.outputMode === 'count') {
-    return finalizeMtimeSimpleResult(
-      input,
-      state.collected,
+    return finishFileListMode(
       partialBase,
+      state.collected,
+      input,
       state.limitReached || state.collected.length > input.maxResults,
+      { timedOut: state.timedOut, cancelled: state.cancelled },
+      state.exitCode,
+      state.stderr,
+      { warnings: state.warnings },
     );
   }
 

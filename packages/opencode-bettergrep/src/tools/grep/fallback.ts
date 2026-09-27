@@ -2,17 +2,11 @@ import { ensureGnuGrep } from './cli-probe';
 import { executeMode } from './direct';
 import { buildGrepCommand } from './fallback-command';
 import { consumeContentOutput } from './fallback-content';
-import {
-  consumeCountOutput,
-  consumeFilesOutput,
-  finalizeFiles,
-  sortFiles,
-} from './fallback-results';
+import { collectFileEntries, finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
 import {
   applySuccessfulStderr,
   createEmptyResult,
-  getMatchKind,
   hasVisibleResults,
 } from './result-utils';
 import { getAbortKind, toErrorMessage } from './runtime';
@@ -57,36 +51,37 @@ export async function executeGrepFallback(
       },
     }),
     consumeStdout: async (stdout, proc, state) => {
-      state.parsed = await (input.outputMode === 'content'
-        ? consumeContentOutput(stdout, proc, input)
-        : input.outputMode === 'count'
-          ? consumeCountOutput(stdout, proc, input)
-          : consumeFilesOutput(stdout, proc, input));
+      if (input.outputMode === 'content') {
+        state.parsed = await consumeContentOutput(stdout, proc, input);
+        return;
+      }
+      const collected = await collectFileEntries(
+        proc,
+        input,
+        stdout,
+        input.outputMode === 'count' ? 'count' : 'files',
+        true,
+      );
+      state.parsed = collected;
     },
     buildResult: (baseResult, state, termination, exitCode, stderr) => {
       const parsed = state.parsed;
-      const finalized = finalizeFiles(sortFiles(parsed.files, input), input);
-      const limitReached = parsed.limitReached || finalized.limitReached;
-      const result: GrepSearchResult = {
-        ...baseResult,
-        ...finalized,
-        matchKind: getMatchKind(input.outputMode),
-        truncated:
-          limitReached ||
-          termination.timedOut ||
-          termination.cancelled ||
-          parsed.skippedLines > 0,
-        limitReached,
-        timedOut: termination.timedOut,
-        cancelled: termination.cancelled,
+      const result = finishFileListMode(
+        baseResult,
+        parsed.files,
+        input,
+        parsed.limitReached,
+        termination,
         exitCode,
         stderr,
-        warnings: [...warnings],
-      };
-      if (parsed.skippedLines > 0)
+        { sort: true, warnings: [...warnings] },
+      );
+      if (parsed.skippedLines > 0) {
+        result.truncated = true;
         result.warnings.push(
           `GNU grep fallback skipped ${String(parsed.skippedLines)} unparsable output line(s); results may be incomplete.`,
         );
+      }
       return result;
     },
     isStopped: (state, termination) =>

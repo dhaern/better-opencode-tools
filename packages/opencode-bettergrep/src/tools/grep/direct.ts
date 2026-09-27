@@ -1,11 +1,6 @@
 import { GrepAggregator } from './aggregate';
-import { collectFileEntries, finalizeFiles } from './fallback-results';
-import {
-  consumeNullCountPairsBytes,
-  consumeNullItemsBytes,
-  consumeRgJsonStream,
-  readTextStream,
-} from './json-stream';
+import { collectFileEntries, finishFileListMode } from './fallback-results';
+import { consumeRgJsonStream, readTextStream } from './json-stream';
 import type { ResolvedGrepCli } from './resolver';
 import {
   applySuccessfulStderr,
@@ -42,30 +37,6 @@ interface ContentState {
 interface FileListState {
   files: GrepFileMatch[];
   limitReached: boolean;
-}
-
-function finishFileListMode(
-  baseResult: GrepSearchResult,
-  files: GrepFileMatch[],
-  input: NormalizedGrepInput,
-  killedForLimit: boolean,
-  termination: TerminationState,
-  exitCode: number,
-  stderr: string,
-): GrepSearchResult {
-  const finalized = finalizeFiles(files, input);
-  const limitReached = finalized.limitReached || killedForLimit;
-  return {
-    ...baseResult,
-    ...finalized,
-    truncated: limitReached || termination.timedOut || termination.cancelled,
-    limitReached,
-    timedOut: termination.timedOut,
-    cancelled: termination.cancelled,
-    exitCode,
-    stderr,
-    warnings: [],
-  };
 }
 
 function simpleIsStopped(
@@ -286,18 +257,8 @@ export async function executeCountMode(
       const collected = await collectFileEntries(
         proc,
         { ...input, sortBy: 'none' },
-        (yieldFile) =>
-          consumeNullCountPairsBytes(stdout, (filePath, countText) => {
-            if (!/^\d+$/.test(countText)) {
-              return true;
-            }
-
-            const count = Number.parseInt(countText, 10);
-            if (count === 0) {
-              return true;
-            }
-            return yieldFile(filePath, count);
-          }),
+        stdout,
+        'count',
       );
       state.files = collected.files;
       state.limitReached = collected.limitReached;
@@ -330,13 +291,8 @@ export async function executeFilesMode(
       const collected = await collectFileEntries(
         proc,
         { ...input, sortBy: 'none' },
-        (yieldFile) =>
-          consumeNullItemsBytes(stdout, (filePath) => {
-            if (filePath.length === 0) {
-              return true;
-            }
-            return yieldFile(filePath, 1);
-          }),
+        stdout,
+        'files',
       );
       state.files = collected.files;
       state.limitReached = collected.limitReached;
