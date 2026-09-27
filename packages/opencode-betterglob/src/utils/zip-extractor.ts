@@ -1,10 +1,6 @@
 import { release } from 'node:os';
 import { createAbortError } from './abort';
-import {
-  crossSpawn,
-  isMissingExecutableError,
-  waitForProcessOutputWithAbortGrace,
-} from './compat';
+import { isMissingExecutableError, runProcess } from './process-output';
 import { isSupervisorError } from './process-supervisor';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
@@ -34,18 +30,15 @@ export async function commandSucceeds(
   if (signal?.aborted) throw createAbortError();
 
   try {
-    const proc = crossSpawn([command, ...args], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const stdoutPromise = proc.stdout();
-    const stderrPromise = proc.stderr();
-    const result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
+    const result = await runProcess(
+      [command, ...args],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        killGraceMs: 250,
+        postCloseDrainMs: 250,
+      },
       signal,
-      stdoutPromise,
-      { killGraceMs: 250, postCloseDrainMs: 250 },
     );
     if (signal?.aborted) throw createAbortError();
     return !result.aborted && result.exitCode === 0;
@@ -117,39 +110,26 @@ export async function extractZip(
 
   const proc = await (async () => {
     if (process.platform !== 'win32') {
-      return crossSpawn(['unzip', '-o', archivePath, '-d', destDir], {
-        stdout: 'ignore',
-        stderr: 'pipe',
-      });
+      return ['unzip', '-o', archivePath, '-d', destDir];
     }
 
     const extractor = await getWindowsZipExtractorAsync(signal);
     if (signal?.aborted) throw createAbortError();
     if (extractor === 'tar') {
-      return crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
-        stdout: 'ignore',
-        stderr: 'pipe',
-      });
+      return ['tar', '-xf', archivePath, '-C', destDir];
     }
 
     const command = extractor === 'pwsh' ? 'pwsh' : 'powershell';
-    return crossSpawn(
-      [
-        command,
-        '-Command',
-        `Expand-Archive -Path '${escapePowerShellPath(archivePath)}' -DestinationPath '${escapePowerShellPath(destDir)}' -Force`,
-      ],
-      {
-        stdout: 'ignore',
-        stderr: 'pipe',
-      },
-    );
+    return [
+      command,
+      '-Command',
+      `Expand-Archive -Path '${escapePowerShellPath(archivePath)}' -DestinationPath '${escapePowerShellPath(destDir)}' -Force`,
+    ];
   })();
 
-  const stderrPromise = proc.stderr();
-  const { exitCode, stderr } = await waitForProcessOutputWithAbortGrace(
+  const { exitCode, stderr } = await runProcess(
     proc,
-    stderrPromise,
+    { stdout: 'ignore', stderr: 'pipe' },
     signal,
   );
 

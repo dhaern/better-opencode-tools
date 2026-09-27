@@ -2,14 +2,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { throwIfAborted } from '../../utils/abort';
 import {
-  crossSpawn,
-  fileStamp,
   isMissingExecutableError,
-} from '../../utils/compat';
-import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
+  runProcess,
+} from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
 import {
   computeSha256Async,
+  fileStamp,
   InvalidCachedBinaryError,
   MAX_CACHE_METADATA_BYTES,
   readRegularFile,
@@ -145,16 +144,15 @@ export async function probeRipgrepVersion(
   binary: string,
   signal?: AbortSignal,
 ): Promise<{ valid: boolean; exitCode: number; aborted: boolean }> {
-  const proc = crossSpawn([binary, '--version'], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const result = await waitForProcessOutputWithAbortGrace(
-    proc,
-    proc.stderr(),
+  const result = await runProcess(
+    [binary, '--version'],
+    {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      killGraceMs: 250,
+      postCloseDrainMs: 250,
+    },
     signal,
-    proc.stdout(),
-    { killGraceMs: 250, postCloseDrainMs: 250 },
   );
   return {
     valid:

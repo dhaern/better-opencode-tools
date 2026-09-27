@@ -19,7 +19,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { lock } from 'proper-lockfile';
-import { installLatestStableRipgrep } from './downloader';
+import { runProcess } from '../../utils/process-output';
+import { extractZip } from '../../utils/zip-extractor';
+import { extractTarGz, installLatestStableRipgrep } from './downloader';
 import {
   getInstalledRipgrepPathAsync,
   getRipgrepBinaryName,
@@ -164,6 +166,34 @@ describe('tools/glob/downloader', () => {
         expect(await installLatestStableRipgrep()).toBe(binary);
         expect(fetchMock).toHaveBeenCalledTimes(2);
         for (const call of syncCalls) expect(call).not.toHaveBeenCalled();
+        const invalid = path.join(dir, 'invalid-archive');
+        writeFileSync(invalid, 'not an archive');
+        const tarResult = await runProcess(
+          ['tar', '-xzf', invalid, '-C', source],
+          { stdout: 'ignore' },
+        );
+        expect(tarResult.stderr.trim().length).toBeGreaterThan(0);
+        const tarError = await extractTarGz(invalid, source).catch(
+          (error: Error) => error,
+        );
+        expect(tarError).toBeInstanceOf(Error);
+        expect((tarError as Error).message).toContain(
+          'ripgrep extraction failed (exit',
+        );
+        expect((tarError as Error).message).toContain(tarResult.stderr.trim());
+        const zipResult = await runProcess(
+          ['unzip', '-o', invalid, '-d', source],
+          { stdout: 'ignore' },
+        );
+        expect(zipResult.stderr.trim().length).toBeGreaterThan(0);
+        const zipError = await extractZip(invalid, source).catch(
+          (error: Error) => error,
+        );
+        expect(zipError).toBeInstanceOf(Error);
+        expect((zipError as Error).message).toContain(
+          'zip extraction failed (exit',
+        );
+        expect((zipError as Error).message).toContain(zipResult.stderr.trim());
       } finally {
         for (const call of syncCalls) call.mockRestore();
         fetchMock.mockRestore();

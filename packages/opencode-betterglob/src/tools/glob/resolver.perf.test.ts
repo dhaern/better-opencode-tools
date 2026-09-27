@@ -15,7 +15,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import which from 'which';
-import { ensureSupervisorRuntime } from '../../utils/compat';
+import { ensureSupervisorRuntime } from '../../utils/process-output';
 import { resolveGlobCliAsync } from './resolver';
 import {
   getRipgrepBinaryName,

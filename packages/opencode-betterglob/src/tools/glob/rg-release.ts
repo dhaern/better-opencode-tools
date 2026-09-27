@@ -1,7 +1,9 @@
 import { access, writeFile } from 'node:fs/promises';
 import { createAbortError, throwIfAborted } from '../../utils/abort';
-import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
-import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
+import {
+  isMissingExecutableError,
+  runProcess,
+} from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
 
 interface RipgrepReleaseAsset {
@@ -36,8 +38,12 @@ function parseSha256Digest(value: string | undefined): string {
   return normalized;
 }
 
-async function detectLinuxLibcAsync(
+export async function detectLinuxLibcAsync(
   signal?: AbortSignal,
+  deps: {
+    exists?: (file: string) => Promise<boolean>;
+    run?: typeof runProcess;
+  } = {},
 ): Promise<'gnu' | 'musl'> {
   const loaders = [
     '/lib/ld-musl-x86_64.so.1',
@@ -48,27 +54,25 @@ async function detectLinuxLibcAsync(
 
   throwIfAborted(signal);
   for (const file of loaders) {
-    const exists = await access(file).then(
-      () => true,
-      () => false,
-    );
+    const exists = await (deps.exists?.(file) ??
+      access(file).then(
+        () => true,
+        () => false,
+      ));
     throwIfAborted(signal);
     if (exists) return 'musl';
   }
 
   try {
-    const proc = crossSpawn(['ldd', '--version'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const stdoutPromise = proc.stdout();
-    const stderrPromise = proc.stderr();
-    const result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
+    const result = await (deps.run ?? runProcess)(
+      ['ldd', '--version'],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        killGraceMs: 250,
+        postCloseDrainMs: 250,
+      },
       signal,
-      stdoutPromise,
-      { killGraceMs: 250, postCloseDrainMs: 250 },
     );
     if (signal?.aborted) throw createAbortError();
     if (result.aborted) return 'gnu';

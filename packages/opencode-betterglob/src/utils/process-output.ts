@@ -1,44 +1,59 @@
-import type { CrossSpawnResult } from './compat';
+import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import which from 'which';
 import {
   CleanupUnconfirmedError,
   DEFAULT_CLEANUP_TIMEOUT_MS,
   isSupervisorError,
+  type SupervisedProcess,
   SupervisorRuntimeError,
+  spawnSupervised,
 } from './process-supervisor';
 
-// Only abort/failure/drain expiry starts the bounded TERM→KILL window.
 export const ABORT_KILL_GRACE_MS = 5_000;
 export const POST_EXIT_DRAIN_MS = 1_000;
 export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
 
-export function capText(
+export const capText = (
   chunks: Buffer[],
   truncated: boolean,
   label: 'stdout' | 'stderr',
-): string {
-  const text = Buffer.concat(chunks).toString('utf-8');
-  return truncated
-    ? `${text}\n[${label} truncated at ${DIAGNOSTIC_CAP_BYTES} bytes]`
-    : text;
+): string =>
+  Buffer.concat(chunks).toString('utf-8') +
+  (truncated ? `\n[${label} truncated at ${DIAGNOSTIC_CAP_BYTES} bytes]` : '');
+
+export interface ProcessHandle {
+  proc: ChildProcess;
+  exited: Promise<number>;
+  closed?: Promise<void>;
+  stop?: (graceMs?: number) => Promise<void>;
+  release?: () => Promise<void>;
+  readonly exitCode: number | null;
 }
 
-export function waitForProcessOutputWithAbortGrace(
-  proc: CrossSpawnResult,
-  stderrPromise: Promise<string>,
-  signal?: AbortSignal,
-  stdoutPromise: Promise<string> = proc.stdout(),
-  options: {
-    killGraceMs?: number;
-    postCloseDrainMs?: number;
-    /** Parent-side allowance after killGraceMs; never sends PID/PGID signals. */
-    cleanupTimeoutMs?: number;
-  } = {},
-): Promise<{
+export interface ProcessOptions {
+  stdout?: 'pipe' | 'inherit' | 'ignore';
+  stderr?: 'pipe' | 'inherit' | 'ignore';
+  stdin?: 'pipe' | 'inherit' | 'ignore';
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  killProcessGroup?: boolean;
+  killGraceMs?: number;
+  postCloseDrainMs?: number;
+  cleanupTimeoutMs?: number;
+}
+
+export interface ProcessResult {
   exitCode: number;
   stdout: string;
   stderr: string;
   aborted: boolean;
-}> {
+}
+
+export function waitForProcessOutputWithAbortGrace(
+  proc: ProcessHandle,
+  signal?: AbortSignal,
+  options: ProcessOptions = {},
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -59,16 +74,10 @@ export function waitForProcessOutputWithAbortGrace(
     let releaseRequested = false;
     let terminating = false;
 
-    const stopKillTimer = () => {
-      clearTimeout(killTimer);
-      killTimer = undefined;
-    };
-
     const cleanup = () => {
       clearTimeout(cleanupTimer);
       clearTimeout(drainTimer);
-      drainTimer = undefined;
-      stopKillTimer();
+      clearTimeout(killTimer);
       signal?.removeEventListener('abort', onAbort);
       proc.proc.removeListener('close', onClose);
       proc.proc.removeListener('exit', onExit);
@@ -79,18 +88,15 @@ export function waitForProcessOutputWithAbortGrace(
       if (finished) return;
       finished = true;
       cleanup();
-      proc.proc.stdout?.destroy();
-      proc.proc.stderr?.destroy();
-      if (processError instanceof SupervisorRuntimeError) {
-        reject(processError);
-        return;
-      }
+      closeReaders();
       reject(
-        isSupervisorError(error)
-          ? error
-          : new CleanupUnconfirmedError(
-              error instanceof Error ? error.message : String(error),
-            ),
+        processError instanceof SupervisorRuntimeError
+          ? processError
+          : isSupervisorError(error)
+            ? error
+            : new CleanupUnconfirmedError(
+                error instanceof Error ? error.message : String(error),
+              ),
       );
     };
 
@@ -113,29 +119,25 @@ export function waitForProcessOutputWithAbortGrace(
       if (terminating) return;
       terminating = true;
       if (proc.stop) {
-        // The supervisor owns both TERM and the full grace timer. Task exit
-        // or closed output must not cancel cleanup of remaining descendants.
+        // The supervisor owns the grace timer even after task exit.
         const grace = options.killGraceMs ?? ABORT_KILL_GRACE_MS;
         watchCleanup(grace);
         void proc.stop(grace).catch(cleanupFailed);
         return;
       }
       try {
-        proc.kill('SIGTERM');
+        proc.proc.kill('SIGTERM');
       } catch {
         // Process may have exited.
       }
       if (!killTimer) {
         killTimer = setTimeout(() => {
           try {
-            proc.kill('SIGKILL');
+            proc.proc.kill('SIGKILL');
           } catch {
             // Process may have exited.
           } finally {
-            // A descendant can keep an inherited pipe open after the child
-            // receives SIGKILL, preventing Node's `close` event from being
-            // delivered. Destroy the readers and settle the aborted wait so
-            // the caller cannot remain blocked on that orphaned descriptor.
+            // Descendants can keep pipes open after SIGKILL; close readers.
             if (!finished) {
               processExited = true;
               exitCode = proc.exitCode ?? 1;
@@ -161,54 +163,29 @@ export function waitForProcessOutputWithAbortGrace(
       finished = true;
       cleanup();
 
-      if (processError) {
-        reject(
-          processError instanceof Error
-            ? processError
-            : new Error(String(processError)),
-        );
-        return;
-      }
-
-      if (outputError) {
-        reject(
-          outputError instanceof Error
-            ? outputError
-            : new Error(String(outputError)),
-        );
-        return;
-      }
-
-      if (stderrError) {
-        reject(
-          stderrError instanceof Error
-            ? stderrError
-            : new Error(String(stderrError)),
-        );
-        return;
-      }
-
-      resolve({ exitCode, stdout: stdoutText, stderr: stderrText, aborted });
+      const failure = processError || outputError || stderrError;
+      if (failure)
+        reject(failure instanceof Error ? failure : new Error(String(failure)));
+      else
+        resolve({ exitCode, stdout: stdoutText, stderr: stderrText, aborted });
     };
 
     const closeReaders = () => {
-      proc.proc.stdout?.destroy();
-      proc.proc.stderr?.destroy();
-      // Let close/error observers settle collectors with their retained bytes
-      // before the fallback for arbitrary non-settling consumer promises.
-      setImmediate(() => {
-        stdoutSettled = true;
-        stderrSettled = true;
-        finish();
-      });
+      for (const stream of [proc.proc.stdout, proc.proc.stderr]) {
+        if (!stream || stream.destroyed) continue;
+        const ignore = () => undefined;
+        stream.on('error', ignore);
+        stream.once('close', () => stream.removeListener('error', ignore));
+        stream.destroy();
+      }
+      finish();
     };
 
     const scheduleDrain = () => {
       if ((stdoutSettled && stderrSettled) || drainTimer) return;
       drainTimer = setTimeout(() => {
         if (finished) return;
-        // EOF may be held by a descendant after taskExit. Preserve the group
-        // leader until cleanup completes, rather than releasing its identity.
+        // Hold the group leader while inherited output can still be open.
         if (proc.stop) terminate();
         closeReaders();
       }, options.postCloseDrainMs ?? POST_EXIT_DRAIN_MS);
@@ -218,8 +195,7 @@ export function waitForProcessOutputWithAbortGrace(
     const onExit = (code: number | null) => {
       processExited = true;
       exitCode = code ?? proc.exitCode ?? 1;
-      // `exit` confirms the direct child is gone. A descendant may still
-      // retain one of its pipes, so bound the remaining output drain here.
+      // A descendant may still retain a pipe after task exit.
       scheduleDrain();
       finish();
     };
@@ -227,10 +203,7 @@ export function waitForProcessOutputWithAbortGrace(
     const onClose = (code: number | null) => {
       processExited = true;
       exitCode = code ?? proc.exitCode ?? 1;
-      // A real close confirms that the process is gone. Any pending pipe
-      // drain is bounded so descendants holding inherited fds cannot keep
-      // extraction pending forever.
-      stopKillTimer();
+      clearTimeout(killTimer);
       scheduleDrain();
       finish();
     };
@@ -238,9 +211,7 @@ export function waitForProcessOutputWithAbortGrace(
     const onProcessError = (error: unknown) => {
       if (finished || processExited) return;
       processError = error;
-      // ChildProcess emits `error` before `close` for spawn failures. Do not
-      // settle on `error`: it is not confirmation that the child is closed.
-      // Terminate now and let `close` perform the final cleanup.
+      // Spawn error precedes close, which remains authoritative.
       terminate();
       if (proc.closed) {
         processExited = true;
@@ -249,36 +220,50 @@ export function waitForProcessOutputWithAbortGrace(
       }
     };
 
-    const onStdout = (stdout: string) => {
-      if (finished || stdoutSettled) return;
-      stdoutSettled = true;
-      stdoutText = stdout;
-      finish();
-    };
-
-    const onStdoutError = (error: unknown) => {
-      if (finished || stdoutSettled) return;
-      stdoutSettled = true;
-      outputError = error;
-      terminate();
-      finish();
-    };
-
-    const onStderr = (stderr: string) => {
-      if (finished || stderrSettled) return;
-      stderrSettled = true;
-      stderrText = stderr;
-      finish();
-    };
-
-    const onStderrError = (error: unknown) => {
-      if (finished || stderrSettled) return;
-      stderrSettled = true;
-      stderrError = error;
-      // This rejection handler is attached immediately below. A pipe error
-      // must not wait for proc.exited and must not cancel SIGKILL escalation.
-      terminate();
-      finish();
+    const capture = (
+      stream: ChildProcess['stdout'],
+      label: 'stdout' | 'stderr',
+    ) => {
+      const chunks: Buffer[] = [];
+      let retained = 0;
+      let truncated = false;
+      let settled = false;
+      const settle = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        stream?.removeListener('data', onData);
+        stream?.removeListener('end', onEnd);
+        stream?.removeListener('close', onEnd);
+        stream?.removeListener('error', settle);
+        if (label === 'stdout') {
+          stdoutSettled = true;
+          stdoutText = capText(chunks, truncated, label);
+          if (error !== undefined) outputError = error;
+        } else {
+          stderrSettled = true;
+          stderrText = capText(chunks, truncated, label);
+          if (error !== undefined) stderrError = error;
+        }
+        if (error !== undefined) terminate();
+        finish();
+      };
+      const onData = (value: Buffer | string) => {
+        const chunk = typeof value === 'string' ? Buffer.from(value) : value;
+        if (retained >= DIAGNOSTIC_CAP_BYTES) {
+          truncated = true;
+          return;
+        }
+        const available = DIAGNOSTIC_CAP_BYTES - retained;
+        chunks.push(chunk.subarray(0, available));
+        retained += Math.min(available, chunk.length);
+        if (chunk.length > available) truncated = true;
+      };
+      const onEnd = () => settle();
+      stream?.on('data', onData);
+      stream?.once('end', onEnd);
+      stream?.once('close', onEnd);
+      stream?.on('error', settle);
+      if (!stream?.readable) settle();
     };
 
     const onAbort = () => {
@@ -287,9 +272,7 @@ export function waitForProcessOutputWithAbortGrace(
       finish();
     };
 
-    // Register lifecycle listeners before observing any promise. The
-    // underlying `exited` promise rejects on ChildProcess.error, so attach a
-    // rejection observer even though close is the authoritative completion.
+    // Close confirms direct children; exited observes task/supervisor status.
     if (!proc.closed) {
       proc.proc.once('close', onClose);
       proc.proc.once('exit', onExit);
@@ -299,23 +282,118 @@ export function waitForProcessOutputWithAbortGrace(
     void proc.closed?.then(() => {
       cleanupSettled = true;
       clearTimeout(cleanupTimer);
-      // Escaped descendants can retain descriptors even after supervisor
-      // exit. Only taskExit/cleanup and a bounded drain govern settlement.
+      // Task exit and bounded output drain still govern settlement.
       scheduleDrain();
       finish();
     }, cleanupFailed);
 
-    // Observe stderr synchronously. Waiting until proc.exited resolves would
-    // leave a rejected stderr promise unhandled while the child is alive.
-    void Promise.resolve(stdoutPromise).then(onStdout, onStdoutError);
-    void Promise.resolve(stderrPromise).then(onStderr, onStderrError);
+    // Observe both output streams immediately.
+    capture(proc.proc.stdout, 'stdout');
+    capture(proc.proc.stderr, 'stderr');
 
-    if (signal) {
-      if (signal.aborted) {
-        terminate();
-      } else {
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-    }
+    if (signal?.aborted) terminate();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+export function runProcess(
+  command: string[],
+  options: ProcessOptions = {},
+  signal?: AbortSignal,
+  supervise: typeof spawnSupervised = spawnSupervised,
+): Promise<ProcessResult> {
+  const [cmd, ...args] = command;
+  const owner: SupervisedProcess | undefined =
+    process.platform === 'win32' || options.killProcessGroup === false
+      ? undefined
+      : supervise(command, options);
+  const child =
+    owner?.proc ??
+    nodeSpawn(cmd, args, {
+      stdio: [
+        options.stdin ?? 'ignore',
+        options.stdout ?? 'pipe',
+        options.stderr ?? 'pipe',
+      ],
+      cwd: options.cwd,
+      env: options.env as NodeJS.ProcessEnv,
+    });
+  const exited = owner
+    ? owner.exited.then((result) => result.code)
+    : new Promise<number>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code) => resolve(code ?? 1));
+      });
+  void exited.catch(() => undefined);
+  return waitForProcessOutputWithAbortGrace(
+    {
+      proc: child,
+      exited,
+      closed: owner?.closed,
+      stop: owner?.stop,
+      release: owner?.release,
+      get exitCode() {
+        return owner ? owner.exitCode : child.exitCode;
+      },
+    },
+    signal,
+    options,
+  );
+}
+
+export function isMissingExecutableError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+  );
+}
+
+const runtimeProbes = new Set<string>();
+export async function ensureSupervisorRuntime(
+  signal?: AbortSignal,
+  executable = 'node',
+): Promise<void> {
+  if (process.platform === 'win32' || !process.versions.bun) return;
+  signal?.throwIfAborted();
+  const { fileStamp } = await import('../tools/glob/install-io');
+  const found = await which(executable, { nothrow: true }).catch(
+    () => undefined,
+  );
+  const stamp = found ? await fileStamp(found) : undefined;
+  const key = stamp
+    ? `${process.env.PATH ?? ''}:${executable}:${found}:${stamp}`
+    : undefined;
+  signal?.throwIfAborted();
+  if (key && runtimeProbes.has(key)) return;
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), DEFAULT_CLEANUP_TIMEOUT_MS);
+  const probeSignal = signal
+    ? AbortSignal.any([signal, timeout.signal])
+    : timeout.signal;
+  try {
+    const result = await runProcess(
+      [
+        executable,
+        '--input-type=commonjs',
+        '--eval',
+        'if (!process.versions.node || process.versions.bun) process.exit(1); process.stdout.write("betterglob-node-supervisor")',
+      ],
+      { killProcessGroup: false, killGraceMs: 250, postCloseDrainMs: 250 },
+      probeSignal,
+    );
+    signal?.throwIfAborted();
+    if (
+      result.aborted ||
+      result.exitCode !== 0 ||
+      result.stdout !== 'betterglob-node-supervisor'
+    )
+      throw new SupervisorRuntimeError();
+    if (key) runtimeProbes.add(key);
+  } catch (error) {
+    if (isSupervisorError(error)) throw error;
+    signal?.throwIfAborted();
+    throw new SupervisorRuntimeError({ cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -1,8 +1,18 @@
 import { O_NONBLOCK, O_RDONLY } from 'node:constants';
 import { createHash } from 'node:crypto';
-import { type FileHandle, open, rm } from 'node:fs/promises';
+import { type FileHandle, open, rm, stat } from 'node:fs/promises';
 import { throwIfAborted } from '../../utils/abort';
-import { isMissingExecutableError } from '../../utils/compat';
+import { isMissingExecutableError } from '../../utils/process-output';
+
+/** Follow symlinks so any change to the target invalidates positive probes. */
+export async function fileStamp(file: string): Promise<string | undefined> {
+  try {
+    const info = await stat(file);
+    return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
 
 export class InvalidCachedBinaryError extends Error {
   constructor(detail: string, options?: ErrorOptions) {

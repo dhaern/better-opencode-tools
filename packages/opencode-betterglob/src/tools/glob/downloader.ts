@@ -1,8 +1,7 @@
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAbortError, throwIfAborted } from '../../utils/abort';
-import { crossSpawn } from '../../utils/compat';
-import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
+import { runProcess } from '../../utils/process-output';
 import {
   commandSucceeds,
   extractZip,
@@ -64,21 +63,18 @@ async function findBinaryRecursive(
   return null;
 }
 
-async function extractTarGz(
+export async function extractTarGz(
   archive: string,
   dir: string,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  const proc = crossSpawn(['tar', '-xzf', archive, '-C', dir], {
-    stdout: 'ignore',
-    stderr: 'pipe',
-  });
-
-  const stderrPromise = proc.stderr();
-  const { exitCode, stderr } = await waitForProcessOutputWithAbortGrace(
-    proc,
-    stderrPromise,
+  const { exitCode, stderr } = await runProcess(
+    ['tar', '-xzf', archive, '-C', dir],
+    {
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
     signal,
   );
 

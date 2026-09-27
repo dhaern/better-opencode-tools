@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { getPlatformCandidatesAsync, platformCandidates } from './rg-release';
+import {
+  detectLinuxLibcAsync,
+  getPlatformCandidatesAsync,
+  platformCandidates,
+} from './rg-release';
 
 describe('ripgrep platform candidates', () => {
   test('maps the platform/arch/libc matrix without probing unsupported Linux arch', async () => {
@@ -61,5 +65,15 @@ describe('ripgrep platform candidates', () => {
       ),
     ).toEqual([]);
     expect(probed).toBe(false);
+    for (const [stdout, stderr, expected] of [
+      ['ldd (GNU libc) 2.39', '', 'gnu'],
+      ['', 'musl libc (aarch64)', 'musl'],
+    ] as const) {
+      const actual = await detectLinuxLibcAsync(undefined, {
+        exists: async () => false,
+        run: async () => ({ exitCode: 0, stdout, stderr, aborted: false }),
+      });
+      expect(actual).toBe(expected);
+    }
   });
 });

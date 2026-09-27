@@ -1,10 +1,14 @@
 import which from 'which';
 import { AbortWaitError, raceSignal } from '../../utils/abort';
-import { ensureSupervisorRuntime, fileStamp } from '../../utils/compat';
 import { logAsync } from '../../utils/logger';
+import {
+  ensureSupervisorRuntime,
+  isMissingExecutableError,
+} from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
 import { RG_BINARY } from './constants';
 import { installLatestStableRipgrep } from './downloader';
+import { fileStamp } from './install-io';
 import { getInstalledRipgrepPathAsync, probeRipgrepVersion } from './rg-cache';
 
 export interface ResolvedGlobCli {
@@ -46,17 +50,13 @@ const PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_DEPS: GlobResolverDependencies = {};
 const systemMemo = new WeakMap<GlobResolverDependencies, Set<string>>();
 
-function isMissingExecutable(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
-
 async function defaultFindExecutableAsync(
   name: string,
 ): Promise<string | null> {
   try {
     return await which(name, { nothrow: true });
   } catch (error) {
-    if (isMissingExecutable(error)) return null;
+    if (isMissingExecutableError(error)) return null;
     throw error;
   }
 }
@@ -89,7 +89,7 @@ async function defaultValidateExecutableAsync(
       throw new AbortWaitError();
     }
     if (timeout.signal.aborted) return false;
-    if (isMissingExecutable(error)) return false;
+    if (isMissingExecutableError(error)) return false;
     throw error;
   } finally {
     clearTimeout(timer);

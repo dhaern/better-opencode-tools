@@ -5,13 +5,14 @@ import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import {
-  type CrossSpawnResult,
-  crossSpawn,
   ensureSupervisorRuntime,
+  type ProcessHandle,
+  runProcess,
   waitForProcessOutputWithAbortGrace,
-} from './compat';
+} from './process-output';
 import {
   CleanupUnconfirmedError,
+  type SupervisedProcess,
   SupervisorRuntimeError,
   spawnSupervised,
 } from './process-supervisor';
@@ -21,51 +22,53 @@ function fakeProcess() {
   child.stdout = null;
   child.stderr = null;
   const signals: Array<NodeJS.Signals | number | undefined> = [];
+  child.kill = (signal?: NodeJS.Signals | number) => {
+    signals.push(signal);
+    return true;
+  };
   const result = {
     proc: child,
-    stdout: () => Promise.resolve(''),
-    stderr: () => Promise.resolve(''),
     exited: new Promise<number>(() => undefined),
-    kill: (signal?: NodeJS.Signals | number) => {
-      signals.push(signal);
-      return true;
-    },
     get exitCode() {
       return null;
     },
-  } satisfies CrossSpawnResult;
+  } satisfies ProcessHandle;
 
   return { child, result, signals };
 }
 
-describe('utils/compat process lifecycle', () => {
+describe('utils/process-output collection lifecycle', () => {
   test.each([
     new SupervisorRuntimeError(),
     new CleanupUnconfirmedError('probe supervisor died'),
   ])('propagates the original infrastructure rejection from probe cleanup: %s', async (error) => {
     const { result, signals } = fakeProcess();
     await expect(
-      waitForProcessOutputWithAbortGrace(
-        {
-          ...result,
-          closed: Promise.reject(error),
-        },
-        Promise.resolve(''),
-      ),
+      waitForProcessOutputWithAbortGrace({
+        ...result,
+        closed: Promise.reject(error),
+      }),
     ).rejects.toBe(error);
     expect(signals).toEqual([]);
+    if (error instanceof SupervisorRuntimeError) {
+      const other = fakeProcess();
+      const pending = waitForProcessOutputWithAbortGrace({
+        ...other.result,
+        closed: Promise.reject(new CleanupUnconfirmedError('cleanup failed')),
+      });
+      other.child.emit('error', error);
+      await expect(pending).rejects.toBe(error);
+    }
   });
 
   test('terminates immediately when stderr rejects before the child exits', async () => {
     const { child, result, signals } = fakeProcess();
     const error = new Error('stderr pipe failed');
-    const pending = waitForProcessOutputWithAbortGrace(
-      result,
-      Promise.reject(error),
-      undefined,
-      Promise.resolve(''),
-      { killGraceMs: 20 },
-    );
+    child.stderr = new PassThrough();
+    const pending = waitForProcessOutputWithAbortGrace(result, undefined, {
+      killGraceMs: 20,
+    });
+    child.stderr.emit('error', error);
 
     await Promise.resolve();
     expect(signals[0]).toBe('SIGTERM');
@@ -76,15 +79,11 @@ describe('utils/compat process lifecycle', () => {
 
   test('does not treat a process error as a close event', async () => {
     const { child, result, signals } = fakeProcess();
-    const error = new Error('spawn failed');
+    const error = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     let settled = false;
-    const pending = waitForProcessOutputWithAbortGrace(
-      result,
-      Promise.resolve(''),
-      undefined,
-      Promise.resolve(''),
-      { killGraceMs: 20 },
-    ).finally(() => {
+    const pending = waitForProcessOutputWithAbortGrace(result, undefined, {
+      killGraceMs: 20,
+    }).finally(() => {
       settled = true;
     });
 
@@ -98,31 +97,33 @@ describe('utils/compat process lifecycle', () => {
   });
 
   test('settles after SIGKILL when a descendant keeps pipes open', async () => {
-    const { result, signals } = fakeProcess();
+    const { child, result, signals } = fakeProcess();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
     const controller = new AbortController();
     const pending = waitForProcessOutputWithAbortGrace(
       result,
-      Promise.resolve(''),
       controller.signal,
-      Promise.resolve(''),
       { killGraceMs: 10 },
     );
 
     controller.abort();
     await expect(pending).resolves.toMatchObject({ aborted: true });
     expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
   });
 
   test('observes stdout errors immediately as well as stderr errors', async () => {
     const { child, result, signals } = fakeProcess();
     const error = new Error('stdout pipe failed');
-    const pending = waitForProcessOutputWithAbortGrace(
-      result,
-      Promise.resolve(''),
-      undefined,
-      Promise.reject(error),
-      { killGraceMs: 20 },
-    );
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const pending = waitForProcessOutputWithAbortGrace(result, undefined, {
+      killGraceMs: 20,
+    });
+    child.stderr.emit('error', new Error('stderr failed first'));
+    child.stdout.emit('error', error);
     await Promise.resolve();
     expect(signals).toEqual(['SIGTERM']);
     child.emit('close', 1, null);
@@ -131,6 +132,19 @@ describe('utils/compat process lifecycle', () => {
 });
 
 const node = process.versions.bun ? 'node' : process.execPath;
+
+function ownerHandle(owner: SupervisedProcess): ProcessHandle {
+  return {
+    proc: owner.proc,
+    exited: owner.exited.then(({ code }) => code),
+    closed: owner.closed,
+    stop: owner.stop,
+    release: owner.release,
+    get exitCode() {
+      return owner.exitCode;
+    },
+  };
+}
 
 async function ready(proc: ChildProcess): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -182,17 +196,11 @@ describe.skipIf(process.platform === 'win32')(
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
       const error = new CleanupUnconfirmedError('supervisor died');
-      const pending = new Promise<string>(() => undefined);
       await expect(
-        waitForProcessOutputWithAbortGrace(
-          {
-            ...result,
-            closed: Promise.reject(error),
-          },
-          pending,
-          undefined,
-          pending,
-        ),
+        waitForProcessOutputWithAbortGrace({
+          ...result,
+          closed: Promise.reject(error),
+        }),
       ).rejects.toBe(error);
       expect(child.stdout.destroyed).toBe(true);
       expect(child.stderr.destroyed).toBe(true);
@@ -210,7 +218,7 @@ describe.skipIf(process.platform === 'win32')(
       child.stderr = stderr;
       const never = new Promise<void>(() => undefined);
       let requested = false;
-      const supervised: CrossSpawnResult = {
+      const supervised: ProcessHandle = {
         ...result,
         exited: operation === 'release' ? Promise.resolve(0) : result.exited,
         closed: never,
@@ -220,15 +228,13 @@ describe.skipIf(process.platform === 'win32')(
         },
       };
       const controller = new AbortController();
-      const output =
-        operation === 'release'
-          ? Promise.resolve('')
-          : new Promise<string>(() => undefined);
+      if (operation === 'release') {
+        stdout.end();
+        stderr.end();
+      }
       const pending = waitForProcessOutputWithAbortGrace(
         supervised,
-        output,
         controller.signal,
-        output,
         {
           killGraceMs: 0,
           cleanupTimeoutMs: 20,
@@ -240,10 +246,32 @@ describe.skipIf(process.platform === 'win32')(
       expect(stdout.destroyed).toBe(true);
       expect(stderr.destroyed).toBe(true);
       expect(signals).toEqual([]);
+      if (operation === 'stop') {
+        const other = fakeProcess();
+        let released = false;
+        const abort = new AbortController();
+        const wait = waitForProcessOutputWithAbortGrace(
+          {
+            ...other.result,
+            exited: Promise.resolve(0),
+            closed: never,
+            stop: () => never,
+            release: () => {
+              released = true;
+              return never;
+            },
+          },
+          abort.signal,
+          { killGraceMs: 0, cleanupTimeoutMs: 20 },
+        );
+        abort.abort();
+        await expect(wait).rejects.toBeInstanceOf(CleanupUnconfirmedError);
+        expect(released).toBe(false);
+      }
     });
 
     test('standalone stop has a parent watchdog when the real supervisor is SIGSTOPped', async () => {
-      const child = crossSpawn(
+      const owner = spawnSupervised(
         [
           node,
           '-e',
@@ -251,6 +279,7 @@ describe.skipIf(process.platform === 'win32')(
         ],
         { killGraceMs: 0, cleanupTimeoutMs: 30 },
       );
+      const child = ownerHandle(owner);
       const transportExited = new Promise<void>((resolve) =>
         child.proc.once('exit', () => resolve()),
       );
@@ -265,7 +294,7 @@ describe.skipIf(process.platform === 'win32')(
         // Timeout is not a claim that the stopped supervisor was killed.
         expect(child.proc.signalCode).toBeNull();
         await expect(
-          waitForProcessOutputWithAbortGrace(child, child.stderr()),
+          waitForProcessOutputWithAbortGrace(child),
         ).rejects.toBeInstanceOf(CleanupUnconfirmedError);
       } finally {
         // Test-only resumption of our unreaped ChildProcess allows its queued
@@ -337,41 +366,66 @@ describe.skipIf(process.platform === 'win32')(
       }
     });
 
-    test('crossSpawn collects from launch, caches promises and releases automatically', async () => {
-      const child = crossSpawn([
-        node,
-        '-e',
-        'process.stdout.write("out"); process.stderr.write("err");',
-      ]);
+    test('runProcess collects from launch and releases exactly once', async () => {
+      let child!: SupervisedProcess;
+      let send!: ReturnType<typeof spyOn>;
+      const result = await runProcess(
+        [
+          node,
+          '-e',
+          'process.stdout.write("out"); process.stderr.write("err");',
+        ],
+        {},
+        undefined,
+        (cmd, options) => {
+          child = spawnSupervised(cmd, options);
+          send = spyOn(child.proc, 'send');
+          return child;
+        },
+      );
       try {
-        expect(await child.exited).toBe(0);
+        expect((await child.exited).code).toBe(0);
         await child.closed;
-        expect(child.stdout()).toBe(child.stdout());
-        expect(await child.stdout()).toBe('out');
-        expect(await child.stderr()).toBe('err');
+        expect(result.stdout).toBe('out');
+        expect(result.stderr).toBe('err');
         expect(child.proc.exitCode).toBeNull();
         expect(child.proc.signalCode).toBe('SIGKILL');
-        const result = await waitForProcessOutputWithAbortGrace(
-          child,
-          child.stderr(),
-          undefined,
-          child.stdout(),
-        );
         expect(result).toMatchObject({
           exitCode: 0,
           stdout: 'out',
           stderr: 'err',
           aborted: false,
         });
+        const nonzero = await runProcess(
+          [node, '-e', 'process.stderr.write("nonzero"); process.exit(23);'],
+          { killProcessGroup: false },
+        );
+        expect(nonzero).toMatchObject({
+          exitCode: 23,
+          stderr: 'nonzero',
+          aborted: false,
+        });
+        expect(
+          send.mock.calls.filter(
+            (call: unknown[]) =>
+              typeof call[0] === 'object' &&
+              call[0] !== null &&
+              'type' in call[0] &&
+              call[0].type === 'release',
+          ),
+        ).toHaveLength(1);
       } finally {
-        await child.stop?.(0);
+        send.mockRestore();
+        await child.stop(0);
       }
     });
 
     test('abort retains the supervisor through grace even when the task exits on TERM', async () => {
       const descendant =
         'process.on("SIGTERM", () => {}); process.stdout.write("READY\\n"); setInterval(() => {}, 1000);';
-      const child = crossSpawn(
+      let child!: SupervisedProcess;
+      const controller = new AbortController();
+      const pending = runProcess(
         [
           node,
           '-e',
@@ -383,50 +437,56 @@ describe.skipIf(process.platform === 'win32')(
     `,
         ],
         { killGraceMs: 150 },
+        controller.signal,
+        (cmd, options) => (child = spawnSupervised(cmd, options)),
       );
-      const controller = new AbortController();
       let cleaned = false;
-      void child.closed?.then(() => {
+      void child.closed.then(() => {
         cleaned = true;
       });
       try {
         await ready(child.proc);
-        const pending = waitForProcessOutputWithAbortGrace(
-          child,
-          child.stderr(),
-          controller.signal,
-          child.stdout(),
-          { killGraceMs: 150 },
-        );
         controller.abort();
-        expect(await child.exited).toBe(0);
+        expect((await child.exited).code).toBe(0);
         expect(cleaned).toBe(false);
         expect(await pending).toMatchObject({ aborted: true, exitCode: 0 });
         expect(cleaned).toBe(true);
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
-        await child.stop?.(0);
+        await child.stop(0);
       }
     });
 
     test('already-aborted calls cannot release the supervisor before cleanup', async () => {
-      const child = crossSpawn([node, '-e', 'setInterval(() => {}, 1000);'], {
-        killGraceMs: 20,
-      });
+      let child!: SupervisedProcess;
+      let send!: ReturnType<typeof spyOn>;
       const controller = new AbortController();
       controller.abort();
       try {
-        const result = await waitForProcessOutputWithAbortGrace(
-          child,
-          child.stderr(),
-          controller.signal,
-          child.stdout(),
+        const result = await runProcess(
+          [node, '-e', 'setInterval(() => {}, 1000);'],
           { killGraceMs: 20 },
+          controller.signal,
+          (cmd, options) => {
+            child = spawnSupervised(cmd, options);
+            send = spyOn(child.proc, 'send');
+            return child;
+          },
         );
         expect(result.aborted).toBe(true);
         expect(child.proc.signalCode).toBe('SIGKILL');
+        expect(
+          send.mock.calls.filter(
+            (call: unknown[]) =>
+              typeof call[0] === 'object' &&
+              call[0] !== null &&
+              'type' in call[0] &&
+              call[0].type === 'release',
+          ),
+        ).toHaveLength(0);
       } finally {
-        await child.stop?.(0);
+        send?.mockRestore();
+        await child.stop(0);
       }
     });
 
@@ -459,7 +519,8 @@ describe.skipIf(process.platform === 'win32')(
     });
 
     test('bounds post-task drain when a descendant inherits output', async () => {
-      const child = crossSpawn(
+      let child!: SupervisedProcess;
+      const pending = runProcess(
         [
           node,
           '-e',
@@ -468,15 +529,17 @@ describe.skipIf(process.platform === 'win32')(
       process.stdout.write('partial');
     `,
         ],
-        { killGraceMs: 30, postExitDrainMs: 20 },
+        { killGraceMs: 30, postCloseDrainMs: 20 },
+        undefined,
+        (cmd, options) => (child = spawnSupervised(cmd, options)),
       );
       try {
-        expect(await child.exited).toBe(0);
-        expect(await child.stdout()).toBe('partial');
+        expect((await child.exited).code).toBe(0);
+        expect((await pending).stdout).toBe('partial');
         await child.closed;
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
-        await child.stop?.(0);
+        await child.stop(0);
       }
     });
 
@@ -484,51 +547,45 @@ describe.skipIf(process.platform === 'win32')(
       'stdout',
       'stderr',
     ] as const)('observes an early %s stream error and cleans up', async (stream) => {
-      const child = crossSpawn(
+      let child!: SupervisedProcess;
+      const pending = runProcess(
         [
           node,
           '-e',
           'process.stdout.write("READY\\n"); setInterval(() => {}, 1000);',
         ],
         { killGraceMs: 30 },
+        undefined,
+        (cmd, options) => (child = spawnSupervised(cmd, options)),
       );
       const error = new Error(`${stream} failed before collection`);
       try {
         await ready(child.proc);
         child.proc[stream]?.emit('error', error);
-        // No stdout()/stderr()/wait call until after the rejection microtask.
+        // Error observers were installed synchronously at process creation.
         await new Promise<void>((resolve) => setImmediate(resolve));
-        const pending = waitForProcessOutputWithAbortGrace(
-          child,
-          child.stderr(),
-          undefined,
-          child.stdout(),
-          { killGraceMs: 30 },
-        );
         await expect(pending).rejects.toBe(error);
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
-        await child.stop?.(0);
+        await child.stop(0);
       }
     });
 
     test('reports task spawn errors over IPC, without an unobserved rejection', async () => {
-      const child = crossSpawn(['/definitely-missing-betterglob-command'], {
-        killGraceMs: 10,
-      });
+      let child!: SupervisedProcess;
+      const pending = runProcess(
+        ['/definitely-missing-betterglob-command'],
+        {
+          killGraceMs: 10,
+        },
+        undefined,
+        (cmd, options) => (child = spawnSupervised(cmd, options)),
+      );
       try {
         await child.closed;
-        await expect(
-          waitForProcessOutputWithAbortGrace(
-            child,
-            child.stderr(),
-            undefined,
-            child.stdout(),
-            { killGraceMs: 10 },
-          ),
-        ).rejects.toThrow('ENOENT');
+        await expect(pending).rejects.toThrow('ENOENT');
       } finally {
-        await child.stop?.(0);
+        await child.stop(0);
       }
     });
   },
