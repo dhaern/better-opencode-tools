@@ -149,6 +149,97 @@ describe('tools/grep/tool', () => {
     expect(metadataInput.metadata.route_fallback_reason).toBeUndefined();
   });
 
+  test('pins the complete permission and result metadata with normalized precedence', async () => {
+    const repo = temps.createRepo();
+    const result = buildResult(repo);
+    const grep = createGrepTool(
+      { directory: repo, worktree: repo, client: {} } as any,
+      { run: async () => result },
+    );
+    const ctx = createExecutionContext(repo);
+    const output = (await grep.execute(
+      {
+        pattern: 'createTool',
+        path: 'src',
+        paths: ['src', 'src'],
+        globs: ['*.ts', '*.ts', ''],
+        context: 2,
+        before_context: 3,
+        max_results: 3.8,
+        smart_case: true,
+        case_sensitive: false,
+        multiline_dotall: true,
+      },
+      ctx as any,
+    )) as { metadata: Record<string, unknown> };
+    const target = path.join(repo, 'src');
+    const base = {
+      backend: 'rg',
+      pattern: 'createTool',
+      path: 'src',
+      paths: [target],
+      resolved_path: target,
+      real_path: target,
+      include: undefined,
+      globs: ['*.ts', '*.ts'],
+      exclude_globs: [],
+      output_mode: 'content',
+      case_sensitive: false,
+      smart_case: false,
+      word_regexp: false,
+      context: 2,
+      context_requested: 2,
+      context_effective: undefined,
+      before_context: 3,
+      after_context: 2,
+      max_results: 3,
+      max_count_per_file: undefined,
+      timeout_ms: DEFAULT_GREP_TIMEOUT_MS,
+      hidden: true,
+      follow_symlinks: false,
+      real_path_exhaustive: true,
+      fixed_strings: false,
+      invert_match: false,
+      multiline: true,
+      multiline_dotall: true,
+      pcre2: false,
+      file_type: undefined,
+      file_types: [],
+      exclude_file_types: [],
+      max_filesize: undefined,
+      sort_by: 'none',
+      sort_order: 'asc',
+    };
+    expect(getAskInput(ctx).metadata).toEqual(base);
+    const complete = {
+      ...base,
+      matches: 1,
+      match_kind: 'match',
+      files: 1,
+      truncated: false,
+      search_truncated: false,
+      limit_reached: false,
+      timed_out: false,
+      cancelled: false,
+      retry_count: 0,
+      exit_code: 0,
+      error: undefined,
+      cwd: repo,
+      command: result.command,
+      strategy: 'direct',
+      discovery_command: undefined,
+      replay_batch_count: undefined,
+      replay_target_count: undefined,
+      discovered_files: undefined,
+      sorted_files: undefined,
+      replayed_files: undefined,
+      partial_phase: undefined,
+      mtime_discovery_capped: undefined,
+    };
+    expect(output.metadata).toEqual(complete);
+    expect(getMetadataInput(ctx).metadata).toEqual(complete);
+  });
+
   test('fails closed when permission Effect loses OpenCode context', async () => {
     const repoDir = temps.createRepo();
     const run: GrepRunner = mock(async () => buildResult(repoDir));

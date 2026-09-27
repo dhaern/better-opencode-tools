@@ -3,13 +3,14 @@ import { describe, expect, test } from 'bun:test';
 import { symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import which from 'which';
+import { GrepAggregator } from './aggregate';
 import {
   executeContentLikeMode,
   executeCountMode,
   executeFilesMode,
 } from './direct';
 import { executeGrepFallback } from './fallback';
-import { buildPrimarySummary } from './format';
+import { buildPrimarySummary, formatGrepResult } from './format';
 import { executeMtimeMode } from './mtime';
 import { normalizeGrepInput } from './normalize';
 import { createRepoContext, createTempTracker } from './test-helpers';
@@ -101,6 +102,97 @@ function stable(
 }
 
 describe('grep observable result characterization', () => {
+  test('golden output at the 2000-unit escaped boundary for rg and GNU grep', async () => {
+    const root = temps.createRepo();
+    const file = path.join(root, 'src', 'boundary.txt');
+    const lines = [
+      `needle${'a'.repeat(1991)}\t\x01`, // 1999 units
+      `needle${'b'.repeat(1992)}\t\x01`, // 2000 units
+      `needle${'c'.repeat(1993)}\t\x01`, // 2001 units
+      `needle${'d'.repeat(1993)}\t\x01🦊${'e'.repeat(2996)}\r`, // 5000 units
+      `needle${'f'.repeat(1993)}🦊`, // surrogate pair crosses the cut
+    ];
+    expect(lines.slice(0, 4).map((line) => line.length)).toEqual([
+      1999, 2000, 2001, 5000,
+    ]);
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    const input = normalizeGrepInput(
+      { pattern: 'needle', path: file, fixed_strings: true },
+      createRepoContext(root) as never,
+    );
+    const expected = [
+      'Pattern: needle',
+      `Path: ${file}`,
+      '',
+      'Found 5 matches across 1 file.',
+      '',
+      'src/boundary.txt',
+      `      1: needle${'a'.repeat(1991)}\\t\\...`,
+      '',
+      `      2: needle${'b'.repeat(1992)}\\t...`,
+      '',
+      `      3: needle${'c'.repeat(1993)}\\...`,
+      '',
+      `      4: needle${'d'.repeat(1993)}\\...`,
+      '',
+      `      5: needle${'f'.repeat(1993)}\ud83e...`,
+    ].join('\n');
+    for (const backend of ['rg', 'grep'] as const) {
+      const result = await search(root, backend, 'content', 'none', 0, 500, {
+        path: file,
+      });
+      expect(formatGrepResult(input, { ...result, summary: undefined })).toBe(
+        backend === 'grep'
+          ? `${expected}\n\n---\nGNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.`
+          : expected,
+      );
+    }
+  });
+
+  test('rg multiline golden normalizes over 2001 CRLF pairs before truncation', () => {
+    const root = temps.createRepo();
+    const input = normalizeGrepInput(
+      { pattern: 'needle', path: 'src' },
+      createRepoContext(root) as never,
+    );
+    const aggregator = new GrepAggregator(input);
+    aggregator.consume({
+      type: 'match',
+      data: {
+        path: { text: path.join(root, 'src', 'boundary.txt') },
+        line_number: 1,
+        lines: { text: 'needle\r\n'.repeat(2002) },
+        submatches: [],
+      },
+    });
+    const snapshot = aggregator.snapshot();
+    const result: GrepSearchResult = {
+      ...snapshot,
+      backend: 'rg',
+      outputMode: 'content',
+      matchKind: 'match',
+      truncated: false,
+      timedOut: false,
+      cancelled: false,
+      exitCode: 0,
+      retryCount: 0,
+      command: [],
+      cwd: root,
+      stderr: '',
+      warnings: [],
+    };
+    const expected = [
+      'Pattern: needle',
+      'Path: src',
+      '',
+      'Found 1 match across 1 file.',
+      '',
+      'src/boundary.txt',
+      `      1: needle${'\n         needle'.repeat(284)}\n         needl...`,
+    ].join('\n');
+    expect(formatGrepResult(input, result)).toBe(expected);
+  });
+
   function fixture() {
     const root = temps.createRepo();
     const a = path.join(root, 'src', 'a.txt');
