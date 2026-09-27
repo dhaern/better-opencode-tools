@@ -1,11 +1,11 @@
 import { GrepAggregator } from './aggregate';
+import { collectFileEntries, finalizeFiles } from './fallback-results';
 import {
   consumeNullCountPairsBytes,
   consumeNullItemsBytes,
   consumeRgJsonStream,
   readTextStream,
 } from './json-stream';
-import { buildPathFromBytes } from './path-utils';
 import type { ResolvedGrepCli } from './resolver';
 import {
   applySuccessfulStderr,
@@ -39,51 +39,33 @@ interface ContentState {
   killedForLimit: boolean;
 }
 
-interface CountState {
+interface FileListState {
   files: GrepFileMatch[];
-  totalMatches: number;
   limitReached: boolean;
 }
 
-interface FilesState {
-  files: GrepFileMatch[];
-  limitReached: boolean;
-  seen: Set<string>;
-}
-
-function buildFileMatch(
-  filePath: Uint8Array,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-  matchCount: number,
-): GrepFileMatch | undefined {
-  if (filePath.length === 0) {
-    return undefined;
-  }
-
-  const pathInfo = buildPathFromBytes(filePath, input.cwd, input.worktree);
+function finishFileListMode(
+  baseResult: GrepSearchResult,
+  files: GrepFileMatch[],
+  input: NormalizedGrepInput,
+  killedForLimit: boolean,
+  termination: TerminationState,
+  exitCode: number,
+  stderr: string,
+): GrepSearchResult {
+  const finalized = finalizeFiles(files, input);
+  const limitReached = finalized.limitReached || killedForLimit;
   return {
-    file: pathInfo.displayPath,
-    absolutePath: pathInfo.absolutePath,
-    replayPath: pathInfo.replayPath,
-    nonUtf8Path: pathInfo.nonUtf8Path,
-    pathKey: pathInfo.pathKey,
-    matchCount,
-    matches: [],
+    ...baseResult,
+    ...finalized,
+    truncated: limitReached || termination.timedOut || termination.cancelled,
+    limitReached,
+    timedOut: termination.timedOut,
+    cancelled: termination.cancelled,
+    exitCode,
+    stderr,
+    warnings: [],
   };
-}
-
-function parseCountRecordBytes(
-  filePath: Uint8Array,
-  countText: string,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-): GrepFileMatch | undefined {
-  if (!/^\d+$/.test(countText)) {
-    return undefined;
-  }
-
-  const count = Number.parseInt(countText, 10);
-  if (count === 0) return undefined;
-  return buildFileMatch(filePath, input, count);
 }
 
 function simpleIsStopped(
@@ -294,43 +276,42 @@ export async function executeCountMode(
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
-    init: (): CountState => ({
+    init: (): FileListState => ({
       files: [],
-      totalMatches: 0,
       limitReached: false,
     }),
-    consumeStdout: async (stdout, proc, state) =>
-      consumeNullCountPairsBytes(stdout, (filePath, countText) => {
-        const file = parseCountRecordBytes(filePath, countText, input);
-        if (!file) {
-          return true;
-        }
+    consumeStdout: async (stdout, proc, state) => {
+      // ripgrep pre-sorts, so the shared file-list consumer runs without
+      // admission: identical records, limits and early stop as GNU fallback.
+      const collected = await collectFileEntries(
+        proc,
+        { ...input, sortBy: 'none' },
+        (yieldFile) =>
+          consumeNullCountPairsBytes(stdout, (filePath, countText) => {
+            if (!/^\d+$/.test(countText)) {
+              return true;
+            }
 
-        state.files.push(file);
-        state.totalMatches += file.matchCount;
-
-        if (state.files.length >= input.maxResults) {
-          state.limitReached = true;
-          killProcess(proc);
-          return false;
-        }
-
-        return true;
-      }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => ({
-      ...baseResult,
-      files: state.files,
-      totalMatches: state.totalMatches,
-      totalFiles: state.files.length,
-      truncated:
-        state.limitReached || termination.timedOut || termination.cancelled,
-      limitReached: state.limitReached,
-      timedOut: termination.timedOut,
-      cancelled: termination.cancelled,
-      exitCode,
-      stderr,
-      warnings: [],
-    }),
+            const count = Number.parseInt(countText, 10);
+            if (count === 0) {
+              return true;
+            }
+            return yieldFile(filePath, count);
+          }),
+      );
+      state.files = collected.files;
+      state.limitReached = collected.limitReached;
+    },
+    buildResult: (baseResult, state, termination, exitCode, stderr) =>
+      finishFileListMode(
+        baseResult,
+        state.files,
+        input,
+        state.limitReached,
+        termination,
+        exitCode,
+        stderr,
+      ),
     isStopped: simpleIsStopped,
   });
 }
@@ -341,48 +322,35 @@ export async function executeFilesMode(
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
-    init: (): FilesState => ({
+    init: (): FileListState => ({
       files: [],
       limitReached: false,
-      seen: new Set<string>(),
     }),
-    consumeStdout: async (stdout, proc, state) =>
-      consumeNullItemsBytes(stdout, (filePath) => {
-        const file = buildFileMatch(filePath, input, 1);
-        if (!file) {
-          return true;
-        }
-
-        const seenKey = file.pathKey ?? file.absolutePath;
-        if (state.seen.has(seenKey)) {
-          return true;
-        }
-
-        state.seen.add(seenKey);
-        state.files.push(file);
-
-        if (state.files.length >= input.maxResults) {
-          state.limitReached = true;
-          killProcess(proc);
-          return false;
-        }
-
-        return true;
-      }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => ({
-      ...baseResult,
-      files: state.files,
-      totalMatches: state.files.length,
-      totalFiles: state.files.length,
-      truncated:
-        state.limitReached || termination.timedOut || termination.cancelled,
-      limitReached: state.limitReached,
-      timedOut: termination.timedOut,
-      cancelled: termination.cancelled,
-      exitCode,
-      stderr,
-      warnings: [],
-    }),
+    consumeStdout: async (stdout, proc, state) => {
+      const collected = await collectFileEntries(
+        proc,
+        { ...input, sortBy: 'none' },
+        (yieldFile) =>
+          consumeNullItemsBytes(stdout, (filePath) => {
+            if (filePath.length === 0) {
+              return true;
+            }
+            return yieldFile(filePath, 1);
+          }),
+      );
+      state.files = collected.files;
+      state.limitReached = collected.limitReached;
+    },
+    buildResult: (baseResult, state, termination, exitCode, stderr) =>
+      finishFileListMode(
+        baseResult,
+        state.files,
+        input,
+        state.limitReached,
+        termination,
+        exitCode,
+        stderr,
+      ),
     isStopped: simpleIsStopped,
   });
 }

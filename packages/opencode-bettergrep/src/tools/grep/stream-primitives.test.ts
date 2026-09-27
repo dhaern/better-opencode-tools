@@ -5,7 +5,7 @@ import {
   createSearchAbortError,
 } from '../../utils/abort';
 import { createAbortError, throwIfAborted } from './cli-probe';
-import { consumeNullPrefixedLinesStream } from './fallback-records';
+import { consumeNullPrefixedLinesStream } from './fallback-content';
 import {
   consumeNullCountPairsBytes,
   consumeNullItemsBytes,

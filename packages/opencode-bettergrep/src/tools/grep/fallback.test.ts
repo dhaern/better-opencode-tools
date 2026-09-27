@@ -4,8 +4,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
+import { parseContentLine } from './fallback-content';
 import { translatePatternToEre } from './fallback-ere';
-import { parseContentLine } from './fallback-records';
 import { normalizeGrepInput } from './normalize';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
