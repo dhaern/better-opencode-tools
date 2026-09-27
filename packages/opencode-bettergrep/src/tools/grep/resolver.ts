@@ -14,7 +14,11 @@ import {
   getInstalledRipgrepPathAsync,
   getRipgrepCacheDir,
 } from './rg-cache';
-import { AbortWaitError, createSearchAbortError } from './runtime';
+import {
+  AbortWaitError,
+  createSearchAbortError,
+  getAbortKind,
+} from './runtime';
 import type { GrepBackend } from './types';
 
 export interface ResolvedGrepCli {
@@ -200,12 +204,25 @@ export function resolveGrepCli(
 function waitForSharedAutoInstall(
   state: SharedAutoInstallState,
   signal?: AbortSignal,
+  grepDeps?: GrepResolverDependencies,
 ): Promise<ResolvedGrepCli> {
   state.waiters += 1;
 
   return raceWithAbort(state.promise, signal).finally(() => {
     state.waiters = Math.max(0, state.waiters - 1);
     if (state.waiters > 0 || state.settled) return;
+    if (
+      grepDeps &&
+      signal?.aborted &&
+      (getAbortKind(signal) === 'timeout' ||
+        (signal.reason as { name?: unknown } | undefined)?.name ===
+          'TimeoutError')
+    ) {
+      failedInstallRetryAfter.set(
+        grepDeps,
+        Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
+      );
+    }
     if (autoInstallState === state) autoInstallState = null;
     state.controller.abort();
   });
@@ -302,13 +319,12 @@ export async function resolveGrepCliWithAutoInstall(
     return current;
   }
 
-  if (autoInstallState) {
-    return waitForSharedAutoInstall(autoInstallState, signal);
-  }
-
-  autoInstallState = createSharedAutoInstall(deps);
-
-  return waitForSharedAutoInstall(autoInstallState, signal);
+  autoInstallState ??= createSharedAutoInstall(deps);
+  return waitForSharedAutoInstall(
+    autoInstallState,
+    signal,
+    current.backend === 'grep' ? deps : undefined,
+  );
 }
 
 export function resetGrepCliResolverForTests(): void {

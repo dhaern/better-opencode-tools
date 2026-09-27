@@ -8,6 +8,7 @@ import {
   resolveGrepCli,
   resolveGrepCliWithAutoInstall,
 } from './resolver';
+import { setAbortKind } from './runtime';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
@@ -298,6 +299,67 @@ describe('tools/grep/resolver', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  async function attemptsAfterAbortingInstall(
+    reason: 'runner-timeout' | 'public-timeout' | 'cancel',
+  ): Promise<number> {
+    jest.useFakeTimers();
+    try {
+      let attempts = 0;
+      let started!: () => void;
+      const installed = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'grep' ? '/usr/bin/grep' : null,
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        installLatestStableRipgrep: (signal?: AbortSignal) => {
+          attempts += 1;
+          if (attempts > 1) return Promise.reject(new Error('offline'));
+          started();
+          return new Promise<string>((_, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => reject(new Error('aborted')),
+              { once: true },
+            );
+          });
+        },
+      };
+      const controller = new AbortController();
+      const first = resolveGrepCliWithAutoInstall(deps, controller.signal);
+      await installed;
+      if (reason === 'runner-timeout')
+        setAbortKind(controller.signal, 'timeout');
+      controller.abort(
+        reason === 'public-timeout'
+          ? new DOMException('deadline', 'TimeoutError')
+          : undefined,
+      );
+      await expect(first).rejects.toThrow(
+        /cancelled before execution started/i,
+      );
+      await Promise.resolve();
+      expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+      return attempts;
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+
+  test('runner timeout with GNU grep memoizes the failed install', async () => {
+    expect(await attemptsAfterAbortingInstall('runner-timeout')).toBe(1);
+  });
+
+  test('public TimeoutError with GNU grep memoizes the failed install', async () => {
+    expect(await attemptsAfterAbortingInstall('public-timeout')).toBe(1);
+  });
+
+  test('user cancellation with GNU grep permits another install attempt', async () => {
+    expect(await attemptsAfterAbortingInstall('cancel')).toBe(2);
   });
 
   test('explicit invalidation permits an immediate retry of a failed install', async () => {
