@@ -1,10 +1,10 @@
-import { sanitizeTitle } from '../../tools/grep/path-utils';
 import {
   FILE_SUMMARY_RE_SOURCE,
   MATCH_SUMMARY_RE_SOURCE,
   MTIME_NO_VISIBLE_RE_SOURCE,
   NO_RESULTS_RE_SOURCE,
-} from '../../tools/grep/summary';
+} from '../../tools/grep/format';
+import { sanitizeTitle } from '../../tools/grep/path-utils';
 
 const FILE_SUMMARY_RE = new RegExp(FILE_SUMMARY_RE_SOURCE);
 const MATCH_SUMMARY_RE = new RegExp(MATCH_SUMMARY_RE_SOURCE);

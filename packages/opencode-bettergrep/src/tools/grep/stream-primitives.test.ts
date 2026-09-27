@@ -2,9 +2,11 @@
 import { expect, test } from 'bun:test';
 import {
   throwIfAborted as assertNotAborted,
+  createAbortError,
   createSearchAbortError,
+  throwIfAborted,
 } from '../../utils/abort';
-import { createAbortError, throwIfAborted } from './cli-probe';
+import { probeExecutable } from './cli-probe';
 import { consumeNullPrefixedLinesStream } from './fallback-content';
 import {
   consumeNullCountPairsBytes,
@@ -128,7 +130,7 @@ test('byte and text escaping keep tab, CR and newline contracts', () => {
   );
 });
 
-test('abort errors preserve exact message and class for each caller', () => {
+test('abort errors preserve exact message and class for each caller', async () => {
   const signal = AbortSignal.abort();
   expect(() => throwIfAborted(signal)).toThrow(
     'ripgrep auto-install was aborted',
@@ -152,4 +154,20 @@ test('abort errors preserve exact message and class for each caller', () => {
     new AbortWaitError('Search was cancelled before execution started.')
       .message,
   ).toBe('Search was cancelled before execution started.');
+  await expect(
+    probeExecutable('unused', ['--version'], signal),
+  ).rejects.toBeInstanceOf(AbortWaitError);
+  await expect(
+    probeExecutable(
+      'unused',
+      ['--version'],
+      signal,
+      undefined,
+      undefined,
+      createAbortError,
+    ),
+  ).rejects.toMatchObject({
+    name: 'AbortError',
+    message: 'ripgrep auto-install was aborted',
+  });
 });

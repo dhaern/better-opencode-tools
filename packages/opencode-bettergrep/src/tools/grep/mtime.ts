@@ -1,10 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { MAX_MTIME_DISCOVERY_FILES } from './constants';
-import {
-  executeContentLikeMode,
-  executeCountMode,
-  executeFilesMode,
-} from './direct';
+import { executeDirectMode, executeFilesMode } from './direct';
 import { finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
 import {
@@ -14,12 +10,7 @@ import {
   finalizeMtimeContentResult,
 } from './result-utils';
 import { buildRgCommand } from './rg-args';
-import {
-  getAbortKind,
-  isTimedOutAbort,
-  remainingTimeout,
-  toErrorMessage,
-} from './runtime';
+import { isTimedOutAbort, remainingTimeout, toErrorMessage } from './runtime';
 import type {
   GrepFileMatch,
   GrepSearchResult,
@@ -64,65 +55,6 @@ function withSearchTargets(
   };
 }
 
-interface ReplayState {
-  collected: GrepFileMatch[];
-  timedOut: boolean;
-  cancelled: boolean;
-  limitReached: boolean;
-  partialReplayFailure: boolean;
-  stderr: string;
-  warnings: string[];
-  retryCount: number;
-  exitCode: number;
-  replayBatchCount: number;
-  replayedFiles: number;
-}
-
-async function runReplayAttempt(
-  input: NormalizedGrepInput,
-  signal: AbortSignal,
-  cli: ResolvedGrepCli,
-  deadline: number,
-  targets: string[],
-  state: ReplayState,
-): Promise<boolean> {
-  const scopedInput = withSearchTargets(
-    input,
-    targets,
-    remainingTimeout(deadline),
-    input.outputMode === 'count'
-      ? Number.MAX_SAFE_INTEGER
-      : Math.max(1, input.maxResults - countVisibleMatches(state.collected)),
-  );
-  state.replayBatchCount += 1;
-  const partial =
-    input.outputMode === 'count'
-      ? await executeCountMode(scopedInput, signal, cli)
-      : await executeContentLikeMode(scopedInput, signal, cli);
-
-  state.retryCount += partial.retryCount;
-  state.exitCode = Math.max(state.exitCode, partial.exitCode);
-  if (partial.stderr) {
-    state.stderr = partial.stderr;
-  }
-  state.warnings.push(...partial.warnings);
-  if (partial.error) {
-    state.partialReplayFailure = true;
-    state.warnings.push(
-      `Skipped mtime replay batch ${state.replayBatchCount}: ${partial.error}`,
-    );
-    return false;
-  }
-
-  state.timedOut = state.timedOut || partial.timedOut;
-  state.cancelled = state.cancelled || partial.cancelled;
-  state.limitReached = state.limitReached || partial.limitReached;
-  const reordered = reorderFilesByReplayOrder(partial.files, targets);
-  state.collected.push(...reordered);
-  state.replayedFiles += reordered.length;
-  return true;
-}
-
 function chunkArray<T>(values: T[], chunkSize: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < values.length; index += chunkSize) {
@@ -135,20 +67,22 @@ function reorderFilesByReplayOrder(
   files: GrepFileMatch[],
   orderedTargets: string[],
 ): GrepFileMatch[] {
-  const order = new Map<string, number>();
-  orderedTargets.forEach((target, index) => {
-    order.set(target, index);
-  });
+  const order = new Map(orderedTargets.map((target, index) => [target, index]));
+  return files.sort(
+    (left, right) =>
+      (order.get(left.replayPath ?? left.absolutePath) ?? Infinity) -
+      (order.get(right.replayPath ?? right.absolutePath) ?? Infinity),
+  );
+}
 
-  return [...files].sort((left, right) => {
-    const leftOrder =
-      order.get(left.replayPath ?? left.absolutePath) ??
-      Number.MAX_SAFE_INTEGER;
-    const rightOrder =
-      order.get(right.replayPath ?? right.absolutePath) ??
-      Number.MAX_SAFE_INTEGER;
-    return leftOrder - rightOrder;
-  });
+function abortedKind(
+  signal: AbortSignal,
+): 'timedOut' | 'cancelled' | undefined {
+  return signal.aborted
+    ? isTimedOutAbort(signal)
+      ? 'timedOut'
+      : 'cancelled'
+    : undefined;
 }
 
 async function discoverMatchingFiles(
@@ -208,12 +142,7 @@ export async function executeMtimeMode(
       sortOrder: 'asc',
       timeoutMs,
     };
-    const fallback =
-      input.outputMode === 'files_with_matches'
-        ? await executeFilesMode(fallbackInput, signal, cli)
-        : input.outputMode === 'count'
-          ? await executeCountMode(fallbackInput, signal, cli)
-          : await executeContentLikeMode(fallbackInput, signal, cli);
+    const fallback = await executeDirectMode(fallbackInput, signal, cli);
 
     return {
       ...fallback,
@@ -268,12 +197,6 @@ export async function executeMtimeMode(
       sortedFiles,
       input,
       discovery.files.length > input.maxResults,
-      {
-        timedOut: discovery.timedOut || sortedDiscovery.timedOut,
-        cancelled: discovery.cancelled || sortedDiscovery.cancelled,
-      },
-      discovery.exitCode,
-      discovery.stderr,
       { warnings: [...discovery.warnings, ...sortedDiscovery.warnings] },
     );
   }
@@ -307,8 +230,8 @@ export async function executeMtimeMode(
     };
   }
 
-  const state: ReplayState = {
-    collected: [],
+  const state = {
+    collected: [] as GrepFileMatch[],
     timedOut: false,
     cancelled: false,
     limitReached: false,
@@ -319,6 +242,41 @@ export async function executeMtimeMode(
     exitCode: discovery.exitCode,
     replayBatchCount: 0,
     replayedFiles: 0,
+  };
+  const runReplayAttempt = async (
+    targets: string[],
+    retrying = false,
+  ): Promise<boolean> => {
+    const scopedInput = withSearchTargets(
+      input,
+      targets,
+      remainingTimeout(deadline),
+      input.outputMode === 'count'
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(1, input.maxResults - countVisibleMatches(state.collected)),
+    );
+    state.replayBatchCount += 1;
+    const partial = await executeDirectMode(scopedInput, signal, cli);
+    // Discard a speculative failed batch's metadata if retries recover it.
+    if (partial.error && !retrying) return false;
+    state.retryCount += partial.retryCount;
+    state.exitCode = Math.max(state.exitCode, partial.exitCode);
+    if (partial.stderr) state.stderr = partial.stderr;
+    state.warnings.push(...partial.warnings);
+    if (partial.error) {
+      state.partialReplayFailure = true;
+      state.warnings.push(
+        `Skipped mtime replay batch ${state.replayBatchCount}: ${partial.error}`,
+      );
+      return false;
+    }
+    state.timedOut ||= partial.timedOut;
+    state.cancelled ||= partial.cancelled;
+    state.limitReached ||= partial.limitReached;
+    const reordered = reorderFilesByReplayOrder(partial.files, targets);
+    state.collected.push(...reordered);
+    state.replayedFiles += reordered.length;
+    return true;
   };
   const replayableFiles = sortedFiles.filter((file) => {
     if (file.replayPath) {
@@ -331,15 +289,9 @@ export async function executeMtimeMode(
     return false;
   });
   const noteAborted = (): boolean => {
-    if (!signal.aborted) {
-      return false;
-    }
-    if (getAbortKind(signal) === 'timeout') {
-      state.timedOut = true;
-    } else {
-      state.cancelled = true;
-    }
-    return true;
+    const kind = abortedKind(signal);
+    if (kind) state[kind] = true;
+    return kind !== undefined;
   };
 
   for (const batch of chunkArray(replayableFiles, 64)) {
@@ -359,14 +311,7 @@ export async function executeMtimeMode(
       continue;
     }
 
-    const batchOk = await runReplayAttempt(
-      input,
-      signal,
-      cli,
-      deadline,
-      orderedTargets,
-      state,
-    );
+    const batchOk = await runReplayAttempt(orderedTargets);
     if (!batchOk) {
       // A failed batch is retried file by file; attempts keep the global
       // numbering so batch warnings and replay_batch_count stay ordered.
@@ -378,7 +323,7 @@ export async function executeMtimeMode(
         if (!target) {
           continue;
         }
-        await runReplayAttempt(input, signal, cli, deadline, [target], state);
+        await runReplayAttempt([target], true);
       }
     }
 
@@ -436,9 +381,6 @@ export async function executeMtimeMode(
       state.collected,
       input,
       state.limitReached || state.collected.length > input.maxResults,
-      { timedOut: state.timedOut, cancelled: state.cancelled },
-      state.exitCode,
-      state.stderr,
       { warnings: state.warnings },
     );
   }
@@ -457,55 +399,41 @@ type StatOutcome =
   | { status: 'timed_out' }
   | { status: 'cancelled' };
 
+type StatFile = (filePath: string) => Promise<{ mtimeMs: number }>;
+
 async function statWithTimeout(
   filePath: string,
   signal: AbortSignal,
   deadline: number,
+  statFile: StatFile,
 ): Promise<StatOutcome> {
-  if (signal.aborted) {
-    return { status: isTimedOutAbort(signal) ? 'timed_out' : 'cancelled' };
-  }
-
+  const aborted = (): StatOutcome => ({
+    status: isTimedOutAbort(signal) ? 'timed_out' : 'cancelled',
+  });
+  if (signal.aborted) return aborted();
   const timeoutMs = remainingTimeout(deadline);
-  if (timeoutMs <= 1) {
-    return { status: 'timed_out' };
-  }
-
-  const timeoutSentinel = Symbol('grep-stat-timeout');
-  const cancelSentinel = Symbol('grep-stat-cancel');
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let abortCleanup: (() => void) | undefined;
-
-  try {
-    const stats = await Promise.race([
-      stat(filePath),
-      new Promise<typeof timeoutSentinel>((resolve) => {
-        timeoutId = setTimeout(() => resolve(timeoutSentinel), timeoutMs);
-      }),
-      new Promise<typeof cancelSentinel>((resolve) => {
-        const onAbort = () => resolve(cancelSentinel);
-        signal.addEventListener('abort', onAbort, { once: true });
-        abortCleanup = () => signal.removeEventListener('abort', onAbort);
-      }),
-    ]);
-
-    if (stats === timeoutSentinel) {
-      return { status: 'timed_out' };
+  if (timeoutMs <= 1) return { status: 'timed_out' };
+  return new Promise<StatOutcome>((resolve) => {
+    let settled = false;
+    const finish = (outcome: StatOutcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve(outcome);
+    };
+    const onAbort = () => finish(aborted());
+    const timer = setTimeout(() => finish({ status: 'timed_out' }), timeoutMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      void statFile(filePath).then(
+        ({ mtimeMs }) => finish({ status: 'ok', mtimeMs }),
+        (error) => finish({ status: 'error', error: toErrorMessage(error) }),
+      );
+    } catch (error) {
+      finish({ status: 'error', error: toErrorMessage(error) });
     }
-
-    if (stats === cancelSentinel) {
-      return { status: isTimedOutAbort(signal) ? 'timed_out' : 'cancelled' };
-    }
-
-    return { status: 'ok', mtimeMs: stats.mtimeMs };
-  } catch (error) {
-    return { status: 'error', error: toErrorMessage(error) };
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    abortCleanup?.();
-  }
+  });
 }
 
 export async function sortFilesByMtime(
@@ -513,6 +441,7 @@ export async function sortFilesByMtime(
   input: Pick<NormalizedGrepInput, 'sortOrder'>,
   signal: AbortSignal,
   deadline: number,
+  statFile: StatFile = stat,
 ): Promise<{
   files: GrepFileMatch[];
   timedOut: boolean;
@@ -530,22 +459,18 @@ export async function sortFilesByMtime(
   let cancelled = false;
 
   const noteAborted = (): boolean => {
-    if (!signal.aborted) {
-      return false;
-    }
-    if (isTimedOutAbort(signal)) {
-      timedOut = true;
-    } else {
-      cancelled = true;
-    }
-    return true;
+    const kind = abortedKind(signal);
+    if (kind === 'timedOut') timedOut = true;
+    if (kind === 'cancelled') cancelled = true;
+    return kind !== undefined;
   };
 
-  // Up to 16 files stat concurrently; the final sort below restores order.
-  const chunks = chunkArray(files, Math.max(1, Math.ceil(files.length / 16)));
+  // Dynamic dispatch lets healthy workers stat all remaining files even if
+  // another worker is stuck; the final sort restores deterministic order.
+  let nextIndex = 0;
   await Promise.all(
-    chunks.map(async (chunk) => {
-      for (const file of chunk) {
+    Array.from({ length: Math.min(16, files.length) }, async () => {
+      while (nextIndex < files.length) {
         if (noteAborted()) {
           return;
         }
@@ -555,23 +480,14 @@ export async function sortFilesByMtime(
           return;
         }
 
-        if (!file.replayPath) {
-          warnings.push(
-            `Could not stat ${file.file} for mtime ordering: non-UTF8 paths are not orderable safely.`,
-          );
-          entries.push({
-            file,
-            mtimeMs: Number.NEGATIVE_INFINITY,
-            statFailed: true,
-          });
-          continue;
-        }
-
-        const statResult = await statWithTimeout(
-          file.replayPath,
-          signal,
-          deadline,
-        );
+        const file = files[nextIndex++];
+        if (!file) return;
+        const statResult: StatOutcome = file.replayPath
+          ? await statWithTimeout(file.replayPath, signal, deadline, statFile)
+          : {
+              status: 'error',
+              error: 'non-UTF8 paths are not orderable safely.',
+            };
         if (statResult.status === 'timed_out') {
           timedOut = true;
           return;

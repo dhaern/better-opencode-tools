@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { probeCommand, throwIfAborted } from './cli-probe';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
+import { probeExecutable } from './cli-probe';
 
 interface RipgrepReleaseAsset {
   name?: string;
@@ -43,20 +44,22 @@ async function detectLinuxLibc(signal?: AbortSignal): Promise<'gnu' | 'musl'> {
     '/usr/glibc-compat/lib/ld-musl-aarch64.so.1',
   ];
 
-  if (muslLoaders.some((candidate) => existsSync(candidate))) {
-    return 'musl';
-  }
+  if (muslLoaders.some((candidate) => existsSync(candidate))) return 'musl';
 
   try {
-    const result = await probeCommand(['ldd', '--version'], signal);
+    const result = await probeExecutable(
+      'ldd',
+      ['--version'],
+      signal,
+      undefined,
+      undefined,
+      createAbortError,
+    );
     const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
 
-    if (output.includes('musl')) {
-      return 'musl';
-    }
+    if (output.includes('musl')) return 'musl';
   } catch (error) {
     if (signal?.aborted) throw error;
-    // Ignore and fall back to gnu.
   }
 
   return 'gnu';
@@ -91,30 +94,19 @@ async function getPlatformCandidates(
 
   if (process.platform === 'linux') {
     const libc = await detectLinuxLibc(signal);
-
-    if (process.arch === 'arm64') {
-      return libc === 'musl'
-        ? [
-            { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-            { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-          ]
-        : [
-            { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-            { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-          ];
-    }
-
-    if (process.arch === 'x64') {
-      return libc === 'musl'
-        ? [
-            { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-            { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-          ]
-        : [
-            { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-            { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-          ];
-    }
+    const arch =
+      process.arch === 'arm64'
+        ? 'aarch64'
+        : process.arch === 'x64'
+          ? 'x86_64'
+          : null;
+    if (!arch) return [];
+    return (libc === 'musl' ? ['musl', 'gnu'] : ['gnu', 'musl']).map(
+      (variant) => ({
+        target: `${arch}-unknown-linux-${variant}`,
+        extension: 'tar.gz' as const,
+      }),
+    );
   }
 
   return [];

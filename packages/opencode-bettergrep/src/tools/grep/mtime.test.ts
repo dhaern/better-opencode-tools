@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, jest, test } from 'bun:test';
 import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import which from 'which';
@@ -44,7 +44,10 @@ function seedRepo(fileCount: number): string {
   return root;
 }
 
-test('mtime content replay batches 130 files into at most 3 replay invocations with -j1', async () => {
+test.each([
+  'content',
+  'count',
+] as const)('mtime %s replays 130 files in three invocations (T3)', async (outputMode) => {
   const root = seedRepo(130);
   const dir = temps.createDir('bettergrep-mtime-wrapper');
   const logPath = path.join(dir, 'invocations.log');
@@ -61,7 +64,7 @@ test('mtime content replay batches 130 files into at most 3 replay invocations w
   );
 
   const result = await executeMtimeMode(
-    mtimeInput(root),
+    mtimeInput(root, { output_mode: outputMode }),
     new AbortController().signal,
     { path: wrapperPath, backend: 'rg', source: 'system-rg' },
   );
@@ -71,8 +74,11 @@ test('mtime content replay batches 130 files into at most 3 replay invocations w
   const invocations = readFileSync(logPath, 'utf8').trim().split('\n');
   // Discovery (1) plus content replay in batches of 64: 64 + 64 + 2.
   const replayInvocations = invocations.slice(1);
-  expect(replayInvocations.length).toBeLessThanOrEqual(3);
-  expect(replayInvocations.join('\n')).toContain('-j1');
+  expect(replayInvocations.length).toBe(Math.ceil(130 / 64));
+  expect(result.replayBatchCount).toBe(3);
+  if (outputMode === 'content') {
+    expect(replayInvocations.join('\n')).toContain('-j1');
+  }
 });
 
 test.each([
@@ -92,20 +98,18 @@ test.each([
   expect(names).toEqual(sortOrder === 'asc' ? ordered : ordered.reverse());
 });
 
-test('mtime replay retries a failed batch file by file with global numbering', async () => {
+test.each([
+  'content',
+  'count',
+] as const)('mtime %s completely recovered batch leaves no error metadata (T1)', async (outputMode) => {
   const root = seedRepo(10);
-  const dir = temps.createDir('bettergrep-mtime-flaky');
-  const countPath = path.join(dir, 'attempts.log');
-  const wrapperPath = path.join(dir, 'rg-flaky.sh');
+  const dir = temps.createDir('bettergrep-mtime-recovered');
+  const wrapperPath = path.join(dir, 'rg-recovered.sh');
   writeFileSync(
     wrapperPath,
     [
       '#!/bin/sh',
-      `printf 'x\\n' >> ${JSON.stringify(countPath)}`,
-      // Fail only multi-file replay batches; discovery and single-file
-      // retries succeed.
-      'args="$*"',
-      'case "$args" in',
+      'case "$*" in',
       '*f0009.txt*f0008.txt*) echo "boom" 1>&2; exit 2;;',
       'esac',
       `exec ${JSON.stringify(systemRg)} "$@"`,
@@ -115,19 +119,53 @@ test('mtime replay retries a failed batch file by file with global numbering', a
   );
 
   const result = await executeMtimeMode(
-    mtimeInput(root),
+    mtimeInput(root, { output_mode: outputMode }),
     new AbortController().signal,
     { path: wrapperPath, backend: 'rg', source: 'system-rg' },
   );
-
   expect(result.totalFiles).toBe(10);
   expect(result.totalMatches).toBe(10);
-  expect(
-    result.warnings.some((warning) =>
-      warning.startsWith('Skipped mtime replay batch '),
-    ),
-  ).toBe(true);
-  expect(result.replayBatchCount).toBeGreaterThan(1);
+  expect(result.truncated).toBe(false);
+  expect(result.partialPhase).toBeUndefined();
+  expect(result.warnings).toEqual([]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe('');
+  expect(result.retryCount).toBe(0);
+  expect(result.replayBatchCount).toBe(11);
+});
+
+test.each([
+  'content',
+  'count',
+] as const)('mtime %s permanently failing file reports only the failed retry (T2)', async (outputMode) => {
+  const root = seedRepo(10);
+  const dir = temps.createDir('bettergrep-mtime-unrecovered');
+  const wrapperPath = path.join(dir, 'rg-unrecovered.sh');
+  writeFileSync(
+    wrapperPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '*f0009.txt*f0008.txt*|*f0003.txt*) echo "boom" 1>&2; exit 2;;',
+      'esac',
+      `exec ${JSON.stringify(systemRg)} "$@"`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+
+  const result = await executeMtimeMode(
+    mtimeInput(root, { output_mode: outputMode }),
+    new AbortController().signal,
+    { path: wrapperPath, backend: 'rg', source: 'system-rg' },
+  );
+  expect(result.totalFiles).toBe(9);
+  expect(result.warnings).toEqual(['Skipped mtime replay batch 8: boom']);
+  expect(result.truncated).toBe(true);
+  expect(result.partialPhase).toBe('replay');
+  expect(result.replayBatchCount).toBe(11);
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toBe('boom');
 });
 
 test.each([
@@ -234,6 +272,87 @@ test('mtime sort with an expired deadline reports a timeout', async () => {
   );
 
   expect(sorted.timedOut).toBe(true);
+});
+
+test('mtime stat pool dispatches past a stalled worker before deadline (T4)', async () => {
+  jest.useFakeTimers();
+  try {
+    const files = Array.from({ length: 32 }, (_, index) =>
+      createFileMatch({
+        file: `f${index}`,
+        absolutePath: `/virtual/f${index}`,
+        replayPath: `/virtual/f${index}`,
+        pathKey: `utf8:/virtual/f${index}`,
+      }),
+    );
+    let calls = 0;
+    const statFile = (filePath: string): Promise<{ mtimeMs: number }> => {
+      calls += 1;
+      if (filePath === '/virtual/f0') return new Promise(() => {});
+      return Promise.resolve({
+        mtimeMs: Number(filePath.slice('/virtual/f'.length)),
+      });
+    };
+    const pending = sortFilesByMtime(
+      files,
+      { sortOrder: 'asc' },
+      new AbortController().signal,
+      Date.now() + 100,
+      statFile,
+    );
+    for (let round = 0; round < 100; round += 1) await Promise.resolve();
+    jest.advanceTimersByTime(100);
+    const sorted = await pending;
+    expect(calls).toBe(32);
+    expect(sorted.timedOut).toBe(true);
+    expect(sorted.files.map((file) => file.file)).toEqual(
+      files.slice(1).map((file) => file.file),
+    );
+    expect(jest.getTimerCount()).toBe(0);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('mtime abort while stat is pending cancels without listeners or timers (T5)', async () => {
+  jest.useFakeTimers();
+  const controller = new AbortController();
+  const add = jest.spyOn(controller.signal, 'addEventListener');
+  const remove = jest.spyOn(controller.signal, 'removeEventListener');
+  try {
+    let calls = 0;
+    const file = createFileMatch({
+      file: 'pending',
+      absolutePath: '/virtual/pending',
+      replayPath: '/virtual/pending',
+      pathKey: 'utf8:/virtual/pending',
+    });
+    const pending = sortFilesByMtime(
+      [file],
+      { sortOrder: 'asc' },
+      controller.signal,
+      Date.now() + 100,
+      (): Promise<{ mtimeMs: number }> => {
+        calls += 1;
+        return new Promise(() => {});
+      },
+    );
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    controller.abort();
+    const sorted = await pending;
+    expect(sorted.cancelled).toBe(true);
+    expect(sorted.timedOut).toBe(false);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(add.mock.calls.filter(([name]) => name === 'abort').length).toBe(1);
+    expect(remove.mock.calls.filter(([name]) => name === 'abort').length).toBe(
+      1,
+    );
+  } finally {
+    add.mockRestore();
+    remove.mockRestore();
+    jest.useRealTimers();
+  }
 });
 
 test('mtime replay propagates an aborted timeout signal', async () => {

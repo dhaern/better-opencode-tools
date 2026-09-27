@@ -1,9 +1,5 @@
 import { DEFAULT_GREP_RETRY_COUNT, RG_BINARY } from './constants';
-import {
-  executeContentLikeMode,
-  executeCountMode,
-  executeFilesMode,
-} from './direct';
+import { executeDirectMode } from './direct';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
 import { buildDiscoveryInput, executeMtimeMode } from './mtime';
@@ -69,15 +65,7 @@ async function executeOnce(
     return executeMtimeMode(input, signal, cli);
   }
 
-  if (input.outputMode === 'files_with_matches') {
-    return executeFilesMode(input, signal, cli);
-  }
-
-  if (input.outputMode === 'count') {
-    return executeCountMode(input, signal, cli);
-  }
-
-  return executeContentLikeMode(input, signal, cli);
+  return executeDirectMode(input, signal, cli);
 }
 
 function buildPreviewCommand(

@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
 import {
   crossSpawn,
   waitForProcessOutputWithAbortGrace,
@@ -9,12 +10,7 @@ import {
   extractZip,
   getZipExtractionSupportError,
 } from '../../utils/zip-extractor';
-import {
-  createAbortError,
-  hasExecutable,
-  throwIfAborted,
-  waitForExitAndStderr,
-} from './cli-probe';
+import { hasExecutable } from './cli-probe';
 import {
   acquireInstallLock,
   computeSha256Async,
@@ -34,6 +30,7 @@ import {
   fetchLatestRelease,
   selectReleaseAsset,
 } from './rg-release';
+import { waitForExitAndStderr } from './runtime';
 
 function findBinaryRecursive(
   directory: string,

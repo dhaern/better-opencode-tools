@@ -31,14 +31,7 @@ const PATH_KEY_BYTES_PREFIX = 'bytes:base64:';
 function absolutePathSortBytes(file: GrepFileMatch): Buffer {
   const key = file.pathKey ?? file.absolutePath;
   if (key.startsWith(PATH_KEY_BYTES_PREFIX)) {
-    try {
-      return Buffer.from(key.slice(PATH_KEY_BYTES_PREFIX.length), 'base64');
-    } catch {
-      // Fall through to the utf8 representation.
-    }
-  }
-  if (file.pathKey?.startsWith('utf8:')) {
-    return Buffer.from(file.pathKey.slice('utf8:'.length), 'utf8');
+    return Buffer.from(key.slice(PATH_KEY_BYTES_PREFIX.length), 'base64');
   }
   return Buffer.from(file.absolutePath, 'utf8');
 }
@@ -114,12 +107,8 @@ export function createSortedAdmission(
         return true;
       }
 
-      const worst = ranked[ranked.length - 1];
-      if (!worst) {
-        files.set(key, file);
-        return true;
-      }
-
+      // Normalized maxResults guarantees capacity >= 1 here.
+      const worst = ranked[ranked.length - 1] as GrepFileMatch;
       if (!outranks(file, worst)) {
         dropped = true;
         return false;
@@ -248,9 +237,6 @@ export function finishFileListMode(
   files: GrepFileMatch[],
   input: NormalizedGrepInput,
   killedForLimit: boolean,
-  termination: { timedOut: boolean; cancelled: boolean },
-  exitCode: number,
-  stderr: string,
   extra?: { sort?: boolean; warnings?: string[] },
 ): GrepSearchResult {
   const ordered = extra?.sort ? sortFiles(files, input) : files;
@@ -262,13 +248,9 @@ export function finishFileListMode(
     truncated:
       baseResult.truncated ||
       limitReached ||
-      termination.timedOut ||
-      termination.cancelled,
+      baseResult.timedOut ||
+      baseResult.cancelled,
     limitReached,
-    timedOut: termination.timedOut,
-    cancelled: termination.cancelled,
-    exitCode,
-    stderr,
     warnings: extra?.warnings ?? [],
   };
 }

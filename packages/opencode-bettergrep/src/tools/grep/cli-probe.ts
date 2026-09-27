@@ -1,10 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { sync as whichSync } from 'which';
-import {
-  createAbortError,
-  createSearchAbortError,
-  throwIfAborted,
-} from '../../utils/abort';
+import { createSearchAbortError, throwIfAborted } from '../../utils/abort';
 import {
   type CrossSpawnResult,
   crossSpawn,
@@ -21,9 +17,6 @@ import {
 const NEVER_ABORTED = new AbortController().signal;
 
 const PROBE_TIMEOUT_MS = 5_000;
-
-export { createAbortError, throwIfAborted } from '../../utils/abort';
-export { waitForExitAndStderr } from './runtime';
 
 export function raceWithAbort<T>(
   promise: Promise<T>,
@@ -113,28 +106,9 @@ export function probeExecutable(
   signal?: AbortSignal,
   timeoutMs = PROBE_TIMEOUT_MS,
   spawn: typeof crossSpawn = crossSpawn,
+  abortError: () => Error = createSearchAbortError,
 ): Promise<ProbeResult> {
-  return runProbe(
-    [binaryPath, ...args],
-    signal,
-    timeoutMs,
-    createSearchAbortError,
-    spawn,
-  );
-}
-
-export async function probeCommand(
-  command: string[],
-  signal?: AbortSignal,
-  timeoutMs = PROBE_TIMEOUT_MS,
-): Promise<Pick<ProbeResult, 'exitCode' | 'stdout' | 'stderr'>> {
-  const { exitCode, stdout, stderr } = await runProbe(
-    command,
-    signal,
-    timeoutMs,
-    createAbortError,
-  );
-  return { exitCode, stdout, stderr };
+  return runProbe([binaryPath, ...args], signal, timeoutMs, abortError, spawn);
 }
 
 export function defaultFindExecutable(name: string): string | null {

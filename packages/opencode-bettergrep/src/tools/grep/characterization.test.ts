@@ -9,9 +9,9 @@ import {
   executeFilesMode,
 } from './direct';
 import { executeGrepFallback } from './fallback';
+import { buildPrimarySummary } from './format';
 import { executeMtimeMode } from './mtime';
 import { normalizeGrepInput } from './normalize';
-import { buildPrimarySummary } from './summary';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GrepBackend, GrepOutputMode, GrepSearchResult } from './types';
 

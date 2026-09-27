@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { createSortedAdmission } from './fallback-results';
+import { createSortedAdmission, sortFiles } from './fallback-results';
 import { createFileMatch } from './result-utils';
 import type { GrepFileMatch } from './types';
 
@@ -41,6 +41,22 @@ function fileFor(absolutePath: string): GrepFileMatch {
 }
 
 describe('tools/grep/fallback-results sorted admission', () => {
+  test('sorts non-UTF8 path identities by decoded bytes, not base64 text', () => {
+    const make = (byte: number) => {
+      const absolutePath = `bytes:base64:${Buffer.from([47, 114, 101, 112, 111, 47, byte]).toString('base64')}`;
+      return createFileMatch({
+        file: absolutePath,
+        absolutePath,
+        pathKey: absolutePath,
+      });
+    };
+    const low = make(0x80);
+    const high = make(0xff);
+    expect(
+      sortFiles([high, low], { sortBy: 'path', sortOrder: 'asc' }),
+    ).toEqual([low, high]);
+  });
+
   test('top-500 of 20000 shuffled paths admits exact order with bounded compares', () => {
     const candidates = shuffledPaths(20_000, 0x5eed);
     const expected = [...candidates].sort().slice(0, 500);

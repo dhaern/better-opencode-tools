@@ -64,16 +64,13 @@ export async function executeGrepFallback(
       );
       state.parsed = collected;
     },
-    buildResult: (baseResult, state, termination, exitCode, stderr) => {
+    buildResult: (baseResult, state) => {
       const parsed = state.parsed;
       const result = finishFileListMode(
         baseResult,
         parsed.files,
         input,
         parsed.limitReached,
-        termination,
-        exitCode,
-        stderr,
         { sort: true, warnings: [...warnings] },
       );
       if (parsed.skippedLines > 0) {

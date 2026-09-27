@@ -64,9 +64,6 @@ export async function executeMode<TState>(
     buildResult: (
       baseResult: GrepSearchResult,
       state: TState,
-      termination: TerminationState,
-      exitCode: number,
-      stderr: string,
     ) => GrepSearchResult;
     isStopped: (state: TState, termination: TerminationState) => boolean;
     finalizeResult?: (
@@ -128,13 +125,11 @@ export async function executeMode<TState>(
         stdoutPromise.then(() => undefined, captureError),
         exitPromise,
       ]);
-    const result = options.buildResult(
-      baseResult,
-      state,
-      termination.state,
-      exitCode,
-      stderr.trim(),
-    );
+    baseResult.timedOut = termination.state.timedOut;
+    baseResult.cancelled = termination.state.cancelled;
+    baseResult.exitCode = exitCode;
+    baseResult.stderr = stderr.trim();
+    const result = options.buildResult(baseResult, state);
 
     if (options.finalizeResult)
       return options.finalizeResult(result, stdoutError, exitError);
@@ -214,7 +209,7 @@ export async function executeContentLikeMode(
 
         return true;
       }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => {
+    buildResult: (baseResult, state) => {
       const snapshot = state.aggregator.snapshot();
       return {
         ...baseResult,
@@ -222,13 +217,9 @@ export async function executeContentLikeMode(
         truncated:
           snapshot.limitReached ||
           state.killedForLimit ||
-          termination.timedOut ||
-          termination.cancelled,
+          baseResult.timedOut ||
+          baseResult.cancelled,
         limitReached: snapshot.limitReached || state.killedForLimit,
-        timedOut: termination.timedOut,
-        cancelled: termination.cancelled,
-        exitCode,
-        stderr,
         summary: snapshot.summary,
         warnings: [],
       };
@@ -241,7 +232,7 @@ export async function executeContentLikeMode(
   });
 }
 
-export async function executeCountMode(
+export async function executeFileListMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
@@ -252,61 +243,32 @@ export async function executeCountMode(
       limitReached: false,
     }),
     consumeStdout: async (stdout, proc, state) => {
-      // ripgrep pre-sorts, so the shared file-list consumer runs without
-      // admission: identical records, limits and early stop as GNU fallback.
+      // ripgrep pre-sorts, so the shared file-list consumer needs no admission.
       const collected = await collectFileEntries(
         proc,
         { ...input, sortBy: 'none' },
         stdout,
-        'count',
+        input.outputMode === 'count' ? 'count' : 'files',
       );
       state.files = collected.files;
       state.limitReached = collected.limitReached;
     },
-    buildResult: (baseResult, state, termination, exitCode, stderr) =>
-      finishFileListMode(
-        baseResult,
-        state.files,
-        input,
-        state.limitReached,
-        termination,
-        exitCode,
-        stderr,
-      ),
+    buildResult: (baseResult, state) =>
+      finishFileListMode(baseResult, state.files, input, state.limitReached),
     isStopped: simpleIsStopped,
   });
 }
 
-export async function executeFilesMode(
+// Keep the internal named entry points while sharing their implementation.
+export const executeCountMode = executeFileListMode;
+export const executeFilesMode = executeFileListMode;
+
+export function executeDirectMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
-  return executeMode(input, signal, cli, {
-    init: (): FileListState => ({
-      files: [],
-      limitReached: false,
-    }),
-    consumeStdout: async (stdout, proc, state) => {
-      const collected = await collectFileEntries(
-        proc,
-        { ...input, sortBy: 'none' },
-        stdout,
-        'files',
-      );
-      state.files = collected.files;
-      state.limitReached = collected.limitReached;
-    },
-    buildResult: (baseResult, state, termination, exitCode, stderr) =>
-      finishFileListMode(
-        baseResult,
-        state.files,
-        input,
-        state.limitReached,
-        termination,
-        exitCode,
-        stderr,
-      ),
-    isStopped: simpleIsStopped,
-  });
+  return input.outputMode === 'content'
+    ? executeContentLikeMode(input, signal, cli)
+    : executeFileListMode(input, signal, cli);
 }

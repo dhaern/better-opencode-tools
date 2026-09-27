@@ -11,7 +11,8 @@ import {
 import { readFile as readFileAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { probeCommand, throwIfAborted } from './cli-probe';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
+import { probeExecutable } from './cli-probe';
 
 const INSTALL_LOCK_WAIT_MS = 50;
 
@@ -51,16 +52,15 @@ export function getRipgrepBinaryName(): string {
   return process.platform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-export function getInstalledRipgrepPath(): string | null {
-  if (existsSync(getRipgrepInstallLockPath())) {
-    return null;
-  }
-
+function installedBinaryCandidate(): string | null {
+  if (existsSync(getRipgrepInstallLockPath())) return null;
   const binaryPath = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binaryPath)) {
-    return null;
-  }
+  return existsSync(binaryPath) ? binaryPath : null;
+}
 
+export function getInstalledRipgrepPath(): string | null {
+  const binaryPath = installedBinaryCandidate();
+  if (!binaryPath) return null;
   // Readers are non-destructive: cache cleanup only happens under the
   // install lock so a concurrent publisher cannot have its valid install
   // deleted between this check and a later deletion.
@@ -133,17 +133,10 @@ export function ensureExecutable(binaryPath: string): void {
   }
 }
 
-function validateInstalledBinary(
-  binaryPath: string,
-  signal?: AbortSignal,
-): void {
-  throwIfAborted(signal);
+function validateInstalledBinary(binaryPath: string): void {
   const result = spawnSync(binaryPath, ['--version'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-
-  throwIfAborted(signal);
-
   const output = `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`;
   assertValidationOutput(output, result.status);
 }
@@ -152,7 +145,14 @@ export async function validateInstalledBinaryAsync(
   binaryPath: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const result = await probeCommand([binaryPath, '--version'], signal);
+  const result = await probeExecutable(
+    binaryPath,
+    ['--version'],
+    signal,
+    undefined,
+    undefined,
+    createAbortError,
+  );
   const output = `${result.stdout}\n${result.stderr}`;
   assertValidationOutput(output, result.exitCode);
 }
@@ -172,14 +172,8 @@ export async function getInstalledRipgrepPathAsync(
   signal?: AbortSignal,
 ): Promise<string | null> {
   throwIfAborted(signal);
-  if (existsSync(getRipgrepInstallLockPath())) {
-    return null;
-  }
-
-  const binaryPath = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binaryPath)) {
-    return null;
-  }
+  const binaryPath = installedBinaryCandidate();
+  if (!binaryPath) return null;
 
   try {
     await validateCachedBinaryAsync(binaryPath, signal);
@@ -206,11 +200,7 @@ export async function acquireInstallLock(
       mkdirSync(lockPath);
       return () => rmSync(lockPath, { recursive: true, force: true });
     } catch (error) {
-      const code =
-        typeof error === 'object' && error && 'code' in error
-          ? String((error as { code?: unknown }).code)
-          : '';
-      if (code !== 'EEXIST') throw error;
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
 
       try {
         if (Date.now() - statSync(lockPath).mtimeMs > INSTALL_LOCK_STALE_MS) {
