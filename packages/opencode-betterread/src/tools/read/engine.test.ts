@@ -211,6 +211,7 @@ describe('executeRead', () => {
     });
 
     expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(MAX_OUTPUT_CHARS - result.output.length).toBeLessThan(306);
     expect(result.metadata.truncated_by_bytes).toBe(true);
     const numbered = result.output.match(/^\d+: a+$/gm) ?? [];
     expect(numbered.length).toBeGreaterThan(800);
