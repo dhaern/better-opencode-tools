@@ -4,29 +4,8 @@ import type { PdfReadResult } from './types';
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 
-interface BufferedOutput {
-  chunks: Buffer[];
-  size: number;
-}
-
-function appendOutput(output: BufferedOutput, chunk: Buffer): void {
-  const remaining = MAX_COMMAND_OUTPUT_BYTES - output.size;
-  if (remaining <= 0) return;
-
-  if (chunk.byteLength > remaining) {
-    output.chunks.push(chunk.subarray(0, remaining));
-    output.size += remaining;
-    return;
-  }
-
-  output.chunks.push(chunk);
-  output.size += chunk.byteLength;
-}
-
-function outputText(output: BufferedOutput): string {
-  return Buffer.concat(output.chunks, output.size).toString('utf8');
-}
-
+// Runs a helper command and resolves with its stdout (capped). Failures only
+// ever surface as "metadata unavailable", so stderr is not collected.
 export function runCommand(
   command: string,
   args: string[],
@@ -35,39 +14,30 @@ export function runCommand(
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-    const stdout: BufferedOutput = { chunks: [], size: 0 };
+    const chunks: Buffer[] = [];
+    let size = 0;
     let timedOut = false;
     let settled = false;
 
-    function cleanup(): void {
+    const kill = (): void => {
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+    };
+    const settle = (error: Error | undefined, value = ''): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-    }
-
-    function rejectOnce(error: Error): void {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    }
-
-    function resolveOnce(value: string): void {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    }
-
-    function onAbort(): void {
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
-      rejectOnce(new Error(`${command} aborted`));
-    }
-
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onAbort = (): void => {
+      kill();
+      settle(new Error(`${command} aborted`));
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+      kill();
     }, PDF_COMMAND_TIMEOUT_MS);
     timer.unref();
 
@@ -77,39 +47,18 @@ export function runCommand(
     }
     signal?.addEventListener('abort', onAbort, { once: true });
 
-    child.stdout.on('data', (chunk: Buffer) => appendOutput(stdout, chunk));
-    child.on('error', (error) => {
-      rejectOnce(error);
+    child.stdout.on('data', (chunk: Buffer) => {
+      const kept = chunk.subarray(0, MAX_COMMAND_OUTPUT_BYTES - size);
+      chunks.push(kept);
+      size += kept.length;
     });
+    child.on('error', (error) => settle(error));
     child.on('close', (code) => {
-      if (settled) return;
-
-      if (timedOut) {
-        rejectOnce(new Error(`${command} timed out`));
-        return;
-      }
-      if (code !== 0) {
-        rejectOnce(new Error(`${command} failed`));
-        return;
-      }
-      resolveOnce(outputText(stdout));
+      if (timedOut) settle(new Error(`${command} timed out`));
+      else if (code !== 0) settle(new Error(`${command} failed`));
+      else settle(undefined, Buffer.concat(chunks, size).toString('utf8'));
     });
   });
-}
-
-async function tryRun(
-  command: string,
-  args: string[],
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  try {
-    return await runCommand(command, args, signal);
-  } catch {
-    // Cancellation must propagate; only genuine pdfinfo failures are
-    // optional metadata.
-    signal?.throwIfAborted();
-    return undefined;
-  }
 }
 
 export async function readPdf(
@@ -117,10 +66,14 @@ export async function readPdf(
   signal?: AbortSignal,
 ): Promise<PdfReadResult> {
   signal?.throwIfAborted();
-  const pageCountText = await tryRun('pdfinfo', [resolvedPath], signal);
+  let pageCountText: string | undefined;
+  try {
+    pageCountText = await runCommand('pdfinfo', [resolvedPath], signal);
+  } catch {
+    // Page count is optional metadata; cancellation is rethrown below.
+  }
   signal?.throwIfAborted();
   const pageCount = pageCountText?.match(/^Pages:\s+(\d+)/m)?.[1];
-
   return {
     kind: 'pdf',
     path: resolvedPath,

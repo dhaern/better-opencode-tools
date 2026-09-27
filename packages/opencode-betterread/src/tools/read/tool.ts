@@ -3,7 +3,12 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import { READ_DESCRIPTION } from './constants';
+import {
+  DEFAULT_OFFSET,
+  DEFAULT_READ_LIMIT,
+  MAX_READ_LIMIT,
+  READ_DESCRIPTION,
+} from './constants';
 import { executeRead, inspectReadTarget } from './engine';
 import { normalizeReadArgs } from './limits';
 import {
@@ -11,8 +16,33 @@ import {
   askReadPermission,
   selectExternalPermissionTarget,
 } from './permissions';
-import { readArgsSchema } from './schema';
 import type { ReadArgs } from './types';
+
+const z = tool.schema;
+
+export const readArgsSchema: Record<string, unknown> = {
+  filePath: z
+    .string()
+    .min(1)
+    .describe(
+      'The path to the file or directory to read. Accepts absolute paths, paths relative to the current session directory, and `~/` home-relative paths.',
+    ),
+  offset: z
+    .number()
+    .int()
+    .min(1)
+    .default(DEFAULT_OFFSET)
+    .describe('The line number to start reading from (1-indexed).'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_READ_LIMIT)
+    .default(DEFAULT_READ_LIMIT)
+    .describe(
+      `The maximum number of lines to read (defaults to ${DEFAULT_READ_LIMIT}).`,
+    ),
+};
 
 interface CreateReadToolOptions {
   inspect?: typeof inspectReadTarget;
@@ -25,30 +55,26 @@ export function createReadTool(
 ): ToolDefinition {
   const inspect = options.inspect ?? inspectReadTarget;
   const execute = options.execute ?? executeRead;
-  const argsSchema = readArgsSchema as Parameters<typeof tool>[0]['args'];
 
   return tool({
     description: READ_DESCRIPTION,
-    args: argsSchema,
+    args: readArgsSchema as Parameters<typeof tool>[0]['args'],
     async execute(args, ctx) {
       ctx.abort?.throwIfAborted();
-      const rawArgs = args as unknown as ReadArgs;
-      const normalized = normalizeReadArgs(rawArgs);
+      const normalized = normalizeReadArgs(args as unknown as ReadArgs);
       const directory = ctx.directory ?? pluginCtx.directory;
-      const worktree = ctx.worktree ?? pluginCtx.worktree;
-      const inspection = await inspect({ args: normalized, directory });
-
       const permissionCtx = {
         ask: ctx.ask,
         directory,
-        worktree,
+        worktree: ctx.worktree ?? pluginCtx.worktree,
       };
+      const inspection = await inspect({ args: normalized, directory });
+      const { resolvedPath, accessPath, realPath } = inspection;
       const externalTarget = selectExternalPermissionTarget({
         ctx: permissionCtx,
-        resolvedPath: inspection.resolvedPath,
-        accessPath: inspection.accessPath,
+        resolvedPath,
+        accessPath,
       });
-
       if (externalTarget) {
         await askExternalDirectoryPermission({
           ctx: permissionCtx,
@@ -56,34 +82,31 @@ export function createReadTool(
           kind: inspection.kind === 'directory' ? 'directory' : 'file',
           metadata: {
             requested_path: normalized.filePath,
-            resolved_path: inspection.resolvedPath,
-            access_path: inspection.accessPath,
-            ...(inspection.realPath ? { real_path: inspection.realPath } : {}),
+            resolved_path: resolvedPath,
+            access_path: accessPath,
+            ...(realPath ? { real_path: realPath } : {}),
             exists: inspection.exists,
           },
         });
       }
-
       await askReadPermission({
         ctx: permissionCtx,
         requestedPath: normalized.filePath,
-        resolvedPath: inspection.resolvedPath,
-        accessPath: inspection.accessPath,
-        realPath: inspection.realPath,
+        resolvedPath,
+        accessPath,
+        realPath,
         offset: normalized.offset,
         limit: normalized.limit,
       });
 
-      // Identity of what we open is enforced by executeRead itself: it opens
-      // the target once after the ask and verifies the descriptor against the
-      // inspected identity (TOCTOU closes there, not here).
+      // executeRead opens the target once after the asks and verifies the
+      // descriptor against the inspected identity (TOCTOU closes there).
       const result = await execute({
         args: normalized,
         directory,
         inspection,
         signal: ctx.abort,
       });
-
       return {
         output: result.output,
         metadata: result.metadata,

@@ -1,20 +1,17 @@
 import path from 'node:path';
-import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_LINE_LENGTH } from './constants';
-import { buildDirectoryFooter, buildDirectoryOutput } from './directory-output';
-import { fitsOutputBudget } from './output-budget';
 import {
-  escapeStructuredSingleLineValue,
-  escapeStructuredTagValue,
-} from './structured-escape';
+  ATTACHMENT_UNAVAILABLE_NOTE,
+  MAX_LINE_LENGTH,
+  OUTPUT_CAPPED_NOTE,
+} from './constants';
+import { fitsOutputBudget } from './limits';
 import type {
-  DirectoryReadResult,
   ImageInfoResult,
   NotebookReadResult,
   PdfReadResult,
   TextReadResult,
 } from './types';
 
-const OUTPUT_CAPPED_NOTE = '(Output capped by byte budget.)';
 const LINE_TRUNCATED_NOTE = `(One or more lines were truncated to ${MAX_LINE_LENGTH} characters.)`;
 
 export type RenderedTextResult = {
@@ -28,39 +25,19 @@ export type RenderedTextResult = {
   endLine: number;
 };
 
-function materializeContentLines(content: string, lineCount: number): string[] {
-  if (lineCount === 0) return [];
-
-  const lines = content.length === 0 ? [''] : content.split('\n');
-  if (lines.length >= lineCount) return lines.slice(0, lineCount);
-
-  return lines.concat(
-    Array.from({ length: lineCount - lines.length }, () => ''),
-  );
+export function escapeStructuredTagValue(value: string): string {
+  return value
+    .replaceAll('\r', '\\r')
+    .replaceAll('\n', '\\n')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
-export function numberContentLines(
-  content: string,
-  startLine: number,
-  lineCount?: number,
-): string {
-  const lines =
-    lineCount === undefined
-      ? content.length === 0
-        ? []
-        : content.split('\n')
-      : materializeContentLines(content, lineCount);
-
-  if (lines.length === 0) return '';
-
-  return lines.map((line, index) => `${startLine + index}: ${line}`).join('\n');
-}
-
-function selectedLineCount(
-  result: TextReadResult | NotebookReadResult,
-): number {
-  if (result.endLine < result.startLine) return 0;
-  return result.endLine - result.startLine + 1;
+// Like escapeStructuredTagValue, but also escapes backslashes so the \r/\n
+// escapes stay unambiguous on a single line.
+export function escapeStructuredSingleLineValue(value: string): string {
+  return escapeStructuredTagValue(value.replaceAll('\\', '\\\\'));
 }
 
 function formatFooter(
@@ -79,99 +56,50 @@ function formatFooter(
   return `(Showing lines ${start}-${end}. Use offset=${end + 1} to continue.)`;
 }
 
-function buildTextNotes(input: {
-  truncatedByLineLength: boolean;
-  cappedByBudget: boolean;
-}): string[] {
-  const notes: string[] = [];
-
-  if (input.truncatedByLineLength) {
-    notes.push(LINE_TRUNCATED_NOTE);
-  }
-
-  if (input.cappedByBudget) {
-    notes.push(OUTPUT_CAPPED_NOTE);
-  }
-
-  return notes;
-}
-
 function buildTextOutput(
-  pathValue: string,
-  type: 'file' | 'notebook',
+  result: TextReadResult | NotebookReadResult,
   numberedLines: string[],
-  footer: string,
-  notes: string[],
+  hasMore: boolean,
+  cappedByBudget: boolean,
 ): string {
-  const contentBlock =
+  const end = result.startLine + numberedLines.length - 1;
+  return [
+    `<path>${escapeStructuredTagValue(result.path)}</path>`,
+    `<type>${result.kind === 'notebook' ? 'notebook' : 'file'}</type>`,
     numberedLines.length === 0
       ? '<content>\n</content>'
-      : `<content>\n${numberedLines.join('\n')}\n</content>`;
-
-  return [
-    `<path>${escapeStructuredTagValue(pathValue)}</path>`,
-    `<type>${type}</type>`,
-    contentBlock,
-    footer,
-    ...notes,
+      : `<content>\n${numberedLines.join('\n')}\n</content>`,
+    formatFooter(result.startLine, end, result.totalLines, hasMore),
+    ...(result.truncatedByLineLength ? [LINE_TRUNCATED_NOTE] : []),
+    ...(cappedByBudget ? [OUTPUT_CAPPED_NOTE] : []),
   ].join('\n');
 }
 
-// Largest prefix of `lines` whose rendered output still fits the byte/char
-// budget, found by binary search instead of rebuilding the output once per
-// line (which is quadratic on large windows).
-function budgetedLineNumberedLines(
-  numberedLines: string[],
-  buildOutput: (candidateLines: string[]) => string,
-): string[] {
-  if (numberedLines.length === 0) return [];
-  if (fitsOutputBudget(buildOutput(numberedLines))) return [...numberedLines];
-  if (!fitsOutputBudget(buildOutput([]))) return [];
-
-  let low = 0;
-  let high = numberedLines.length;
-  while (low + 1 < high) {
-    const mid = low + ((high - low) >> 1);
-    if (fitsOutputBudget(buildOutput(numberedLines.slice(0, mid)))) {
-      low = mid;
-    } else {
-      high = mid;
-    }
-  }
-  return numberedLines.slice(0, low);
-}
-
+// Renders the reader window; when numbering and framing push it past the
+// output budget, keeps the largest fitting prefix (binary search instead of
+// one rebuild per line, which is quadratic on large windows).
 export function renderTextResult(
   result: TextReadResult | NotebookReadResult,
 ): RenderedTextResult {
-  const type = result.kind === 'notebook' ? 'notebook' : 'file';
-  const numberedContent = numberContentLines(
-    result.content,
-    result.startLine,
-    selectedLineCount(result),
-  );
   const numberedLines =
-    numberedContent.length === 0 ? [] : numberedContent.split('\n');
-  const fullFooter = formatFooter(
-    result.startLine,
-    result.endLine,
-    result.totalLines,
-    result.hasMore,
-  );
-  const fullNotes = buildTextNotes({
-    truncatedByLineLength: result.truncatedByLineLength,
-    cappedByBudget: result.truncatedByBytes,
-  });
+    result.endLine < result.startLine
+      ? []
+      : result.content
+          .split('\n')
+          .map((line, index) => `${result.startLine + index}: ${line}`);
   const fullOutput = buildTextOutput(
-    result.path,
-    type,
+    result,
     numberedLines,
-    fullFooter,
-    fullNotes,
+    result.hasMore,
+    result.truncatedByBytes,
   );
-
+  const rendered = {
+    truncatedByLineLength: result.truncatedByLineLength,
+    startLine: result.startLine,
+  };
   if (fitsOutputBudget(fullOutput)) {
     return {
+      ...rendered,
       output: fullOutput,
       preview: numberedLines.slice(0, 20).join('\n'),
       truncated:
@@ -180,59 +108,29 @@ export function renderTextResult(
         result.truncatedByLineLength,
       hasMore: result.hasMore,
       truncatedByBytes: result.truncatedByBytes,
-      truncatedByLineLength: result.truncatedByLineLength,
-      startLine: result.startLine,
       endLine: result.endLine,
     };
   }
 
-  const selected = budgetedLineNumberedLines(numberedLines, (candidateLines) =>
-    buildTextOutput(
-      result.path,
-      type,
-      candidateLines,
-      formatFooter(
-        result.startLine,
-        result.startLine + candidateLines.length - 1,
-        result.totalLines,
-        true,
-      ),
-      buildTextNotes({
-        truncatedByLineLength: result.truncatedByLineLength,
-        cappedByBudget: true,
-      }),
-    ),
-  );
-
-  const endLine =
-    selected.length === 0
-      ? result.startLine - 1
-      : result.startLine + selected.length - 1;
-  const footer = formatFooter(
-    result.startLine,
-    endLine,
-    result.totalLines,
-    true,
-  );
-
+  const build = (count: number) =>
+    buildTextOutput(result, numberedLines.slice(0, count), true, true);
+  let low = 0;
+  if (fitsOutputBudget(build(0))) {
+    let high = numberedLines.length;
+    while (low + 1 < high) {
+      const mid = low + ((high - low) >> 1);
+      if (fitsOutputBudget(build(mid))) low = mid;
+      else high = mid;
+    }
+  }
   return {
-    output: buildTextOutput(
-      result.path,
-      type,
-      selected,
-      footer,
-      buildTextNotes({
-        truncatedByLineLength: result.truncatedByLineLength,
-        cappedByBudget: true,
-      }),
-    ),
-    preview: selected.slice(0, 20).join('\n'),
+    ...rendered,
+    output: build(low),
+    preview: numberedLines.slice(0, Math.min(low, 20)).join('\n'),
     truncated: true,
     hasMore: true,
     truncatedByBytes: true,
-    truncatedByLineLength: result.truncatedByLineLength,
-    startLine: result.startLine,
-    endLine,
+    endLine: result.startLine + low - 1,
   };
 }
 
@@ -242,46 +140,28 @@ export function formatTextResult(
   return renderTextResult(result).output;
 }
 
-export function formatDirectoryResult(result: DirectoryReadResult): string {
-  const footer = buildDirectoryFooter({
-    offset: result.offset,
-    entriesCount: result.entries.length,
-    totalEntries: result.totalEntries,
-    totalEntriesKnown: result.totalEntriesKnown,
-    hasMore: result.hasMore,
-    truncatedByBytes: result.truncatedByBytes,
-  });
-
-  return buildDirectoryOutput(result.path, result.entries, footer);
-}
-
 export function formatImageInfoResult(result: ImageInfoResult): string {
-  const parts = [
+  return [
     `<path>${escapeStructuredTagValue(result.path)}</path>`,
     '<type>image</type>',
     `<mime>${escapeStructuredTagValue(result.mime)}</mime>`,
     `<size>${result.sizeBytes}</size>`,
-  ];
-  if (result.width !== undefined && result.height !== undefined) {
-    parts.push(`<dimensions>${result.width}x${result.height}</dimensions>`);
-  }
-  parts.push(
+    ...(result.width !== undefined && result.height !== undefined
+      ? [`<dimensions>${result.width}x${result.height}</dimensions>`]
+      : []),
     `Image metadata extracted: ${escapeStructuredSingleLineValue(
       path.basename(result.path),
     )}`,
-  );
-  return parts.join('\n');
+  ].join('\n');
 }
 
 export function formatPdfResult(result: PdfReadResult): string {
   return [
     `<path>${escapeStructuredTagValue(result.path)}</path>`,
     '<type>pdf</type>',
-    result.pageCount !== undefined
-      ? `<page_count>${result.pageCount}</page_count>`
-      : undefined,
+    ...(result.pageCount !== undefined
+      ? [`<page_count>${result.pageCount}</page_count>`]
+      : []),
     ATTACHMENT_UNAVAILABLE_NOTE,
-  ]
-    .filter(Boolean)
-    .join('\n');
+  ].join('\n');
 }

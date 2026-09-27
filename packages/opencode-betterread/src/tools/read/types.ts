@@ -47,17 +47,9 @@ export type ImageInfoResult = {
   height?: number;
 };
 
-export type NotebookReadResult = {
+export type NotebookReadResult = Omit<TextReadResult, 'kind'> & {
   kind: 'notebook';
   mode: 'parsed' | 'raw-fallback';
-  path: string;
-  content: string;
-  startLine: number;
-  endLine: number;
-  totalLines?: number;
-  truncatedByBytes: boolean;
-  truncatedByLineLength: boolean;
-  hasMore: boolean;
 };
 
 export type PdfReadResult = {

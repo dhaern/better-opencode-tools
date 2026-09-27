@@ -1,9 +1,9 @@
+import { OUTPUT_CAPPED_NOTE } from './constants';
 import {
   escapeStructuredSingleLineValue,
   escapeStructuredTagValue,
-} from './structured-escape';
-
-const OUTPUT_CAPPED_NOTE = '(Output capped by byte budget.)';
+} from './formatter';
+import type { DirectoryReadResult } from './types';
 
 type DirectoryFooterInput = {
   offset: number;
@@ -14,53 +14,38 @@ type DirectoryFooterInput = {
   truncatedByBytes: boolean;
 };
 
-function appendOutputCappedNote(
-  message: string,
-  truncatedByBytes: boolean,
-): string {
-  return truncatedByBytes ? `${message}\n${OUTPUT_CAPPED_NOTE}` : message;
-}
-
 export function buildDirectoryFooter(input: DirectoryFooterInput): string {
-  const totalEntriesKnown = input.totalEntriesKnown ?? true;
-
+  const known = input.totalEntriesKnown ?? true;
   if (
     input.entriesCount === 0 &&
-    totalEntriesKnown &&
+    known &&
     input.offset > Math.max(input.totalEntries, 1)
   ) {
     return `(Offset ${input.offset} is out of range for this directory (${input.totalEntries} entries))`;
   }
-
-  if (!totalEntriesKnown) {
-    if (input.entriesCount === 0) {
-      return appendOutputCappedNote(
-        `(No entries returned from a bounded directory scan of at least ${input.totalEntries} entries. Exact pagination beyond the first window is not supported; use a more specific path.)`,
-        input.truncatedByBytes,
-      );
-    }
-
-    return appendOutputCappedNote(
-      `(Showing entries ${input.offset}-${input.offset + input.entriesCount - 1} of at least ${input.totalEntries} from a bounded directory scan. Exact pagination beyond the first window is not supported; use a more specific path.)`,
-      input.truncatedByBytes,
-    );
+  if (known && !input.hasMore) {
+    return `(End of directory - ${input.totalEntries} entries)`;
   }
+  const range = `${input.offset}-${input.offset + input.entriesCount - 1}`;
+  const message = known
+    ? `(Showing entries ${range} of ${input.totalEntries}. Use offset=${input.offset + input.entriesCount} to continue.)`
+    : input.entriesCount === 0
+      ? `(No entries returned from a bounded directory scan of at least ${input.totalEntries} entries. Exact pagination beyond the first window is not supported; use a more specific path.)`
+      : `(Showing entries ${range} of at least ${input.totalEntries} from a bounded directory scan. Exact pagination beyond the first window is not supported; use a more specific path.)`;
+  return input.truncatedByBytes ? `${message}\n${OUTPUT_CAPPED_NOTE}` : message;
+}
 
-  if (input.hasMore) {
-    const base = `(Showing entries ${input.offset}-${input.offset + input.entriesCount - 1} of ${input.totalEntries}. Use offset=${input.offset + input.entriesCount} to continue.)`;
-    return appendOutputCappedNote(base, input.truncatedByBytes);
-  }
-
-  return `(End of directory - ${input.totalEntries} entries)`;
+export function escapeDirectoryEntry(entry: string): string {
+  return escapeStructuredSingleLineValue(entry);
 }
 
 export function buildDirectoryOutput(
-  resolvedPath: string,
+  displayPath: string,
   entries: string[],
   footer: string,
 ): string {
   return [
-    `<path>${escapeStructuredTagValue(resolvedPath)}</path>`,
+    `<path>${escapeStructuredTagValue(displayPath)}</path>`,
     '<type>directory</type>',
     '<entries>',
     entries.map(escapeDirectoryEntry).join('\n'),
@@ -69,6 +54,17 @@ export function buildDirectoryOutput(
   ].join('\n');
 }
 
-export function escapeDirectoryEntry(entry: string): string {
-  return escapeStructuredSingleLineValue(entry);
+export function formatDirectoryResult(result: DirectoryReadResult): string {
+  return buildDirectoryOutput(
+    result.path,
+    result.entries,
+    buildDirectoryFooter({
+      offset: result.offset,
+      entriesCount: result.entries.length,
+      totalEntries: result.totalEntries,
+      totalEntriesKnown: result.totalEntriesKnown,
+      hasMore: result.hasMore,
+      truncatedByBytes: result.truncatedByBytes,
+    }),
+  );
 }

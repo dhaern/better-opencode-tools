@@ -1,11 +1,7 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { createReadRenderMetadataHook } from './hooks/read-render-metadata';
-import {
-  createReadTool,
-  READ_DESCRIPTION,
-  READ_TOOL_ID,
-  readArgsSchema,
-} from './tools/read';
+import { READ_DESCRIPTION, READ_TOOL_ID } from './tools/read/constants';
+import { createReadTool, readArgsSchema } from './tools/read/tool';
 
 const server: Plugin = async (ctx) => {
   const read = createReadTool(ctx);

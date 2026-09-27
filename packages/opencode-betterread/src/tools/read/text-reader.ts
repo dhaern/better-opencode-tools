@@ -7,7 +7,7 @@ import {
   createOutputBudgetState,
   selectBudgetedLines,
   splitLogicalLines,
-} from './output-budget';
+} from './limits';
 import type { TextReadResult } from './types';
 
 const STREAM_CHUNK_BYTES = 64 * 1024;

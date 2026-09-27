@@ -2,9 +2,8 @@ import type { Dirent } from 'node:fs';
 import { opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { buildDirectoryFooter, buildDirectoryOutput } from './directory-output';
-import { getDirectoryLimit } from './limits';
-import { fitsOutputBudget } from './output-budget';
-import { escapeStructuredSingleLineValue } from './structured-escape';
+import { escapeStructuredSingleLineValue } from './formatter';
+import { fitsOutputBudget, getDirectoryLimit } from './limits';
 import type { DirectoryReadResult } from './types';
 
 const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;

@@ -1,7 +1,10 @@
 import { ATTACHMENT_UNAVAILABLE_NOTE } from './constants';
 import { escapeDirectoryEntry } from './directory-output';
-import { type RenderedTextResult, renderTextResult } from './formatter';
-import { escapeStructuredSingleLineValue } from './structured-escape';
+import {
+  escapeStructuredSingleLineValue,
+  type RenderedTextResult,
+  renderTextResult,
+} from './formatter';
 import type {
   DirectoryReadResult,
   ImageInfoResult,
@@ -10,11 +13,13 @@ import type {
   TextReadResult,
 } from './types';
 
-function baseMetadata(input: {
-  filePath: string;
-  realPath?: string;
-  kind: string;
-}): Record<string, unknown> {
+type MetadataPath = { filePath: string; realPath?: string };
+
+export function buildStaticMetadata(
+  input: MetadataPath & { kind: string },
+  preview: string,
+  truncated: boolean,
+): Record<string, unknown> {
   return {
     enhancedBy: 'opencode-betterread',
     enhancedPath: input.filePath,
@@ -24,22 +29,22 @@ function baseMetadata(input: {
       : {}),
     kind: input.kind,
     loaded: [],
+    preview,
+    truncated,
   };
 }
 
 export function buildTextMetadata(
-  input: { filePath: string; realPath?: string },
+  input: MetadataPath,
   result: TextReadResult | NotebookReadResult,
   rendered: RenderedTextResult = renderTextResult(result),
 ): Record<string, unknown> {
   return {
-    ...baseMetadata({
-      filePath: input.filePath,
-      realPath: input.realPath,
-      kind: result.kind,
-    }),
-    preview: rendered.preview,
-    truncated: rendered.truncated,
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      rendered.preview,
+      rendered.truncated,
+    ),
     start_line: rendered.startLine,
     end_line: rendered.endLine,
     total_lines: result.totalLines,
@@ -51,17 +56,15 @@ export function buildTextMetadata(
 }
 
 export function buildDirectoryMetadata(
-  input: { filePath: string; realPath?: string },
+  input: MetadataPath,
   result: DirectoryReadResult,
 ): Record<string, unknown> {
   return {
-    ...baseMetadata({
-      filePath: input.filePath,
-      realPath: input.realPath,
-      kind: result.kind,
-    }),
-    preview: result.entries.slice(0, 20).map(escapeDirectoryEntry).join('\n'),
-    truncated: result.hasMore || result.truncatedByBytes,
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      result.entries.slice(0, 20).map(escapeDirectoryEntry).join('\n'),
+      result.hasMore || result.truncatedByBytes,
+    ),
     offset: result.offset,
     limit: result.limit,
     total_entries: result.totalEntries,
@@ -75,29 +78,18 @@ export function buildDirectoryMetadata(
   };
 }
 
-export function buildStaticMetadata(
-  input: { filePath: string; realPath?: string; kind: string },
-  preview: string,
-  truncated: boolean,
-): Record<string, unknown> {
-  return {
-    ...baseMetadata(input),
-    preview,
-    truncated,
-  };
-}
-
 export function buildPdfMetadata(
-  input: { filePath: string; realPath?: string },
+  input: MetadataPath,
   result: PdfReadResult,
 ): Record<string, unknown> {
-  const preview =
-    result.pageCount !== undefined
-      ? `PDF metadata extracted (${result.pageCount} pages)`
-      : 'PDF metadata extracted';
-
   return {
-    ...buildStaticMetadata({ ...input, kind: result.kind }, preview, false),
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      result.pageCount !== undefined
+        ? `PDF metadata extracted (${result.pageCount} pages)`
+        : 'PDF metadata extracted',
+      false,
+    ),
     page_count: result.pageCount,
     attachment_support: 'embedded',
     attachment_note: ATTACHMENT_UNAVAILABLE_NOTE,
@@ -105,15 +97,13 @@ export function buildPdfMetadata(
 }
 
 export function buildImageMetadata(
-  input: { filePath: string; realPath?: string },
+  input: MetadataPath,
   result: ImageInfoResult,
 ): Record<string, unknown> {
   return {
     ...buildStaticMetadata(
       { ...input, kind: result.kind },
-      `Image metadata extracted: ${escapeStructuredSingleLineValue(
-        result.path,
-      )}`,
+      `Image metadata extracted: ${escapeStructuredSingleLineValue(result.path)}`,
       false,
     ),
     mime: result.mime,
