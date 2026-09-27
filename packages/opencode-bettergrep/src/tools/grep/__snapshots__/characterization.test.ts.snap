@@ -1,0 +1,3066 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`grep observable result characterization rg/content/none/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/none/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/none/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/none/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/path/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/path/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/path/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/path/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/mtime/context=0/limit=1 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/mtime/context=0/limit=20 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/mtime/context=2/limit=1 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/content/mtime/context=2/limit=20 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [
+            "needle",
+          ],
+        },
+      ],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/none/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/none/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/none/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/none/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/path/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/path/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/path/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/path/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/mtime/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/mtime/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/mtime/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/files_with_matches/mtime/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/none/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/none/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/none/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/none/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/path/context=0/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/path/context=0/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/path/context=2/limit=1 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/path/context=2/limit=20 1`] = `
+{
+  "backend": "rg",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/mtime/context=0/limit=1 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/mtime/context=0/limit=20 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/mtime/context=2/limit=1 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization rg/count/mtime/context=2/limit=20 1`] = `
+{
+  "backend": undefined,
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/z.txt",
+    },
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": false,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [],
+}
+`;
+
+exports[`grep observable result characterization grep/content/none/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/none/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/none/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/none/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/path/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/path/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/path/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/path/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/mtime/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/mtime/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [],
+          "before": [],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/mtime/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": true,
+  "mode": "content",
+  "summary": "Found 1 match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/content/mtime/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle one",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [
+        {
+          "after": [
+            {
+              "lineNumber": 3,
+              "text": "after",
+            },
+          ],
+          "before": [
+            {
+              "lineNumber": 1,
+              "text": "before",
+            },
+          ],
+          "lineNumber": 2,
+          "lineText": "needle two",
+          "submatches": [],
+        },
+      ],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "match",
+  "limitReached": false,
+  "mode": "content",
+  "summary": "Found 2 matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/none/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/none/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/none/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/none/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/path/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/path/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/path/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/path/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/mtime/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/mtime/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/mtime/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": true,
+  "mode": "files_with_matches",
+  "summary": "Found 1 matching file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/files_with_matches/mtime/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "file",
+  "limitReached": false,
+  "mode": "files_with_matches",
+  "summary": "Found 2 matching files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/none/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/none/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/none/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/none/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/path/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/path/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/path/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/path/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/mtime/context=0/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/mtime/context=0/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/mtime/context=2/limit=1 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": "<early-stop>",
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": true,
+  "mode": "count",
+  "summary": "Found 1 total match across 1 file.",
+  "timedOut": false,
+  "totalFiles": 1,
+  "totalMatches": 1,
+  "truncated": true,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization grep/count/mtime/context=2/limit=20 1`] = `
+{
+  "backend": "grep",
+  "cancelled": false,
+  "error": undefined,
+  "exitCode": 0,
+  "files": [
+    {
+      "file": "src/a.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/a.txt",
+    },
+    {
+      "file": "src/z.txt",
+      "matchCount": 1,
+      "matches": [],
+      "nonUtf8Path": undefined,
+      "path": "<ROOT>/src/z.txt",
+    },
+  ],
+  "kind": "occurrence",
+  "limitReached": false,
+  "mode": "count",
+  "summary": "Found 2 total matches across 2 files.",
+  "timedOut": false,
+  "totalFiles": 2,
+  "totalMatches": 2,
+  "truncated": false,
+  "warnings": [
+    "GNU grep fallback ignores sort_by=mtime; returning unsorted direct results instead.",
+    "GNU grep fallback does not apply ripgrep ignore rules (gitignore or otherwise); results may include ignored files.",
+    "GNU grep fallback count mode reports matching lines per file, not ripgrep occurrence counts.",
+  ],
+}
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 1`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle invalid path",
+        "submatches": [
+          "needle",
+        ],
+      },
+    ],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle",
+        "submatches": [
+          "needle",
+        ],
+      },
+    ],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle external",
+        "submatches": [
+          "needle",
+        ],
+      },
+    ],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "café needle",
+        "submatches": [
+          "needle",
+        ],
+      },
+    ],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 2`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 3`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": false,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 4`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle invalid path",
+        "submatches": [],
+      },
+    ],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle external",
+        "submatches": [],
+      },
+    ],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "café needle",
+        "submatches": [],
+      },
+    ],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 5`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/binary.dat",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/binary.dat",
+  },
+  {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
+
+exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF and external symlink fixtures 6`] = `
+[
+  {
+    "file": "src/bad\\xff [bytes:base64:<PATH>]",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": true,
+    "path": "bytes:base64:<PATH>",
+  },
+  {
+    "file": "src/binary.dat",
+    "matchCount": 2,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/binary.dat",
+  },
+  {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
+    "file": "src/link.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/link.txt",
+  },
+  {
+    "file": "src/utf8.txt",
+    "matchCount": 1,
+    "matches": [],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/utf8.txt",
+  },
+]
+`;
