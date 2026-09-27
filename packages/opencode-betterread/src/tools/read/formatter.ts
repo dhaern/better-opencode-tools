@@ -61,6 +61,7 @@ function buildTextOutput(
   numberedLines: string[],
   hasMore: boolean,
   cappedByBudget: boolean,
+  truncatedLineShown: boolean,
 ): string {
   const end = result.startLine + numberedLines.length - 1;
   return [
@@ -70,7 +71,7 @@ function buildTextOutput(
       ? '<content>\n</content>'
       : `<content>\n${numberedLines.join('\n')}\n</content>`,
     formatFooter(result.startLine, end, result.totalLines, hasMore),
-    ...(result.truncatedByLineLength ? [LINE_TRUNCATED_NOTE] : []),
+    ...(truncatedLineShown ? [LINE_TRUNCATED_NOTE] : []),
     ...(cappedByBudget ? [OUTPUT_CAPPED_NOTE] : []),
   ].join('\n');
 }
@@ -87,14 +88,18 @@ export function renderTextResult(
       : result.content
           .split('\n')
           .map((line, index) => `${result.startLine + index}: ${line}`);
+  const truncatedLineShown = (count: number): boolean =>
+    result.firstTruncatedLine === undefined
+      ? result.truncatedByLineLength
+      : count > 0 && result.firstTruncatedLine <= result.startLine + count - 1;
   const fullOutput = buildTextOutput(
     result,
     numberedLines,
     result.hasMore,
     result.truncatedByBytes,
+    truncatedLineShown(numberedLines.length),
   );
   const rendered = {
-    truncatedByLineLength: result.truncatedByLineLength,
     startLine: result.startLine,
   };
   if (fitsOutputBudget(fullOutput)) {
@@ -105,15 +110,22 @@ export function renderTextResult(
       truncated:
         result.hasMore ||
         result.truncatedByBytes ||
-        result.truncatedByLineLength,
+        truncatedLineShown(numberedLines.length),
       hasMore: result.hasMore,
       truncatedByBytes: result.truncatedByBytes,
+      truncatedByLineLength: truncatedLineShown(numberedLines.length),
       endLine: result.endLine,
     };
   }
 
   const build = (count: number) =>
-    buildTextOutput(result, numberedLines.slice(0, count), true, true);
+    buildTextOutput(
+      result,
+      numberedLines.slice(0, count),
+      true,
+      true,
+      truncatedLineShown(count),
+    );
   let low = 0;
   if (fitsOutputBudget(build(0))) {
     let high = numberedLines.length;
@@ -130,6 +142,7 @@ export function renderTextResult(
     truncated: true,
     hasMore: true,
     truncatedByBytes: true,
+    truncatedByLineLength: truncatedLineShown(low),
     endLine: result.startLine + low - 1,
   };
 }

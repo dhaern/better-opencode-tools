@@ -91,6 +91,7 @@ export function selectBudgetedLines(
   selected: string[];
   truncatedByBytes: boolean;
   truncatedByLineLength: boolean;
+  firstTruncatedLine?: number;
   hasMore: boolean;
 } {
   const startIndex = Math.max(offset - 1, 0);
@@ -98,18 +99,23 @@ export function selectBudgetedLines(
   const budget = createOutputBudgetState();
   let truncatedByBytes = false;
   let truncatedByLineLength = false;
+  let firstTruncatedLine: number | undefined;
   for (const line of lines.slice(startIndex, startIndex + limit)) {
     const normalized = truncateLine(line);
     if (!appendLineWithinOutputBudget(selected, budget, normalized.value)) {
       truncatedByBytes = true;
       break;
     }
-    truncatedByLineLength ||= normalized.truncated;
+    if (normalized.truncated) {
+      truncatedByLineLength = true;
+      firstTruncatedLine ??= offset + selected.length - 1;
+    }
   }
   return {
     selected,
     truncatedByBytes,
     truncatedByLineLength,
+    firstTruncatedLine,
     hasMore: truncatedByBytes || startIndex + selected.length < lines.length,
   };
 }

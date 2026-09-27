@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
+import { executeRead } from './engine';
 import { buildTextMetadata } from './enhanced-metadata';
 import {
   formatImageInfoResult,
@@ -164,6 +168,52 @@ describe('formatTextResult', () => {
     expect(metadata.truncated).toBe(true);
     expect(metadata.truncated_by_line_length).toBe(true);
     expect(metadata.has_more).toBe(false);
+  });
+
+  test('does not report a truncated line removed by the final output cap', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'betterread-h2-'));
+    const filePath = path.join(directory, 'long.txt');
+    try {
+      writeFileSync(
+        filePath,
+        `${Array.from({ length: 2071 }, (_, index) => 'x'.repeat(index < 200 ? 119 : 118)).join('\n')}\n${'x'.repeat(4097)}`,
+      );
+      const result = await executeRead({
+        args: { filePath, limit: 16384 },
+        directory,
+      });
+      expect(result.output).toContain('2071: ');
+      expect(result.output.includes('2072: ')).toBe(false);
+      expect(result.output.includes('One or more lines were truncated')).toBe(
+        false,
+      );
+      expect(result.metadata.truncated_by_line_length).toBe(false);
+      expect(result.metadata.has_more).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('reports a truncated line at the last emitted line, not the first removed line', () => {
+    const result = {
+      kind: 'text' as const,
+      path: '/tmp/edge.txt',
+      content: `${'x'.repeat(116)}\n${'y'.repeat(4096)}…`,
+      startLine: 1,
+      endLine: 2,
+      totalLines: 2,
+      truncatedByBytes: false,
+      truncatedByLineLength: true,
+      firstTruncatedLine: 2,
+      hasMore: false,
+    };
+    const rendered = renderTextResult(result);
+    expect(rendered.endLine).toBe(2);
+    expect(rendered.truncatedByLineLength).toBe(true);
+    expect(rendered.output).toContain('One or more lines were truncated');
+    const beyond = renderTextResult({ ...result, firstTruncatedLine: 3 });
+    expect(beyond.truncatedByLineLength).toBe(false);
+    expect(beyond.output).not.toContain('One or more lines were truncated');
   });
 });
 

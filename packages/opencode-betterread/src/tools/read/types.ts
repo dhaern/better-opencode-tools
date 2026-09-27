@@ -23,6 +23,7 @@ export type TextReadResult = {
   totalLines?: number;
   truncatedByBytes: boolean;
   truncatedByLineLength: boolean;
+  firstTruncatedLine?: number;
   hasMore: boolean;
 };
 

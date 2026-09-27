@@ -76,6 +76,7 @@ export async function readNotebook(
           totalLines: lines.length,
           truncatedByBytes: selection.truncatedByBytes,
           truncatedByLineLength: selection.truncatedByLineLength,
+          firstTruncatedLine: selection.firstTruncatedLine,
           hasMore: selection.hasMore,
         };
       } catch {

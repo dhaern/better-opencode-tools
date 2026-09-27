@@ -42,6 +42,7 @@ async function scanText(
   let hasMore = false;
   let truncatedByBytes = false;
   let truncatedByLineLength = false;
+  let firstTruncatedLine: number | undefined;
   let position = 0;
 
   const finishLine = (): void => {
@@ -57,7 +58,10 @@ async function scanText(
       truncatedByBytes = hasMore = closed = true;
       return;
     }
-    truncatedByLineLength ||= line.truncated;
+    if (line.truncated) {
+      truncatedByLineLength = true;
+      firstTruncatedLine ??= lines;
+    }
     if (selected.length >= limit) closed = true;
   };
 
@@ -122,6 +126,7 @@ async function scanText(
     totalLines: countAll || !hasMore ? lines : undefined,
     truncatedByBytes,
     truncatedByLineLength,
+    firstTruncatedLine,
     hasMore,
   };
 }
