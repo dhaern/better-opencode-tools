@@ -2953,6 +2953,21 @@ exports[`grep observable result characterization UTF-8, non-UTF8, binary, CRLF a
     "path": "bytes:base64:<PATH>",
   },
   {
+    "file": "src/crlf.txt",
+    "matchCount": 1,
+    "matches": [
+      {
+        "after": [],
+        "before": [],
+        "lineNumber": 1,
+        "lineText": "needle",
+        "submatches": [],
+      },
+    ],
+    "nonUtf8Path": undefined,
+    "path": "<ROOT>/src/crlf.txt",
+  },
+  {
     "file": "src/link.txt",
     "matchCount": 1,
     "matches": [

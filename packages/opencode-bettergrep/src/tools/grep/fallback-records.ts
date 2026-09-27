@@ -37,18 +37,14 @@ function toWebReadableStream(
   ) as unknown as ReadableStream<Uint8Array>;
 }
 
-function decodeGrepText(bytes: Uint8Array): string {
-  return normalizeDisplayText(
-    tryDecodeUtf8(bytes) ?? formatNonUtf8TextDisplay(bytes),
-  );
-}
-
 export function parseContentLine(
   filePath: Uint8Array,
   lineBytes: Uint8Array,
   withContext: boolean,
 ): ParsedContentRecord | null {
-  const line = stripSingleLineEnding(decodeGrepText(lineBytes));
+  const line = stripSingleLineEnding(
+    tryDecodeUtf8(lineBytes) ?? formatNonUtf8TextDisplay(lineBytes),
+  );
   const match = withContext
     ? line.match(/^(\d+)([:-])(.*)$/)
     : line.match(/^(\d+):(.*)$/);

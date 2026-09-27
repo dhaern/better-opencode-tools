@@ -5,11 +5,56 @@ import path from 'node:path';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
 import { translatePatternToEre } from './fallback-ere';
+import { parseContentLine } from './fallback-records';
 import { normalizeGrepInput } from './normalize';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
 describe('tools/grep/fallback', () => {
   const temps = createTempTracker();
+
+  test('parses CRLF record before normalizing its text', () => {
+    expect(
+      parseContentLine(Buffer.from('file'), Buffer.from('12:foo\r'), false),
+    ).toEqual({
+      filePath: Buffer.from('file'),
+      lineNumber: 12,
+      text: 'foo',
+      isMatch: true,
+    });
+  });
+
+  test('GNU grep content search preserves CRLF matches without unparsable warnings', async () => {
+    const repoDir = temps.createRepo();
+    const crlfFile = path.join(repoDir, 'src', 'crlf.txt');
+    writeFileSync(crlfFile, 'before\r\nneedle\r\nafter\r\n');
+    const input = normalizeGrepInput(
+      {
+        pattern: 'needle',
+        path: crlfFile,
+        output_mode: 'content',
+        context: 1,
+        fixed_strings: true,
+      },
+      createRepoContext(repoDir) as any,
+    );
+    const result = await executeGrepFallback(
+      input,
+      new AbortController().signal,
+      {
+        path: 'grep',
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      },
+    );
+    expect(result.totalMatches).toBe(1);
+    expect(result.files[0]?.matches[0]).toMatchObject({
+      lineNumber: 2,
+      lineText: 'needle',
+      before: [{ lineNumber: 1, text: 'before' }],
+      after: [{ lineNumber: 3, text: 'after' }],
+    });
+    expect(result.warnings.join(' ')).not.toContain('unparsable');
+  });
 
   function createNormalized(
     input: any,
