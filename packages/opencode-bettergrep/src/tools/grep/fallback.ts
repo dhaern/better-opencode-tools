@@ -43,7 +43,6 @@ export async function executeGrepFallback(
   return executeMode(input, signal, cli, {
     command,
     warnings,
-    retries: 0,
     env: { ...process.env, LC_ALL: 'C.UTF-8' },
     init: () => ({
       parsed: {
@@ -83,10 +82,6 @@ export async function executeGrepFallback(
       }
       return result;
     },
-    isStopped: (state, termination) =>
-      state.parsed.limitReached ||
-      termination.timedOut ||
-      termination.cancelled,
     finalizeResult: (result, stdoutError, exitError) => {
       const stderr = result.stderr;
       applySuccessfulStderr(result, stderr, result.exitCode);

@@ -44,11 +44,9 @@ function buildFailureMeta(
     return { strategy: 'direct', discoveryCommand: undefined };
   }
 
-  const discoveryInput = buildDiscoveryInput(input);
-
   return {
     strategy: 'mtime-hybrid',
-    discoveryCommand: buildRgCommand(discoveryInput, cli.path),
+    discoveryCommand: buildRgCommand(buildDiscoveryInput(input), cli.path),
   };
 }
 

@@ -1,43 +1,24 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { createGrepRenderMetadataHook } from './hooks/grep-render-metadata';
+import { GREP_DESCRIPTION, GREP_TOOL_ID } from './tools/grep/constants';
+import { installLatestStableRipgrep } from './tools/grep/downloader';
+import { formatGrepResult } from './tools/grep/format';
+import { normalizeGrepInput } from './tools/grep/normalize';
 import {
-  createGrepTool,
-  formatGrepResult,
-  GREP_DESCRIPTION,
-  GREP_TOOL_ID,
+  resolveGrepCli,
+  resolveGrepCliWithAutoInstall,
+} from './tools/grep/resolver';
+import {
   getInstalledRipgrepPath,
   getRipgrepBinaryName,
   getRipgrepCacheDir,
-  installLatestStableRipgrep,
-  normalizeGrepInput,
-  resolveGrepCli,
-  resolveGrepCliWithAutoInstall,
-} from './tools/grep';
+} from './tools/grep/rg-cache';
+import { createGrepTool } from './tools/grep/tool';
 
-const server: Plugin = async (ctx) => {
-  const grep = createGrepTool(ctx);
-  const grepRenderMetadataHook = createGrepRenderMetadataHook();
-
-  return {
-    tool: {
-      grep,
-    },
-
-    'tool.execute.after': async (input, output) => {
-      await grepRenderMetadataHook['tool.execute.after'](
-        input as {
-          tool: string;
-          args?: { pattern?: unknown };
-        },
-        output as {
-          title?: unknown;
-          output: unknown;
-          metadata?: unknown;
-        },
-      );
-    },
-  };
-};
+const server: Plugin = async (ctx) => ({
+  tool: { grep: createGrepTool(ctx) },
+  'tool.execute.after': createGrepRenderMetadataHook()['tool.execute.after'],
+});
 
 export default {
   id: 'opencode-bettergrep',

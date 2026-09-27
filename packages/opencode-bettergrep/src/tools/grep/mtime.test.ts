@@ -260,6 +260,23 @@ test('mtime replay skips non-replayable paths with a warning', async () => {
   );
 });
 
+test('a solely non-UTF8 match uses direct fallback before sorting or replay', async () => {
+  const root = temps.createDir('bettergrep-mtime-only-nonutf8');
+  const file = Buffer.concat([
+    Buffer.from(`${root}/`),
+    Buffer.from([0xff, 0x2e, 0x74, 0x78, 0x74]),
+  ]);
+  writeFileSync(file, 'needle\n');
+  const result = await executeMtimeMode(
+    mtimeInput(root),
+    new AbortController().signal,
+    systemCli,
+  );
+  expect(result.strategy).toBe('mtime-fallback');
+  expect(result.totalMatches).toBe(1);
+  expect(result.warnings.join(' ')).toContain('non-UTF8');
+});
+
 test('mtime sort with an expired deadline reports a timeout', async () => {
   const file = createFileMatch({
     file: 'a.txt',

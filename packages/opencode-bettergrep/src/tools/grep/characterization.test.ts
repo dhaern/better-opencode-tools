@@ -4,11 +4,7 @@ import { symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import which from 'which';
 import { GrepAggregator } from './aggregate';
-import {
-  executeContentLikeMode,
-  executeCountMode,
-  executeFilesMode,
-} from './direct';
+import { executeContentLikeMode, executeFileListMode } from './direct';
 import { executeGrepFallback } from './fallback';
 import { buildPrimarySummary, formatGrepResult } from './format';
 import { executeMtimeMode } from './mtime';
@@ -54,9 +50,9 @@ async function search(
     source: 'system-rg',
   } as const;
   if (sortBy === 'mtime') return executeMtimeMode(input, signal, cli);
-  if (mode === 'count') return executeCountMode(input, signal, cli);
+  if (mode === 'count') return executeFileListMode(input, signal, cli);
   if (mode === 'files_with_matches')
-    return executeFilesMode(input, signal, cli);
+    return executeFileListMode(input, signal, cli);
   return executeContentLikeMode(input, signal, cli);
 }
 

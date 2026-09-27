@@ -29,23 +29,6 @@ import type {
   NormalizedGrepInput,
 } from './types';
 
-interface ContentState {
-  aggregator: GrepAggregator;
-  killedForLimit: boolean;
-}
-
-interface FileListState {
-  files: GrepFileMatch[];
-  limitReached: boolean;
-}
-
-function simpleIsStopped(
-  state: { limitReached: boolean },
-  termination: TerminationState,
-): boolean {
-  return termination.timedOut || termination.cancelled || state.limitReached;
-}
-
 export async function executeMode<TState>(
   input: NormalizedGrepInput,
   signal: AbortSignal,
@@ -53,7 +36,6 @@ export async function executeMode<TState>(
   options: {
     command?: string[];
     env?: NodeJS.ProcessEnv;
-    retries?: 0;
     warnings?: string[];
     spawn?: typeof spawnRipgrep;
     init: () => TState;
@@ -66,13 +48,20 @@ export async function executeMode<TState>(
       baseResult: GrepSearchResult,
       state: TState,
     ) => GrepSearchResult;
-    isStopped: (state: TState, termination: TerminationState) => boolean;
-    finalizeResult?: (
-      result: GrepSearchResult,
-      stdoutError: unknown,
-      exitError: unknown,
-    ) => GrepSearchResult;
-  },
+  } & (
+    | {
+        isStopped: (state: TState, termination: TerminationState) => boolean;
+        finalizeResult?: never;
+      }
+    | {
+        isStopped?: never;
+        finalizeResult: (
+          result: GrepSearchResult,
+          stdoutError: unknown,
+          exitError: unknown,
+        ) => GrepSearchResult;
+      }
+  ),
 ): Promise<GrepSearchResult> {
   const command = options.command ?? buildRgCommand(input, cli.path);
   const baseResult: GrepSearchResult = {
@@ -120,7 +109,7 @@ export async function executeMode<TState>(
       return options.finalizeResult(result, stdoutError, exitError);
 
     if (stdoutError && !options.isStopped(state, termination.state)) {
-      if (options.retries !== 0 && isTransientFailure(stdoutError)) {
+      if (isTransientFailure(stdoutError)) {
         throw new RetryableRipgrepError(toErrorMessage(stdoutError));
       }
 
@@ -147,7 +136,7 @@ export async function executeMode<TState>(
         result.error = friendlyMessage;
         return result;
       }
-      if (options.retries !== 0 && isTransientFailure(exitError)) {
+      if (isTransientFailure(exitError)) {
         throw new RetryableRipgrepError(toErrorMessage(exitError));
       }
       result.error = toErrorMessage(exitError);
@@ -163,7 +152,7 @@ export async function executeMode<TState>(
       return nonFatal;
     }
 
-    if (options.retries !== 0 && isTransientStderr(result.stderr)) {
+    if (isTransientStderr(result.stderr)) {
       throw new RetryableRipgrepError(result.stderr);
     }
 
@@ -182,7 +171,7 @@ export async function executeContentLikeMode(
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
     command,
-    init: (): ContentState => ({
+    init: () => ({
       aggregator: new GrepAggregator({
         cwd: input.cwd,
         worktree: input.worktree,
@@ -235,8 +224,8 @@ export async function executeFileListMode(
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
     command,
-    init: (): FileListState => ({
-      files: [],
+    init: () => ({
+      files: [] as GrepFileMatch[],
       limitReached: false,
     }),
     consumeStdout: async (stdout, proc, state) => {
@@ -252,13 +241,10 @@ export async function executeFileListMode(
     },
     buildResult: (baseResult, state) =>
       finishFileListMode(baseResult, state.files, input, state.limitReached),
-    isStopped: simpleIsStopped,
+    isStopped: (state, termination) =>
+      termination.timedOut || termination.cancelled || state.limitReached,
   });
 }
-
-// Keep the internal named entry points while sharing their implementation.
-export const executeCountMode = executeFileListMode;
-export const executeFilesMode = executeFileListMode;
 
 export function executeDirectMode(
   input: NormalizedGrepInput,

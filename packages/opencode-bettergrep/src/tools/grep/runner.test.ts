@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import which from 'which';
-import { executeFilesMode } from './direct';
+import { executeFileListMode } from './direct';
 import { normalizeGrepInput } from './normalize';
 import { runRipgrep } from './runner';
 import { createGlobalAbortState, setAbortKind } from './runtime';
@@ -371,7 +371,7 @@ describe('tools/grep/runner', () => {
     run();
   });
 
-  test('executeFilesMode treats pre-aborted timeout signals as timed out', async () => {
+  test('executeFileListMode treats pre-aborted timeout signals as timed out', async () => {
     const { normalized } = createNormalized({
       pattern: 'createTool',
       path: 'src',
@@ -381,7 +381,7 @@ describe('tools/grep/runner', () => {
     setAbortKind(controller.signal, 'timeout');
     controller.abort();
 
-    const result = await executeFilesMode(normalized, controller.signal, {
+    const result = await executeFileListMode(normalized, controller.signal, {
       path: 'rg',
       backend: 'rg',
       source: 'system-rg',
