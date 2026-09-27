@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Effect } from 'effect';
 import { resolveOpenCodeEffect } from '../../utils/opencode-effects';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
+import { getRipgrepCacheDir } from './rg-cache';
 import { createExecutionContext, createTempTracker } from './test-helpers';
 import { createGlobTool } from './tool';
 import { permissionPath } from './tool-context';
@@ -94,6 +95,25 @@ describe('tools/glob/tool', () => {
     expect(ask.metadata.timeout_ms).toBe(DEFAULT_GLOB_TIMEOUT_MS);
     expect(ask.metadata.hidden).toBe(true);
     expect(ask.metadata.follow_symlinks).toBe(false);
+    expect(ask).toEqual({
+      permission: 'glob',
+      patterns: ['*.ts'],
+      always: ['*'],
+      metadata: {
+        backend: 'rg',
+        pattern: '*.ts',
+        path: 'src',
+        resolved_path: undefined,
+        real_path: undefined,
+        relative_pattern: undefined,
+        limit: DEFAULT_GLOB_LIMIT,
+        sort_by: 'mtime',
+        sort_order: 'desc',
+        hidden: true,
+        follow_symlinks: false,
+        timeout_ms: DEFAULT_GLOB_TIMEOUT_MS,
+      },
+    });
 
     const metadata = getMetadataInput(ctx);
     expect(metadata.title).toBe('*.ts');
@@ -368,7 +388,12 @@ describe('tools/glob/tool', () => {
     expect(ctx.ask).toHaveBeenCalledTimes(2);
     const external = (
       ctx.ask.mock.calls[1] as unknown as [
-        { permission: string; metadata: Record<string, unknown> },
+        {
+          permission: string;
+          patterns: string[];
+          always: string[];
+          metadata: Record<string, unknown>;
+        },
       ]
     )[0];
     expect(external.permission).toBe('external_directory');
@@ -545,11 +570,27 @@ describe('tools/glob/tool', () => {
     expect(ctx.ask).toHaveBeenCalledTimes(2);
     const install = (
       ctx.ask.mock.calls[1] as unknown as [
-        { permission: string; metadata: Record<string, unknown> },
+        {
+          permission: string;
+          patterns: string[];
+          always: string[];
+          metadata: Record<string, unknown>;
+        },
       ]
     )[0];
     expect(install.permission).toBe('install_ripgrep');
     expect(install.metadata.action).toBe('auto_install_ripgrep');
+    const cacheDir = permissionPath(getRipgrepCacheDir());
+    expect(install).toEqual({
+      permission: 'install_ripgrep',
+      patterns: [cacheDir],
+      always: [cacheDir],
+      metadata: {
+        tool: 'glob',
+        action: 'auto_install_ripgrep',
+        cache_dir: cacheDir,
+      },
+    });
   });
 
   test('supports ask implementations that return Effect', async () => {

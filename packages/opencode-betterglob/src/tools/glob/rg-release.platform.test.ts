@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { downloadArchive } from './downloader';
 import {
   detectLinuxLibcAsync,
   getPlatformCandidatesAsync,
@@ -74,6 +78,61 @@ describe('ripgrep platform candidates', () => {
         run: async () => ({ exitCode: 0, stdout, stderr, aborted: false }),
       });
       expect(actual).toBe(expected);
+    }
+  });
+
+  test('bounds a live archive stream before EOF and deletes partial output', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'betterglob-download-'));
+    const file = join(dir, 'incomplete.tar.gz');
+    const chunk = new Uint8Array(512);
+    const maxBytes = 1024;
+    let sent = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: (request) =>
+        request.url.endsWith('/exact')
+          ? new Response(new Uint8Array(maxBytes))
+          : request.url.endsWith('/oversize')
+            ? new Response(new Uint8Array(maxBytes + 1))
+            : new Response(
+                new ReadableStream({
+                  async pull(controller) {
+                    await Bun.sleep(10);
+                    sent += chunk.length;
+                    controller.enqueue(chunk);
+                  },
+                }),
+              ),
+    });
+    const abort = new AbortController();
+    const deadline = setTimeout(
+      () => abort.abort(new Error('download hung')),
+      500,
+    );
+    try {
+      await expect(
+        downloadArchive(`${server.url}archive`, file, abort.signal, maxBytes),
+      ).rejects.toThrow(`Cached file exceeds its size limit: ${file}`);
+      expect(existsSync(file)).toBe(false);
+      expect(sent).toBeLessThanOrEqual(maxBytes + chunk.length);
+      const exact = join(dir, 'exact.tar.gz');
+      await downloadArchive(`${server.url}exact`, exact, undefined, maxBytes);
+      expect(readFileSync(exact).byteLength).toBe(maxBytes);
+      const oversized = join(dir, 'oversized.tar.gz');
+      await expect(
+        downloadArchive(
+          `${server.url}oversize`,
+          oversized,
+          undefined,
+          maxBytes,
+        ),
+      ).rejects.toThrow(`Cached file exceeds its size limit: ${oversized}`);
+      expect(existsSync(oversized)).toBe(false);
+    } finally {
+      clearTimeout(deadline);
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

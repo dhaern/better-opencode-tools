@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { ToolContext } from '@opencode-ai/plugin';
 import {
   runBestEffortOpenCodeSideEffect,
   runOpenCodeSideEffect,
@@ -26,10 +27,10 @@ function isInsideAllowedBoundary(input: {
   worktree: string;
   searchPath: string;
 }): boolean {
-  if (containsPath(input.directory, input.searchPath)) return true;
   return (
-    isEffectiveBoundary(input.worktree) &&
-    containsPath(input.worktree, input.searchPath)
+    containsPath(input.directory, input.searchPath) ||
+    (isEffectiveBoundary(input.worktree) &&
+      containsPath(input.worktree, input.searchPath))
   );
 }
 
@@ -75,8 +76,7 @@ export function resultMetadata(
     ...baseMetadata(args, input),
     count: result.count,
     truncated: result.truncated,
-    // Plugin-authoritative truncation flag: the host overwrites
-    // `truncated` with its own text-level truncation after execution.
+    // The host overwrites `truncated`; this is the plugin's result flag.
     search_truncated: result.truncated,
     incomplete: result.incomplete,
     timed_out: result.timedOut,
@@ -88,21 +88,28 @@ export function resultMetadata(
   };
 }
 
-type AskContext = {
-  ask: (payload: {
-    permission: string;
-    patterns: string[];
-    always: string[];
-    metadata: Record<string, unknown>;
-  }) => Promise<unknown> | unknown;
-};
+type AskContext = Pick<ToolContext, 'ask'>;
 
-export function permissionPath(
+function askPermission(
+  ctx: AskContext,
+  permission: string,
+  value: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  return runOpenCodeSideEffect(
+    ctx.ask({
+      permission,
+      patterns: [value],
+      always: [value],
+      metadata,
+    }),
+  );
+}
+
+export const permissionPath = (
   file: string,
   platform = process.platform,
-): string {
-  return platform === 'win32' ? file.replaceAll('\\', '/') : file;
-}
+): string => (platform === 'win32' ? file.replaceAll('\\', '/') : file);
 
 export async function askExternalDirectory(
   ctx: AskContext,
@@ -115,35 +122,21 @@ export async function askExternalDirectory(
   if (isInsideAllowedBoundary(input)) return;
 
   const glob = `${permissionPath(input.searchPath)}/*`;
-  await runOpenCodeSideEffect(
-    ctx.ask({
-      permission: 'external_directory',
-      patterns: [glob],
-      always: [glob],
-      metadata: {
-        filepath: input.searchPath,
-        parentDir: input.searchPath,
-        follow_symlinks: false,
-        may_traverse_outside_worktree: false,
-      },
-    }),
-  );
+  await askPermission(ctx, 'external_directory', glob, {
+    filepath: input.searchPath,
+    parentDir: input.searchPath,
+    follow_symlinks: false,
+    may_traverse_outside_worktree: false,
+  });
 }
 
 export async function askRipgrepAutoInstall(ctx: AskContext): Promise<void> {
   const dir = permissionPath(getRipgrepCacheDir());
-  await runOpenCodeSideEffect(
-    ctx.ask({
-      permission: 'install_ripgrep',
-      patterns: [dir],
-      always: [dir],
-      metadata: {
-        tool: GLOB_TOOL_ID,
-        action: 'auto_install_ripgrep',
-        cache_dir: dir,
-      },
-    }),
-  );
+  await askPermission(ctx, 'install_ripgrep', dir, {
+    tool: GLOB_TOOL_ID,
+    action: 'auto_install_ripgrep',
+    cache_dir: dir,
+  });
 }
 
 export function failureMetadata(
@@ -162,12 +155,7 @@ export function failureMetadata(
 }
 
 export async function emit(
-  ctx: {
-    metadata: (payload: {
-      title?: string;
-      metadata?: Record<string, unknown>;
-    }) => Promise<unknown> | unknown;
-  },
+  ctx: Pick<ToolContext, 'metadata'>,
   name: string,
   metadata: Record<string, unknown>,
 ): Promise<void> {
@@ -185,8 +173,6 @@ export async function emit(
         timer.unref?.();
       }),
     ]);
-  } catch {
-    // Metadata is best-effort.
   } finally {
     clearTimeout(timer);
   }

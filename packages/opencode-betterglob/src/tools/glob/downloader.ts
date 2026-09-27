@@ -1,5 +1,8 @@
+import { createWriteStream } from 'node:fs';
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createAbortError, throwIfAborted } from '../../utils/abort';
 import { runProcess } from '../../utils/process-output';
 import {
@@ -9,6 +12,7 @@ import {
 } from '../../utils/zip-extractor';
 import {
   computeSha256Async,
+  InvalidCachedBinaryError,
   MAX_ARCHIVE_BYTES,
   MAX_EXTRACTED_ENTRIES,
 } from './install-io';
@@ -22,10 +26,52 @@ import {
 import { publishStagedBinary } from './rg-publication';
 import {
   type ArchiveExtension,
-  downloadArchive,
   fetchLatestRelease,
   selectReleaseAssetAsync,
 } from './rg-release';
+
+export async function downloadArchive(
+  url: string,
+  file: string,
+  signal?: AbortSignal,
+  maxBytes = MAX_ARCHIVE_BYTES,
+): Promise<void> {
+  const response = await fetch(url, { redirect: 'follow', signal });
+  if (!response.ok)
+    throw new Error(
+      `Failed to download ripgrep archive: HTTP ${response.status} ${response.statusText}`,
+    );
+
+  let received = 0;
+  try {
+    const source = response.body
+      ? Readable.fromWeb(
+          response.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>,
+        )
+      : Readable.from([]);
+    await pipeline(
+      source,
+      new Transform({
+        transform(chunk: Buffer, _encoding, done) {
+          received += chunk.length;
+          if (received > maxBytes)
+            done(
+              new InvalidCachedBinaryError(
+                `Cached file exceeds its size limit: ${file}`,
+              ),
+            );
+          else done(null, chunk);
+        },
+      }),
+      createWriteStream(file),
+      { signal },
+    );
+  } catch (error) {
+    await rm(file, { force: true });
+    throwIfAborted(signal);
+    throw error;
+  }
+}
 
 async function findBinaryRecursive(
   dir: string,

@@ -1,4 +1,4 @@
-import { access, writeFile } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { createAbortError, throwIfAborted } from '../../utils/abort';
 import {
   isMissingExecutableError,
@@ -28,13 +28,10 @@ function parseSha256Digest(value: string | undefined): string {
     ?.trim()
     .replace(/^sha256:/i, '')
     .toLowerCase();
-
-  if (!normalized || !/^[0-9a-f]{64}$/.test(normalized)) {
+  if (!normalized || !/^[0-9a-f]{64}$/.test(normalized))
     throw new Error(
       'Latest ripgrep release metadata is missing a valid SHA-256 digest.',
     );
-  }
-
   return normalized;
 }
 
@@ -66,12 +63,7 @@ export async function detectLinuxLibcAsync(
   try {
     const result = await (deps.run ?? runProcess)(
       ['ldd', '--version'],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-        killGraceMs: 250,
-        postCloseDrainMs: 250,
-      },
+      { killGraceMs: 250, postCloseDrainMs: 250 },
       signal,
     );
     if (signal?.aborted) throw createAbortError();
@@ -113,10 +105,11 @@ export async function getPlatformCandidatesAsync(
   arch: string = process.arch,
   detectLibc = detectLinuxLibcAsync,
 ): Promise<PlatformCandidate[]> {
-  if (platform !== 'linux' || (arch !== 'arm64' && arch !== 'x64')) {
-    return platformCandidates(platform, arch);
-  }
-  return platformCandidates(platform, arch, await detectLibc(signal));
+  const libc =
+    platform === 'linux' && (arch === 'arm64' || arch === 'x64')
+      ? await detectLibc(signal)
+      : 'gnu';
+  return platformCandidates(platform, arch, libc);
 }
 
 export async function fetchLatestRelease(
@@ -134,11 +127,10 @@ export async function fetchLatestRelease(
     },
   );
 
-  if (!response.ok) {
+  if (!response.ok)
     throw new Error(
       `Failed to resolve latest ripgrep release: HTTP ${response.status} ${response.statusText}`,
     );
-  }
 
   const payload = (await response.json()) as RipgrepReleaseResponse;
   if (!payload.tag_name || !Array.isArray(payload.assets)) {
@@ -179,22 +171,4 @@ export async function selectReleaseAssetAsync(
   throw new Error(
     `No ripgrep asset is available for ${process.platform}-${process.arch}.`,
   );
-}
-
-export async function downloadArchive(
-  url: string,
-  file: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const response = await fetch(url, { redirect: 'follow', signal });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download ripgrep archive: HTTP ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const buffer = await response.arrayBuffer();
-  throwIfAborted(signal);
-  await writeFile(file, Buffer.from(buffer), { signal });
 }
