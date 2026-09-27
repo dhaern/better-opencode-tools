@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import { parseGlobOutputSummary } from '../../hooks/glob-render-metadata';
 import { buildTruncatedNote, formatGlobResult } from './format';
-import { normalizeGlobInput } from './normalize';
+import { normalizeGlobInputAsync } from './normalize';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobSearchResult } from './types';
 
@@ -25,9 +25,9 @@ describe('tools/glob/format', () => {
     };
   }
 
-  test('formats absolute paths one per line', () => {
+  test('formats absolute paths one per line', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -37,9 +37,9 @@ describe('tools/glob/format', () => {
     );
   });
 
-  test('formats empty output exactly as native glob', () => {
+  test('formats empty output exactly as native glob', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.missing', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -53,9 +53,9 @@ describe('tools/glob/format', () => {
     ).toBe('No files found');
   });
 
-  test('formats truncation note exactly as native glob', () => {
+  test('formats truncation note exactly as native glob', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 1 },
       createRepoContext(repoDir) as any,
     );
@@ -72,9 +72,9 @@ describe('tools/glob/format', () => {
     );
   });
 
-  test('formats backend errors honestly instead of as empty results', () => {
+  test('formats backend errors honestly instead of as empty results', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -90,9 +90,9 @@ describe('tools/glob/format', () => {
     ).toBe('glob search failed.\nrg not available');
   });
 
-  test('formats timeout separately from truncation', () => {
+  test('formats timeout separately from truncation', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -174,7 +174,7 @@ describe('tools/glob/format', () => {
       count: 1,
       truncated: true,
     },
-  ])('golden format and fallback parser: $label', ({
+  ])('golden format and fallback parser: $label', async ({
     flags,
     note,
     count,
@@ -182,7 +182,7 @@ describe('tools/glob/format', () => {
   }) => {
     const repoDir = temps.createRepo();
     const file = path.join(repoDir, 'src', 'a.ts');
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 1 },
       createRepoContext(repoDir) as any,
     );
@@ -204,9 +204,9 @@ describe('tools/glob/format', () => {
     expect(parseGlobOutputSummary(output)).toEqual({ count, truncated });
   });
 
-  test('errors override all status flags and yield zero rows on fallback parsing', () => {
+  test('errors override all status flags and yield zero rows on fallback parsing', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts' },
       createRepoContext(repoDir) as any,
     );

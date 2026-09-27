@@ -1,4 +1,4 @@
-import which, { sync as whichSync } from 'which';
+import which from 'which';
 import {
   crossSpawn,
   ensureSupervisorRuntime,
@@ -7,11 +7,8 @@ import {
 import { logAsync } from '../../utils/logger';
 import { isSupervisorError } from '../../utils/process-supervisor';
 import { RG_BINARY } from './constants';
-import {
-  getInstalledRipgrepPath,
-  getInstalledRipgrepPathAsync,
-  installLatestStableRipgrep,
-} from './downloader';
+import { installLatestStableRipgrep } from './downloader';
+import { getInstalledRipgrepPathAsync } from './rg-cache';
 
 export class AbortWaitError extends Error {}
 
@@ -23,17 +20,14 @@ export interface ResolvedGlobCli {
 
 interface GlobResolverDependencies {
   ensureSupervisorRuntimeAsync?: (signal?: AbortSignal) => Promise<void>;
-  findExecutable?: (name: string) => string | null;
   findExecutableAsync?: (
     name: string,
     signal?: AbortSignal,
   ) => Promise<string | null>;
-  getInstalledRipgrepPath?: () => string | null;
   getInstalledRipgrepPathAsync?: (
     signal?: AbortSignal,
   ) => Promise<string | null>;
   installLatestStableRipgrep?: (signal?: AbortSignal) => Promise<string>;
-  validateExecutable?: (file: string) => boolean;
   validateExecutableAsync?: (
     file: string,
     signal?: AbortSignal,
@@ -59,16 +53,6 @@ function isMissingExecutable(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
-function defaultFindExecutable(name: string): string | null {
-  try {
-    const resolved = whichSync(name, { nothrow: true });
-    return Array.isArray(resolved) ? (resolved[0] ?? null) : (resolved ?? null);
-  } catch (error) {
-    if (isMissingExecutable(error)) return null;
-    throw error;
-  }
-}
-
 async function defaultFindExecutableAsync(
   name: string,
 ): Promise<string | null> {
@@ -78,13 +62,6 @@ async function defaultFindExecutableAsync(
     if (isMissingExecutable(error)) return null;
     throw error;
   }
-}
-
-function defaultValidateExecutable(_file: string): boolean {
-  // The synchronous compatibility API deliberately does not execute a probe:
-  // doing so would block the event loop and make timeout_ms unenforceable.
-  // The tool and async resolver perform the real, cancelable validation.
-  return true;
 }
 
 async function defaultValidateExecutableAsync(
@@ -143,30 +120,6 @@ async function defaultValidateExecutableAsync(
   } finally {
     clearTimeout(timer);
   }
-}
-
-function resolveSync(deps: GlobResolverDependencies = {}): ResolvedGlobCli {
-  const find = deps.findExecutable ?? defaultFindExecutable;
-  const managed = deps.getInstalledRipgrepPath ?? getInstalledRipgrepPath;
-  const validate = deps.validateExecutable ?? defaultValidateExecutable;
-  const system = find(RG_BINARY);
-
-  if (system && validate(system)) {
-    return { path: system, backend: 'rg', source: 'system-rg' };
-  }
-
-  const installed = managed();
-  if (installed) {
-    return { path: installed, backend: 'rg', source: 'managed-rg' };
-  }
-
-  return { path: RG_BINARY, backend: 'rg', source: 'missing-rg' };
-}
-
-export function resolveGlobCli(
-  deps: GlobResolverDependencies = {},
-): ResolvedGlobCli {
-  return resolveSync(deps);
 }
 
 export async function resolveGlobCliAsync(

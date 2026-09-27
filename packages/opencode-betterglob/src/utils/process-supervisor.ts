@@ -65,7 +65,6 @@ export interface SupervisedProcess {
   closed: Promise<void>;
   stop: (graceMs?: number) => Promise<void>;
   release: () => Promise<void>;
-  kill: (signal?: NodeJS.Signals | number) => boolean;
   readonly exitCode: number | null;
 }
 
@@ -365,23 +364,6 @@ export function spawnSupervised(
         send({ type: 'release' });
       }
       return closed;
-    },
-    kill: (signal = 'SIGTERM') => {
-      if (
-        signal !== 'SIGTERM' &&
-        signal !== 'SIGKILL' &&
-        signal !== 15 &&
-        signal !== 9
-      ) {
-        return false;
-      }
-      stopped = true;
-      watchCleanup(signal === 'SIGKILL' || signal === 9 ? 0 : graceMs);
-      return send({
-        type: 'stop',
-        graceMs,
-        force: signal === 'SIGKILL' || signal === 9,
-      });
     },
     get exitCode() {
       return code;

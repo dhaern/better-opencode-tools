@@ -1,7 +1,7 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { createGlobRenderMetadataHook } from './hooks/glob-render-metadata';
-import { createGlobTool } from './tools/glob';
-import { initLogger } from './utils';
+import { createGlobTool } from './tools/glob/tool';
+import { initLogger } from './utils/logger';
 
 const server: Plugin = async (ctx) => {
   initLogger(ctx.project.id);

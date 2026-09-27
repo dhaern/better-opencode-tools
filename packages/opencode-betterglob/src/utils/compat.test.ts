@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -157,7 +157,15 @@ describe.skipIf(process.platform === 'win32')(
       await expect(child.release()).rejects.toBeInstanceOf(
         CleanupUnconfirmedError,
       );
-      expect(child.kill('SIGKILL')).toBe(false);
+      const kill = spyOn(process, 'kill').mockImplementation(() => true);
+      try {
+        await expect(child.stop(0)).rejects.toBeInstanceOf(
+          CleanupUnconfirmedError,
+        );
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        kill.mockRestore();
+      }
     });
 
     test('a requested stop does not turn unexpected SIGKILL into confirmed cleanup', async () => {
@@ -317,8 +325,13 @@ describe.skipIf(process.platform === 'win32')(
         expect(child.proc.exitCode).toBeNull();
         expect(child.proc.signalCode).toBe('SIGKILL');
         // A stale capability never falls back to signalling a saved PID/PGID.
-        expect(child.kill('SIGKILL')).toBe(false);
-        await child.stop(0);
+        const kill = spyOn(process, 'kill').mockImplementation(() => true);
+        try {
+          await child.stop(0);
+          expect(kill).not.toHaveBeenCalled();
+        } finally {
+          kill.mockRestore();
+        }
       } finally {
         await child.stop(0);
       }

@@ -203,7 +203,9 @@ export function crossSpawn(
     closed: supervised?.closed,
     stop: supervised?.stop,
     release: supervised?.release,
-    kill: supervised?.kill ?? ((signal) => proc.kill(signal as NodeJS.Signals)),
+    kill: supervised
+      ? () => false
+      : (signal) => proc.kill(signal as NodeJS.Signals),
     get exitCode() {
       return supervised ? supervised.exitCode : proc.exitCode;
     },

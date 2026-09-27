@@ -89,9 +89,7 @@ export function createGlobRenderMetadataHook() {
       } else {
         // Presentation flag only: host truncation OR search truncation.
         metadata.truncated =
-          Boolean(metadata.truncated) ||
-          metadata.search_truncated === true ||
-          (!hadMetadata && parsed.truncated);
+          Boolean(metadata.truncated) || metadata.search_truncated === true;
       }
 
       if (

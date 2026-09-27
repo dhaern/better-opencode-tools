@@ -19,15 +19,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { lock } from 'proper-lockfile';
+import { installLatestStableRipgrep } from './downloader';
 import {
-  getInstalledRipgrepPath,
   getInstalledRipgrepPathAsync,
   getRipgrepBinaryName,
   getRipgrepCacheDir,
-  installLatestStableRipgrep,
+} from './rg-cache';
+import {
   type PublishStagedBinaryInput,
   publishStagedBinary,
-} from './downloader';
+} from './rg-publication';
 
 function sha256(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -358,7 +359,6 @@ describe('tools/glob/downloader', () => {
       }),
     );
 
-    expect(getInstalledRipgrepPath()).toBe(binary);
     expect(await getInstalledRipgrepPathAsync()).toBe(binary);
     expect(existsSync(binary)).toBe(true);
     expect(existsSync(metadata)).toBe(true);
@@ -381,7 +381,7 @@ describe('tools/glob/downloader', () => {
 
   testPosix(
     'does not repair or delete invalid cache during read-only probe',
-    () => {
+    async () => {
       const { binary, metadata } = setupCache();
       writeFakeRipgrep(binary);
       writeFileSync(
@@ -394,13 +394,35 @@ describe('tools/glob/downloader', () => {
         }),
       );
 
-      expect(getInstalledRipgrepPath({ repair: false })).toBeNull();
+      expect(await getInstalledRipgrepPathAsync()).toBeNull();
       expect(existsSync(binary)).toBe(true);
       expect(existsSync(metadata)).toBe(true);
     },
   );
 
-  testPosix('does not repair invalid cache through the legacy sync API', () => {
+  testPosix(
+    'does not repair invalid cache through the async read API',
+    async () => {
+      const { binary, metadata } = setupCache();
+      writeFakeRipgrep(binary);
+      writeFileSync(
+        metadata,
+        JSON.stringify({
+          version: '14.1.1',
+          assetName: 'ripgrep.tar.gz',
+          archiveSha256: 'a'.repeat(64),
+          binarySha256: 'b'.repeat(64),
+        }),
+      );
+
+      // Only the publisher may repair under its proper-lockfile lock.
+      expect(await getInstalledRipgrepPathAsync()).toBeNull();
+      expect(existsSync(binary)).toBe(true);
+      expect(existsSync(metadata)).toBe(true);
+    },
+  );
+
+  testPosix('default reads never repair invalid cache', async () => {
     const { binary, metadata } = setupCache();
     writeFakeRipgrep(binary);
     writeFileSync(
@@ -413,27 +435,7 @@ describe('tools/glob/downloader', () => {
       }),
     );
 
-    // The async publisher performs repair under its proper-lockfile lock.
-    // The synchronous compatibility API cannot safely acquire that lock.
-    expect(getInstalledRipgrepPath({ repair: true })).toBeNull();
-    expect(existsSync(binary)).toBe(true);
-    expect(existsSync(metadata)).toBe(true);
-  });
-
-  testPosix('default reads never repair invalid cache', () => {
-    const { binary, metadata } = setupCache();
-    writeFakeRipgrep(binary);
-    writeFileSync(
-      metadata,
-      JSON.stringify({
-        version: '14.1.1',
-        assetName: 'ripgrep.tar.gz',
-        archiveSha256: 'a'.repeat(64),
-        binarySha256: 'b'.repeat(64),
-      }),
-    );
-
-    expect(getInstalledRipgrepPath()).toBeNull();
+    expect(await getInstalledRipgrepPathAsync()).toBeNull();
     expect(existsSync(binary)).toBe(true);
     expect(existsSync(metadata)).toBe(true);
   });
@@ -473,7 +475,7 @@ describe('tools/glob/downloader', () => {
       });
 
       // The corrupt cache was replaced under the lock, not left blocking.
-      expect(getInstalledRipgrepPath()).toBe(binary);
+      expect(await getInstalledRipgrepPathAsync()).toBe(binary);
       expect(existsSync(staged)).toBe(false);
     },
   );
@@ -596,7 +598,7 @@ describe('tools/glob/downloader', () => {
         binarySha256: sha256(staged),
       });
 
-      expect(getInstalledRipgrepPath()).toBe(binary);
+      expect(await getInstalledRipgrepPathAsync()).toBe(binary);
       expect(existsSync(metadata)).toBe(true);
       expect(existsSync(staged)).toBe(false);
     },

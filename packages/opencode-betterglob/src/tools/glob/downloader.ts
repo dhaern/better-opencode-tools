@@ -1,9 +1,12 @@
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { extractZip, getZipExtractionSupportErrorAsync } from '../../utils';
 import { crossSpawn } from '../../utils/compat';
 import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
-import { commandSucceeds } from '../../utils/zip-extractor';
+import {
+  commandSucceeds,
+  extractZip,
+  getZipExtractionSupportErrorAsync,
+} from '../../utils/zip-extractor';
 import {
   computeSha256Async,
   createAbortError,
@@ -25,17 +28,6 @@ import {
   fetchLatestRelease,
   selectReleaseAssetAsync,
 } from './rg-release';
-
-export {
-  getInstalledRipgrepPath,
-  getInstalledRipgrepPathAsync,
-  getRipgrepBinaryName,
-  getRipgrepCacheDir,
-} from './rg-cache';
-export {
-  type PublishStagedBinaryInput,
-  publishStagedBinary,
-} from './rg-publication';
 
 async function findBinaryRecursive(
   dir: string,

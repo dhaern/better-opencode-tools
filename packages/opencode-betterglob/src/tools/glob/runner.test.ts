@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { normalizeGlobInput } from './normalize';
+import { normalizeGlobInputAsync } from './normalize';
 import { createRipgrepRunner } from './runner';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobToolInput } from './types';
@@ -23,13 +23,16 @@ describe('tools/glob/runner', () => {
     spawn: nodeSpawn,
   });
 
-  function createNormalized(
+  async function createNormalized(
     input: GlobToolInput,
     repoDir = temps.createRepo(),
   ) {
     return {
       repoDir,
-      normalized: normalizeGlobInput(input, createRepoContext(repoDir) as any),
+      normalized: await normalizeGlobInputAsync(
+        input,
+        createRepoContext(repoDir) as any,
+      ),
     };
   }
 
@@ -40,7 +43,7 @@ describe('tools/glob/runner', () => {
       const weird = path.join(repoDir, 'src', 'odd\nname.ts');
       writeFileSync(weird, 'export const weird = true;\n');
 
-      const { normalized } = createNormalized(
+      const { normalized } = await createNormalized(
         { pattern: '*.ts', path: 'src', sort_by: 'path' },
         repoDir,
       );
@@ -88,7 +91,7 @@ describe('tools/glob/runner', () => {
     utimesSync(files[1] as string, now - 20, now - 20);
     utimesSync(files[2] as string, now - 10, now - 10);
 
-    const { normalized } = createNormalized(
+    const { normalized } = await createNormalized(
       { pattern: '*.ts', path: 'src', limit: 2, ...input },
       repoDir,
     );
@@ -102,7 +105,7 @@ describe('tools/glob/runner', () => {
   });
 
   testWithRg('returns no files for an unmatched pattern', async () => {
-    const { normalized } = createNormalized({
+    const { normalized } = await createNormalized({
       pattern: '*.missing',
       path: 'src',
     });
@@ -119,12 +122,13 @@ describe('tools/glob/runner', () => {
     writeFileSync(path.join(repoDir, 'src', 'plain.js'), 'js\n');
 
     const brace = await runSystemRg(
-      createNormalized({ pattern: '*.{ts,tsx}', path: 'src' }, repoDir)
+      (await createNormalized({ pattern: '*.{ts,tsx}', path: 'src' }, repoDir))
         .normalized,
       new AbortController().signal,
     );
     const bracket = await runSystemRg(
-      createNormalized({ pattern: '*.[jt]s', path: 'src' }, repoDir).normalized,
+      (await createNormalized({ pattern: '*.[jt]s', path: 'src' }, repoDir))
+        .normalized,
       new AbortController().signal,
     );
 
@@ -151,7 +155,7 @@ describe('tools/glob/runner', () => {
       writeFileSync(path.join(repoDir, '.gitignore'), 'src/ignored.ts\n');
       writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'ignored\n');
       writeFileSync(path.join(repoDir, 'src', 'ok.ts'), 'ok\n');
-      const { normalized } = createNormalized(
+      const { normalized } = await createNormalized(
         { pattern: '*.ts', path: 'src', sort_by: 'path' },
         repoDir,
       );
@@ -174,7 +178,7 @@ describe('tools/glob/runner', () => {
     mkdirSync(path.join(repoDir, '.git'), { recursive: true });
     writeFileSync(path.join(repoDir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
 
-    const { normalized } = createNormalized(
+    const { normalized } = await createNormalized(
       { pattern: 'HEAD', path: '.', hidden: true },
       repoDir,
     );

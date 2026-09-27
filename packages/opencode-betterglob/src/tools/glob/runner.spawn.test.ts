@@ -9,7 +9,7 @@ import {
   type SupervisorOptions,
   spawnSupervised,
 } from '../../utils/process-supervisor';
-import { normalizeGlobInput } from './normalize';
+import { normalizeGlobInputAsync } from './normalize';
 import {
   adaptSupervisedSearch,
   collectMatchedPaths,
@@ -54,9 +54,6 @@ function controlledSupervisor() {
     release: () => {
       releases++;
       return cleanup.promise;
-    },
-    kill: () => {
-      throw new Error('must not use numeric signalling');
     },
   };
   return { child, task, cleanup, supervised, stops, releases: () => releases };
@@ -111,7 +108,7 @@ describe('tools/glob/runner spawn failures', () => {
       }),
       cleanupWaitMs: 2000,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: ending === 'limit' ? 1 : 10 },
       createRepoContext(repoDir) as any,
     );
@@ -188,7 +185,7 @@ describe('tools/glob/runner spawn failures', () => {
       }),
       cleanupWaitMs: 0,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 1 },
       createRepoContext(repoDir) as any,
     );
@@ -234,7 +231,7 @@ describe('tools/glob/runner spawn failures', () => {
       },
       cleanupWaitMs: 2000,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 1, timeout_ms: 1 },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -258,7 +255,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () =>
         adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
       createRepoContext(repoDir) as any,
     );
@@ -302,7 +299,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () =>
         adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
       createRepoContext(repoDir) as any,
     );
@@ -332,7 +329,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: fakeResolve,
       spawn: () => adaptSupervisedSearch(fixture.supervised),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -382,9 +379,6 @@ describe('tools/glob/runner spawn failures', () => {
         stops++;
         return cleanup.promise;
       },
-      kill: () => {
-        throw new Error('adapter must only use stop/release capabilities');
-      },
     };
     const managed = adaptSupervisedSearch(supervised);
     if (ending === 'stop') {
@@ -418,7 +412,7 @@ describe('tools/glob/runner spawn failures', () => {
     'timeout',
   ] as const)('does not spawn when %s arrives after CLI resolution wins the race', async (reason) => {
     const controller = new AbortController();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -482,7 +476,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: unexpected,
       spawn: unexpected,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -501,7 +495,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: fakeResolve,
       spawn: () => child,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -541,7 +535,7 @@ describe('tools/glob/runner spawn failures', () => {
       killGraceMs: 10,
     });
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -589,7 +583,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () => child,
       killGraceMs: 10,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(temps.createRepo()) as any,
     );
@@ -676,7 +670,7 @@ describe('tools/glob/runner spawn failures', () => {
         },
       });
       const repoDir = temps.createRepo();
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
         createRepoContext(repoDir) as any,
       );
@@ -737,7 +731,7 @@ describe('tools/glob/runner spawn failures', () => {
           return managed;
         },
       });
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
         createRepoContext(repoDir) as any,
       );
@@ -772,7 +766,7 @@ describe('tools/glob/runner spawn failures', () => {
             options,
           ),
       });
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src' },
         createRepoContext(temps.createRepo()) as any,
       );
@@ -810,7 +804,7 @@ describe('tools/glob/runner spawn failures', () => {
           return spawned;
         },
       });
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src' },
         createRepoContext(repoDir) as any,
       );
@@ -851,7 +845,7 @@ describe('tools/glob/runner spawn failures', () => {
             supervisorExecutable: `${repoDir}/nonexistent-node`,
           }),
       });
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src' },
         createRepoContext(repoDir) as any,
       );
@@ -891,7 +885,7 @@ describe('tools/glob/runner spawn failures', () => {
           return managed;
         },
       });
-      const input = normalizeGlobInput(
+      const input = await normalizeGlobInputAsync(
         { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
         createRepoContext(repoDir) as any,
       );
@@ -919,7 +913,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn failed');
       },
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src' },
       createRepoContext(repoDir) as any,
     );
@@ -939,7 +933,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn should not run');
       },
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 1000 },
       createRepoContext(repoDir) as any,
     );
@@ -961,7 +955,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn should not run');
       },
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 20 },
       createRepoContext(repoDir) as any,
     );
@@ -984,7 +978,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn threw');
       },
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 1000 },
       createRepoContext(repoDir) as any,
     );
@@ -1015,7 +1009,7 @@ describe('tools/glob/runner spawn failures', () => {
           },
         ),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 200 },
       createRepoContext(repoDir) as any,
     );
@@ -1056,7 +1050,7 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 20 },
       createRepoContext(repoDir) as any,
     );
@@ -1088,7 +1082,7 @@ describe('tools/glob/runner spawn failures', () => {
           },
         ),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 2, timeout_ms: 5000 },
       createRepoContext(repoDir) as any,
     );
@@ -1105,7 +1099,7 @@ describe('tools/glob/runner spawn failures', () => {
     // Direct stream test: every PassThrough.write() is one data event, so
     // the multibyte sequence is guaranteed to be split across chunks.
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
       createRepoContext(repoDir) as any,
     );
@@ -1126,7 +1120,7 @@ describe('tools/glob/runner spawn failures', () => {
 
   test('never publishes a path from a fragment without NUL terminator', async () => {
     const repoDir = temps.createRepo();
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
       createRepoContext(repoDir) as any,
     );
@@ -1165,7 +1159,7 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 2, timeout_ms: 5000 },
       createRepoContext(repoDir) as any,
     );
@@ -1207,7 +1201,7 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 5000 },
       createRepoContext(repoDir) as any,
     );
@@ -1247,7 +1241,7 @@ describe('tools/glob/runner spawn failures', () => {
           { stdio: ['pipe', 'pipe', 'pipe'] },
         ),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', limit: 1, timeout_ms: 3000 },
       createRepoContext(repoDir) as any,
     );
@@ -1280,7 +1274,7 @@ describe('tools/glob/runner spawn failures', () => {
           { stdio: ['pipe', 'pipe', 'pipe'] },
         ),
     });
-    const input = normalizeGlobInput(
+    const input = await normalizeGlobInputAsync(
       { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
       createRepoContext(repoDir) as any,
     );

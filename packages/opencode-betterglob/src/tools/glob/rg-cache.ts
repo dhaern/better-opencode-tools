@@ -1,16 +1,13 @@
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
 import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
 import {
-  computeSha256,
   computeSha256Async,
   InvalidCachedBinaryError,
   MAX_CACHE_METADATA_BYTES,
   readRegularFile,
-  readRegularFileSync,
   throwIfAborted,
 } from './install-io';
 
@@ -61,25 +58,6 @@ export function getRipgrepBinaryName(): string {
   return process.platform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-export function getInstalledRipgrepPath(
-  _options: { repair?: boolean } = {},
-): string | null {
-  const binary = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binary)) return null;
-
-  try {
-    validateCachedBinary(binary);
-    return binary;
-  } catch {
-    // Non-destructive by default: a mid-publication cache (binary renamed,
-    // metadata not yet visible) must not trigger deletion by readers. Only
-    // the async publisher, held under the install lock, may purge. The
-    // synchronous compatibility option is retained as a safe no-op because
-    // it cannot acquire that lock without blocking.
-    return null;
-  }
-}
-
 export async function getInstalledRipgrepPathAsync(
   signal?: AbortSignal,
 ): Promise<string | null> {
@@ -94,21 +72,6 @@ export async function getInstalledRipgrepPathAsync(
     if (error instanceof InvalidCachedBinaryError) return null;
     throw error;
   }
-}
-
-function readInstalledMetadata(): InstalledRipgrepMetadata {
-  const parsed: unknown = JSON.parse(
-    readRegularFileSync(
-      getRipgrepMetadataPath(),
-      MAX_CACHE_METADATA_BYTES,
-    ).toString('utf8'),
-  );
-  if (!isInstalledRipgrepMetadata(parsed)) {
-    throw new InvalidCachedBinaryError(
-      'Cached ripgrep metadata has an invalid structure.',
-    );
-  }
-  return parsed;
 }
 
 async function readInstalledMetadataAsync(
@@ -137,18 +100,6 @@ async function readInstalledMetadataAsync(
     }
     throw error;
   }
-}
-
-function validateCachedBinary(binary: string): void {
-  const metadata = readInstalledMetadata();
-  if (computeSha256(binary) !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
-  // The synchronous compatibility probe verifies cache integrity only. The
-  // execution path uses getInstalledRipgrepPathAsync(), which also validates
-  // that the executable identifies itself as ripgrep without blocking the
-  // event loop.
 }
 
 export async function validateCachedBinaryAsync(
