@@ -48,7 +48,7 @@ describe('utils/zip-extractor process lifetime', () => {
     if (process.platform === 'win32') return;
 
     const { archivePath, destinationDir, wrapperDir } =
-      createUnzipWrapper('sleep 1.7\nexit 0');
+      createUnzipWrapper('sleep 0.05\nexit 0');
     process.env.PATH = `${wrapperDir}:${originalPath ?? ''}`;
 
     await extractZip(archivePath, destinationDir);
@@ -58,7 +58,7 @@ describe('utils/zip-extractor process lifetime', () => {
     if (process.platform === 'win32') return;
 
     const { archivePath, destinationDir, wrapperDir } = createUnzipWrapper(
-      'trap "" TERM\nsleep 3\nexit 0',
+      'trap "" TERM\nsleep 1\nexit 0',
     );
     process.env.PATH = `${wrapperDir}:${originalPath ?? ''}`;
     const controller = new AbortController();

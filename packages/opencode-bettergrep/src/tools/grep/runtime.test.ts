@@ -93,57 +93,106 @@ describe('tools/grep/runtime process termination', () => {
       jest.useRealTimers();
     }
   });
+  function stubStubbornProcess() {
+    let resolveExit!: (code: number) => void;
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const proc = {
+      proc: { exitCode: null, signalCode: null },
+      exited: new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      }),
+      kill: (signal?: NodeJS.Signals | number) => {
+        signals.push(signal);
+        if (signal === 'SIGKILL') resolveExit(1);
+        return true;
+      },
+      get exitCode() {
+        return null;
+      },
+    } as any;
+    return { proc, signals };
+  }
+
   test('attachTerminationHandlers escalates timeout to kill stubborn child', async () => {
-    const proc = spawnStubbornProcess();
-    const controller = new AbortController();
-    const termination = attachTerminationHandlers(proc, 20, controller.signal);
+    jest.useFakeTimers();
+    try {
+      const { proc, signals } = stubStubbornProcess();
+      const controller = new AbortController();
+      const termination = attachTerminationHandlers(
+        proc,
+        20,
+        controller.signal,
+      );
 
-    await proc.exited;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    termination.cleanup();
+      const done = proc.exited;
+      jest.advanceTimersByTime(20);
+      await Promise.resolve();
+      expect(signals).toEqual([undefined]);
+      jest.advanceTimersByTime(500);
+      await done;
+      termination.cleanup();
 
-    expect(termination.state.timedOut).toBe(true);
-    expect(termination.state.cancelled).toBe(false);
-    expect(isAlive(proc.proc.pid)).toBe(false);
+      expect(termination.state.timedOut).toBe(true);
+      expect(termination.state.cancelled).toBe(false);
+      expect(signals).toEqual([undefined, 'SIGKILL']);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('attachTerminationHandlers escalates cancel to kill stubborn child', async () => {
-    const proc = spawnStubbornProcess();
-    const controller = new AbortController();
-    const termination = attachTerminationHandlers(
-      proc,
-      5_000,
-      controller.signal,
-    );
+    jest.useFakeTimers();
+    try {
+      const { proc, signals } = stubStubbornProcess();
+      const controller = new AbortController();
+      const termination = attachTerminationHandlers(
+        proc,
+        5_000,
+        controller.signal,
+      );
 
-    controller.abort();
-    await proc.exited;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    termination.cleanup();
+      controller.abort();
+      const done = proc.exited;
+      await Promise.resolve();
+      expect(signals).toEqual([undefined]);
+      jest.advanceTimersByTime(500);
+      await done;
+      termination.cleanup();
 
-    expect(termination.state.timedOut).toBe(false);
-    expect(termination.state.cancelled).toBe(true);
-    expect(isAlive(proc.proc.pid)).toBe(false);
+      expect(termination.state.timedOut).toBe(false);
+      expect(termination.state.cancelled).toBe(true);
+      expect(signals).toEqual([undefined, 'SIGKILL']);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('attachTerminationHandlers preserves upstream timeout cause on abort', async () => {
-    const proc = spawnStubbornProcess();
-    const controller = new AbortController();
-    setAbortKind(controller.signal, 'timeout');
-    const termination = attachTerminationHandlers(
-      proc,
-      5_000,
-      controller.signal,
-    );
+    jest.useFakeTimers();
+    try {
+      const { proc, signals } = stubStubbornProcess();
+      const controller = new AbortController();
+      setAbortKind(controller.signal, 'timeout');
+      const termination = attachTerminationHandlers(
+        proc,
+        5_000,
+        controller.signal,
+      );
 
-    controller.abort();
-    await proc.exited;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    termination.cleanup();
+      controller.abort();
+      const done = proc.exited;
+      await Promise.resolve();
+      expect(signals).toEqual([undefined]);
+      jest.advanceTimersByTime(500);
+      await done;
+      termination.cleanup();
 
-    expect(termination.state.timedOut).toBe(true);
-    expect(termination.state.cancelled).toBe(false);
-    expect(isAlive(proc.proc.pid)).toBe(false);
+      expect(termination.state.timedOut).toBe(true);
+      expect(termination.state.cancelled).toBe(false);
+      expect(signals).toEqual([undefined, 'SIGKILL']);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('killProcess escalates to kill stubborn child', async () => {
