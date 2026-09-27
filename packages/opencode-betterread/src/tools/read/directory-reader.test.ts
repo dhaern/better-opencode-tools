@@ -47,6 +47,29 @@ afterEach(async () => {
 });
 
 describe('readDirectory', () => {
+  test('keeps window order and symlink slashes across stat batches', async () => {
+    const directory = await createTempDirectory();
+    const outside = await createTempDirectory();
+    await Promise.all(
+      Array.from({ length: 600 }, (_, index) =>
+        symlink(
+          outside,
+          path.join(directory, `link-${String(index).padStart(3, '0')}`),
+        ),
+      ),
+    );
+    await writeFile(path.join(directory, 'link-300x'), 'file', 'utf8');
+
+    const result = await readDirectory(directory, 1, 1000);
+
+    expect(result.entries).toHaveLength(601);
+    expect(result.entries[0]).toBe('link-000/');
+    expect(result.entries[301]).toBe('link-300x');
+    expect(result.entries.at(-1)).toBe('link-599/');
+    expect(result.entries.filter((entry) => entry.endsWith('/'))).toHaveLength(
+      600,
+    );
+  });
   test('keeps exact totals for small fully scanned directories', async () => {
     const directory = await createTempDirectory();
     await mkdir(path.join(directory, 'subdir'));

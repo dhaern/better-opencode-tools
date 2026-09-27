@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
@@ -130,5 +130,45 @@ describe('readTextFile', () => {
     expect(result.truncatedByLineLength).toBe(true);
     expect(result.hasMore).toBe(true);
     expect(result.totalLines).toBeUndefined();
+  });
+
+  test('keeps line breaks and UTF-8 sequences split across short reads', async () => {
+    const filePath = await createTempFile(
+      `a€\r\nb😀\r\r\n${'€'.repeat(MAX_LINE_LENGTH + 4)}\ntail\r`,
+    );
+    const file = await open(filePath, 'r');
+    try {
+      for (const step of [1, 2, 3]) {
+        const handle = {
+          stat: () => file.stat(),
+          read: (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number,
+          ) => file.read(buffer, offset, Math.min(length, step), position),
+        } as any;
+
+        const all = await readTextFile(filePath, 1, 10, undefined, handle);
+        expect(all.content).toBe(
+          `a€\nb😀\n\n${'€'.repeat(MAX_LINE_LENGTH)}…\ntail`,
+        );
+        expect(all.totalLines).toBe(5);
+        expect(all.truncatedByLineLength).toBe(true);
+
+        const window = await readTextFileStreaming(
+          filePath,
+          2,
+          2,
+          undefined,
+          handle,
+        );
+        expect(window.content).toBe('b😀\n');
+        expect(window.hasMore).toBe(true);
+        expect(window.totalLines).toBeUndefined();
+      }
+    } finally {
+      await file.close();
+    }
   });
 });

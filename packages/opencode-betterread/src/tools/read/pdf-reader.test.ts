@@ -1,8 +1,9 @@
 /// <reference types="bun-types" />
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PDF_COMMAND_TIMEOUT_MS } from './constants';
 import { readPdf, runCommand } from './pdf-reader';
 
 const tempDirs: string[] = [];
@@ -44,7 +45,8 @@ process.stdout.write(stdout);
 if (stdoutBytes > 0) process.stdout.write('x'.repeat(stdoutBytes));
 process.stderr.write(stderr);
 if (stderrBytes > 0) process.stderr.write('y'.repeat(stderrBytes));
-process.exit(Number(process.env.BETTERREAD_PDFINFO_EXIT_CODE || '0'));
+if (process.env.BETTERREAD_PDFINFO_HANG) setInterval(() => {}, 1000);
+else process.exit(Number(process.env.BETTERREAD_PDFINFO_EXIT_CODE || '0'));
 `,
     'utf8',
   );
@@ -67,6 +69,7 @@ afterEach(async () => {
   restoreEnv('BETTERREAD_PDFINFO_STDOUT_BYTES', originalPdfInfoStdoutBytes);
   restoreEnv('BETTERREAD_PDFINFO_STDERR_BYTES', originalPdfInfoStderrBytes);
   restoreEnv('BETTERREAD_PDFINFO_EXIT_CODE', originalPdfInfoExitCode);
+  delete process.env.BETTERREAD_PDFINFO_HANG;
 
   await Promise.all(
     tempDirs
@@ -151,5 +154,43 @@ describe('readPdf', () => {
     }
 
     expect(clearTimeoutCalls).toBeGreaterThan(0);
+  });
+
+  test('kills a hung pdfinfo at the timeout and reports it', async () => {
+    const directory = await createWorkspace();
+    await installPdfMocks(directory);
+    const filePath = await createPdfFile(directory);
+    process.env.BETTERREAD_PDFINFO_HANG = '1';
+
+    jest.useFakeTimers();
+    try {
+      const pending = runCommand('pdfinfo', [filePath]);
+      const outcome = pending.then(
+        () => 'resolved',
+        (error: Error) => error.message,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      jest.advanceTimersByTime(PDF_COMMAND_TIMEOUT_MS - 1);
+      expect(await Promise.race([outcome, Promise.resolve('pending')])).toBe(
+        'pending',
+      );
+      jest.advanceTimersByTime(1);
+      expect(await outcome).toBe('pdfinfo timed out');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('propagates cancellation instead of dropping the page count', async () => {
+    const directory = await createWorkspace();
+    await installPdfMocks(directory);
+    const filePath = await createPdfFile(directory);
+    process.env.BETTERREAD_PDFINFO_HANG = '1';
+    const controller = new AbortController();
+
+    const pending = readPdf(filePath, controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

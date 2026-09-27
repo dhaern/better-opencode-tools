@@ -5,7 +5,11 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readBoundedBytes } from './attachments';
-import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
+import {
+  ATTACHMENT_UNAVAILABLE_NOTE,
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_CHARS,
+} from './constants';
 import { executeRead, inspectReadTarget } from './engine';
 
 const tempDirs: string[] = [];
@@ -30,6 +34,68 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('embeds BMP images with a valid DIB header', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'tiny.bmp');
+    const bmp = Buffer.alloc(58);
+    bmp.write('BM', 0, 'latin1');
+    bmp.writeUInt32LE(40, 14);
+    await writeFile(filePath, bmp);
+
+    const result = await executeRead({ args: { filePath }, directory });
+
+    expect(result.output).toContain('<mime>image/bmp</mime>');
+    expect(result.attachments?.[0]?.url).toBe(
+      `data:image/bmp;base64,${bmp.toString('base64')}`,
+    );
+  });
+
+  test('keeps the largest directory prefix within the output budget', async () => {
+    const directory = await createWorkspace();
+    await Promise.all(
+      Array.from({ length: 1100 }, (_, index) =>
+        writeFile(
+          path.join(
+            directory,
+            `${String(index).padStart(5, '0')}-${'n'.repeat(244)}`,
+          ),
+          '',
+        ),
+      ),
+    );
+    const result = await executeRead({
+      args: { filePath: directory, limit: 16384 },
+      directory,
+    });
+
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(MAX_OUTPUT_CHARS - result.output.length).toBeLessThan(251);
+  });
+
+  test('keeps numbered text lines intact when the output cap is reached', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'numbered.txt');
+    await writeFile(
+      filePath,
+      `${Array.from({ length: 1100 }, () => 'a'.repeat(300)).join('\n')}\n`,
+    );
+
+    const result = await executeRead({
+      args: { filePath, limit: 16384 },
+      directory,
+    });
+
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    const numbered = result.output.match(/^\d+: a+$/gm) ?? [];
+    expect(numbered.length).toBeGreaterThan(800);
+    expect(
+      numbered.every(
+        (line, index) => line === `${index + 1}: ${'a'.repeat(300)}`,
+      ),
+    ).toBe(true);
+  });
   test('preserves attachment bytes when a handle returns short reads', async () => {
     const expected = Buffer.from('short attachment payload');
     let reads = 0;
