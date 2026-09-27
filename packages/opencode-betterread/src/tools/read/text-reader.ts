@@ -19,7 +19,6 @@ function buildTextResult(
   totalLines: number | undefined,
   truncatedByBytes: boolean,
   truncatedByLineLength: boolean,
-  mtimeMs: number,
   hasMore: boolean,
 ): TextReadResult {
   const endLine =
@@ -34,7 +33,6 @@ function buildTextResult(
     truncatedByBytes,
     truncatedByLineLength,
     hasMore,
-    mtimeMs,
   };
 }
 
@@ -42,7 +40,6 @@ async function readFastPath(
   resolvedPath: string,
   offset: number,
   limit: number,
-  mtimeMs: number,
   signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<TextReadResult> {
@@ -67,7 +64,6 @@ async function readFastPath(
     split.length,
     truncatedByBytes,
     truncatedByLineLength,
-    mtimeMs,
     hasMore,
   );
 }
@@ -108,7 +104,6 @@ async function readStreamingPath(
   resolvedPath: string,
   offset: number,
   limit: number,
-  mtimeMs: number,
   signal?: AbortSignal,
   sharedHandle?: FileHandle,
 ): Promise<TextReadResult> {
@@ -294,7 +289,6 @@ async function readStreamingPath(
     hasMore ? undefined : lineNumber,
     truncatedByBytes,
     truncatedByLineLength,
-    mtimeMs,
     hasMore,
   );
 }
@@ -309,23 +303,9 @@ export async function readTextFile(
   signal?.throwIfAborted();
   const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
   if (fileStat.size <= FAST_PATH_MAX_BYTES) {
-    return readFastPath(
-      resolvedPath,
-      offset,
-      limit,
-      fileStat.mtimeMs,
-      signal,
-      handle,
-    );
+    return readFastPath(resolvedPath, offset, limit, signal, handle);
   }
-  return readStreamingPath(
-    resolvedPath,
-    offset,
-    limit,
-    fileStat.mtimeMs,
-    signal,
-    handle,
-  );
+  return readStreamingPath(resolvedPath, offset, limit, signal, handle);
 }
 
 export async function readTextFileStreaming(
@@ -336,13 +316,5 @@ export async function readTextFileStreaming(
   handle?: FileHandle,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
-  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
-  return readStreamingPath(
-    resolvedPath,
-    offset,
-    limit,
-    fileStat.mtimeMs,
-    signal,
-    handle,
-  );
+  return readStreamingPath(resolvedPath, offset, limit, signal, handle);
 }

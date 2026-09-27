@@ -27,7 +27,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     });
 
     expect(output).toContain(
@@ -47,7 +46,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     });
 
     expect(output).toContain(
@@ -67,7 +65,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     });
 
     expect(output).toContain('<content>\n4: \n</content>');
@@ -88,7 +85,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     });
 
     expect(Buffer.byteLength(output, 'utf8')).toBeLessThanOrEqual(
@@ -109,7 +105,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     };
 
     const rendered = renderTextResult(result);
@@ -136,7 +131,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     };
 
     const rendered = renderTextResult(result);
@@ -160,7 +154,6 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: true,
       hasMore: false,
-      mtimeMs: 0,
     };
 
     const output = formatTextResult(result);
@@ -196,7 +189,6 @@ describe('formatPdfResult', () => {
       kind: 'pdf',
       path: '/tmp/sample.pdf',
       pageCount: 2,
-      mtimeMs: 0,
     });
 
     expect(output).toContain('<page_count>2</page_count>');
@@ -208,7 +200,6 @@ describe('formatPdfResult', () => {
     const output = formatPdfResult({
       kind: 'pdf',
       path: '/tmp/<unsafe>&file.pdf',
-      mtimeMs: 0,
     });
 
     expect(output).toContain('<path>/tmp/&lt;unsafe&gt;&amp;file.pdf</path>');

@@ -106,8 +106,6 @@ export async function listSimilarPaths(
   if (needle.length === 0) return [];
 
   try {
-    const parentStat = await stat(parent);
-    if (!parentStat.isDirectory()) return [];
     const directory = await opendir(parent);
 
     try {

@@ -87,7 +87,6 @@ async function readParsedNotebook(
   resolvedPath: string,
   offset: number,
   limit: number,
-  mtimeMs: number,
   signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<NotebookReadResult> {
@@ -127,7 +126,6 @@ async function readParsedNotebook(
     truncatedByBytes,
     truncatedByLineLength,
     hasMore,
-    mtimeMs,
   };
 }
 
@@ -149,7 +147,6 @@ export async function readNotebook(
       resolvedPath,
       offset,
       limit,
-      fileStat.mtimeMs,
       signal,
       handle,
     );

@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
 import { PDF_COMMAND_TIMEOUT_MS } from './constants';
 import type { PdfReadResult } from './types';
 
@@ -8,20 +7,15 @@ const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 interface BufferedOutput {
   chunks: Buffer[];
   size: number;
-  truncated: boolean;
 }
 
 function appendOutput(output: BufferedOutput, chunk: Buffer): void {
   const remaining = MAX_COMMAND_OUTPUT_BYTES - output.size;
-  if (remaining <= 0) {
-    output.truncated = true;
-    return;
-  }
+  if (remaining <= 0) return;
 
   if (chunk.byteLength > remaining) {
     output.chunks.push(chunk.subarray(0, remaining));
     output.size += remaining;
-    output.truncated = true;
     return;
   }
 
@@ -40,9 +34,8 @@ export function runCommand(
 ): Promise<string> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const stdout: BufferedOutput = { chunks: [], size: 0, truncated: false };
-    const stderr: BufferedOutput = { chunks: [], size: 0, truncated: false };
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const stdout: BufferedOutput = { chunks: [], size: 0 };
     let timedOut = false;
     let settled = false;
 
@@ -85,7 +78,6 @@ export function runCommand(
     signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (chunk: Buffer) => appendOutput(stdout, chunk));
-    child.stderr.on('data', (chunk: Buffer) => appendOutput(stderr, chunk));
     child.on('error', (error) => {
       rejectOnce(error);
     });
@@ -97,15 +89,7 @@ export function runCommand(
         return;
       }
       if (code !== 0) {
-        const stderrText = outputText(stderr);
-        const truncatedSuffix = stderr.truncated ? '\n[output truncated]' : '';
-        rejectOnce(
-          new Error(
-            stderrText
-              ? `${stderrText}${truncatedSuffix}`
-              : `${command} failed`,
-          ),
-        );
+        rejectOnce(new Error(`${command} failed`));
         return;
       }
       resolveOnce(outputText(stdout));
@@ -133,8 +117,6 @@ export async function readPdf(
   signal?: AbortSignal,
 ): Promise<PdfReadResult> {
   signal?.throwIfAborted();
-  const fileStat = await stat(resolvedPath);
-  signal?.throwIfAborted();
   const pageCountText = await tryRun('pdfinfo', [resolvedPath], signal);
   signal?.throwIfAborted();
   const pageCount = pageCountText?.match(/^Pages:\s+(\d+)/m)?.[1];
@@ -143,6 +125,5 @@ export async function readPdf(
     kind: 'pdf',
     path: resolvedPath,
     pageCount: pageCount ? Number(pageCount) : undefined,
-    mtimeMs: fileStat.mtimeMs,
   };
 }

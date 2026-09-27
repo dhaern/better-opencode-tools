@@ -209,7 +209,7 @@ describe('executeRead', () => {
     expect(inspection.resolvedPath).toBe(missingPath);
     expect(inspection.accessPath).toBe(path.join(outside, 'secrett.txt'));
     expect(inspection.realPath).toBe(path.join(outside, 'secrett.txt'));
-    expect(inspection.similarPaths).toEqual([]);
+    expect(inspection).not.toHaveProperty('similarPaths');
 
     await expect(
       executeRead({ args: { filePath: missingPath }, directory, inspection }),

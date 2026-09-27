@@ -102,7 +102,6 @@ export async function inspectReadTarget(input: {
       exists: true,
       kind: classifyReadTarget(fileStat),
       fileStat,
-      similarPaths: [],
     };
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
@@ -114,7 +113,6 @@ export async function inspectReadTarget(input: {
       realPath,
       exists: false,
       kind: 'file',
-      similarPaths: [],
     };
   }
 }
@@ -155,11 +153,12 @@ export async function executeRead(input: {
   const readPath = inspection.accessPath;
 
   if (!inspection.exists) {
-    const similarPaths =
-      inspection.similarPaths.length > 0
-        ? inspection.similarPaths
-        : await listSimilarPaths(inspection.accessPath);
-    throw new Error(notFoundMessage(inspection.resolvedPath, similarPaths));
+    throw new Error(
+      notFoundMessage(
+        inspection.resolvedPath,
+        await listSimilarPaths(inspection.accessPath),
+      ),
+    );
   }
 
   if (inspection.kind === 'directory') {

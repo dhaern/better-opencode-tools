@@ -24,7 +24,6 @@ export type TextReadResult = {
   truncatedByBytes: boolean;
   truncatedByLineLength: boolean;
   hasMore: boolean;
-  mtimeMs: number;
 };
 
 export type DirectoryReadResult = {
@@ -59,14 +58,12 @@ export type NotebookReadResult = {
   truncatedByBytes: boolean;
   truncatedByLineLength: boolean;
   hasMore: boolean;
-  mtimeMs: number;
 };
 
 export type PdfReadResult = {
   kind: 'pdf';
   path: string;
   pageCount?: number;
-  mtimeMs: number;
 };
 
 export type ReadInspection = {
@@ -77,7 +74,6 @@ export type ReadInspection = {
   exists: boolean;
   kind: ReadTargetKind;
   fileStat?: Stats;
-  similarPaths: string[];
 };
 
 export type ReadExecutionResult = {

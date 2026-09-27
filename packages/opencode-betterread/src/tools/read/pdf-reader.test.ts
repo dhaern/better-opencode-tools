@@ -112,7 +112,7 @@ describe('readPdf', () => {
     expect(result.pageCount).toBe(7);
   });
 
-  test('caps stderr buffering from failed pdfinfo commands', async () => {
+  test('does not buffer stderr from failed pdfinfo commands', async () => {
     const directory = await createWorkspace();
     await installPdfMocks(directory);
     const filePath = await createPdfFile(directory);
@@ -129,8 +129,7 @@ describe('readPdf', () => {
     }
 
     const message = (caught as Error | undefined)?.message ?? '';
-    expect(message).toContain('boom');
-    expect(message).toContain('[output truncated]');
+    expect(message).toBe('pdfinfo failed');
     expect(Buffer.byteLength(message, 'utf8')).toBeLessThan(70 * 1024);
   });
 
