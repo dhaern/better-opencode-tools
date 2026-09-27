@@ -29,6 +29,17 @@ import type {
   NormalizedGrepInput,
 } from './types';
 
+function classifySpawnError(
+  result: GrepSearchResult,
+  error: unknown,
+  cli: ResolvedGrepCli,
+): GrepSearchResult {
+  const friendly = createFriendlySpawnError(error, cli);
+  if (!friendly && isTransientFailure(error))
+    throw new RetryableRipgrepError(toErrorMessage(error));
+  return { ...result, error: friendly ?? toErrorMessage(error) };
+}
+
 export async function executeMode<TState>(
   input: NormalizedGrepInput,
   signal: AbortSignal,
@@ -79,7 +90,12 @@ export async function executeMode<TState>(
     };
   }
 
-  const proc = (options.spawn ?? spawnRipgrep)(command, input.cwd, options.env);
+  let proc: GrepProcess;
+  try {
+    proc = (options.spawn ?? spawnRipgrep)(command, input.cwd, options.env);
+  } catch (error) {
+    return classifySpawnError(baseResult, error, cli);
+  }
 
   const state = options.init();
   const termination = attachTerminationHandlers(proc, input.timeoutMs, signal);
@@ -131,16 +147,7 @@ export async function executeMode<TState>(
     applySuccessfulStderr(result, result.stderr, exitCode);
 
     if (exitError && !options.isStopped(state, termination.state)) {
-      const friendlyMessage = createFriendlySpawnError(exitError, cli);
-      if (friendlyMessage) {
-        result.error = friendlyMessage;
-        return result;
-      }
-      if (isTransientFailure(exitError)) {
-        throw new RetryableRipgrepError(toErrorMessage(exitError));
-      }
-      result.error = toErrorMessage(exitError);
-      return result;
+      return classifySpawnError(result, exitError, cli);
     }
 
     if (options.isStopped(state, termination.state)) {

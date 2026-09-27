@@ -81,6 +81,27 @@ describe('tools/grep/fallback', () => {
     if (exit === 2) expect(result.error).toContain(stderr);
   });
 
+  test('GNU grep spawn rejects a NUL pattern without losing fallback metadata', async () => {
+    const repo = temps.createRepo();
+    const input = normalizeGrepInput(
+      { pattern: 'needle\0tail', path: 'src', fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const result = await executeGrepFallback(
+      input,
+      new AbortController().signal,
+      {
+        path: '/usr/bin/grep',
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      },
+    );
+    expect(result.backend).toBe('grep');
+    expect(result.error).toContain('null bytes');
+    expect(result.command?.[0]).toBe('/usr/bin/grep');
+    expect(result.warnings.join(' ')).toContain('GNU grep fallback');
+  });
+
   test.each([
     'cancel',
     'timeout',

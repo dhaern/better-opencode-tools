@@ -270,6 +270,32 @@ describe('tools/grep/runtime process termination', () => {
     ).rejects.toThrow('too many files');
   });
 
+  test('synchronous ENOENT spawn uses the same friendly classifier as async exit', async () => {
+    const input = normalizeGrepInput({ pattern: 'needle', path: '.' }, {
+      directory: process.cwd(),
+      worktree: process.cwd(),
+    } as never);
+    const cli = {
+      path: '/definitely-not-installed/rg',
+      backend: 'rg' as const,
+      source: 'system-rg' as const,
+    };
+    const result = await executeMode(input, new AbortController().signal, cli, {
+      init: () => ({}),
+      consumeStdout: async () => {},
+      buildResult: (base) => base,
+      isStopped: () => false,
+      spawn: () => {
+        throw Object.assign(new Error('spawn rg ENOENT'), { code: 'ENOENT' });
+      },
+    });
+    expect(result.error).toBe(
+      'rg is not available. Install ripgrep or allow the managed ripgrep installer to run.',
+    );
+    expect(result.backend).toBe('rg');
+    expect(result.command?.[0]).toBe(cli.path);
+  });
+
   test('an infinite malformed stdout pipe ends without timing out after cancellation', async () => {
     let sent = false;
     const stdout = new Readable({
