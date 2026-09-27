@@ -89,6 +89,31 @@ describe('tools/grep/runner', () => {
     }
   });
 
+  test('resolved absolute rg path is retained in the returned command', async () => {
+    const repo = temps.createRepo();
+    const dir = temps.createDir('bettergrep-absolute-rg');
+    const binary = path.join(dir, 'rg');
+    writeFileSync(
+      binary,
+      `#!/bin/sh\nexec ${JSON.stringify(which.sync('rg', { nothrow: false }))} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repo, fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = dir;
+      const result = await runRipgrep(input, new AbortController().signal);
+      expect(result.error).toBeUndefined();
+      expect(result.command?.[0]).toBe(binary);
+      expect(result.totalMatches).toBeGreaterThan(0);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   function createNormalized(
     input: GrepToolInput,
     repoDir = temps.createRepo(),
