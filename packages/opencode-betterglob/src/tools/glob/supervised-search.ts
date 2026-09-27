@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { POST_EXIT_DRAIN_MS } from '../../utils/process-output';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
@@ -13,20 +14,16 @@ export interface SearchExit {
 }
 
 export interface ManagedSearch {
-  // stdout/stderr are the worker's unmodified pipes. This process owns the
-  // supervisor lifecycle, not just the worker lifecycle.
+  // Preserve raw worker pipes; the supervisor owns lifecycle and cleanup.
   child: ChildProcess;
-  // Idempotent and safe after close/disconnect. Implementations must use an
-  // operation-bound capability, never fall back to a numeric PID/PGID lookup.
+  // Idempotent capability, never a saved numeric PID/PGID.
   stop: () => void;
-  // Available once the task-exit promise settles. The runner allows its
-  // pending microtask to run before interpreting transport close.
+  // Task-exit status may precede transport close.
   readExit: () => SearchExit | undefined;
   // Task status + bounded output drain + supervised cleanup, not raw close.
   completed: Promise<SearchExit>;
 }
 
-export const POST_EXIT_DRAIN_MS = 1_000;
 export const DEFAULT_CLEANUP_WAIT_MS =
   DEFAULT_KILL_GRACE_MS + DEFAULT_CLEANUP_TIMEOUT_MS + POST_EXIT_DRAIN_MS;
 
@@ -47,8 +44,7 @@ export async function waitForManagedCleanup(
   }
 }
 
-// Adapt the common supervisor's lifecycle; do not duplicate its transport,
-// process creation, or termination policy here.
+// Adapt its lifecycle without duplicating transport or termination policy.
 export function adaptSupervisedSearch(
   supervised: SupervisedProcess,
   options: { postExitDrainMs?: number } = {},

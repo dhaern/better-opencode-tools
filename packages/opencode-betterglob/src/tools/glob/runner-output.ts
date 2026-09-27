@@ -1,5 +1,6 @@
+import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { capText, DIAGNOSTIC_CAP_BYTES } from '../../utils/process-output';
+import { destroyReader, watchCappedStream } from '../../utils/process-output';
 import type { GlobSearchResult, NormalizedGlobInput } from './types';
 
 export function toErrorMessage(error: unknown): string {
@@ -66,43 +67,12 @@ function watchReader(
     stream.removeListener('data', onData);
     const reader = stream as DestroyableReadable;
     if (reader.closed || !reader.destroy) onClose();
-    else reader.destroy();
+    else destroyReader(reader as ChildProcess['stdout']);
   };
 }
 
 export function watchStderr(stream: NodeJS.ReadableStream | null): StderrWatch {
-  if (!stream) {
-    return {
-      read: () => '',
-      stop: () => undefined,
-    };
-  }
-
-  let truncated = false;
-  const chunks: Buffer[] = [];
-  let retained = 0;
-  const onData = (chunk: Buffer | string) => {
-    const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    if (retained >= DIAGNOSTIC_CAP_BYTES) {
-      truncated = true;
-      return;
-    }
-    if (retained + data.length > DIAGNOSTIC_CAP_BYTES) {
-      chunks.push(data.subarray(0, DIAGNOSTIC_CAP_BYTES - retained));
-      retained = DIAGNOSTIC_CAP_BYTES;
-      truncated = true;
-      return;
-    }
-    chunks.push(data);
-    retained += data.length;
-  };
-
-  const stop = watchReader(stream, onData);
-
-  return {
-    read: () => capText(chunks, truncated, 'stderr'),
-    stop,
-  };
+  return watchCappedStream(stream as ChildProcess['stdout'], 'stderr');
 }
 
 // rg emits NUL-delimited relative paths (--null). Records are split on the

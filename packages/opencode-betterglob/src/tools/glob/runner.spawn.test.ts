@@ -177,7 +177,8 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () => ({
         child,
         stop: () => undefined,
-        readExit: () => ({ code: 0, signal: null }),
+        readExit: () =>
+          ending === 'limit' ? undefined : { code: 0, signal: null },
         completed: completion.promise,
       }),
       cleanupWaitMs: 0,

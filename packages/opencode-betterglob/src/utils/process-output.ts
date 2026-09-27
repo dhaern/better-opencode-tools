@@ -3,13 +3,14 @@ import which from 'which';
 import {
   CleanupUnconfirmedError,
   DEFAULT_CLEANUP_TIMEOUT_MS,
+  DEFAULT_KILL_GRACE_MS,
   isSupervisorError,
   type SupervisedProcess,
   SupervisorRuntimeError,
   spawnSupervised,
 } from './process-supervisor';
 
-export const ABORT_KILL_GRACE_MS = 5_000;
+export const ABORT_KILL_GRACE_MS = DEFAULT_KILL_GRACE_MS;
 export const POST_EXIT_DRAIN_MS = 1_000;
 export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
 
@@ -20,6 +21,64 @@ export const capText = (
 ): string =>
   Buffer.concat(chunks).toString('utf-8') +
   (truncated ? `\n[${label} truncated at ${DIAGNOSTIC_CAP_BYTES} bytes]` : '');
+
+export function destroyReader(stream: ChildProcess['stdout']): void {
+  if (!stream || stream.destroyed) return;
+  const ignore = () => undefined;
+  stream.on('error', ignore);
+  stream.once('close', () => stream.removeListener('error', ignore));
+  stream.destroy();
+}
+
+export function watchCappedStream(
+  stream: ChildProcess['stdout'],
+  label: 'stdout' | 'stderr',
+  onSettled?: (text: string, error?: unknown) => void,
+): { read: () => string; stop: () => void } {
+  const chunks: Buffer[] = [];
+  let retained = 0;
+  let truncated = false;
+  let settled = false;
+  const read = () => capText(chunks, truncated, label);
+  const onData = (value: Buffer | string) => {
+    const chunk = typeof value === 'string' ? Buffer.from(value) : value;
+    if (retained >= DIAGNOSTIC_CAP_BYTES) {
+      truncated = true;
+      return;
+    }
+    const room = DIAGNOSTIC_CAP_BYTES - retained;
+    chunks.push(chunk.subarray(0, room));
+    retained += Math.min(room, chunk.length);
+    if (chunk.length > room) truncated = true;
+  };
+  const onEnd = () => settle();
+  const settle = (error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    stream?.removeListener('data', onData);
+    stream?.removeListener('end', onEnd);
+    stream?.removeListener('close', onEnd);
+    stream?.removeListener('error', settle);
+    if (error !== undefined && stream) {
+      const ignore = () => undefined;
+      stream.on('error', ignore);
+      stream.once('close', () => stream.removeListener('error', ignore));
+    }
+    onSettled?.(read(), error);
+  };
+  stream?.on('data', onData);
+  stream?.once('end', onEnd);
+  stream?.once('close', onEnd);
+  stream?.on('error', settle);
+  if (!stream?.readable) settle();
+  return {
+    read,
+    stop: () => {
+      stream?.removeListener('data', onData);
+      destroyReader(stream);
+    },
+  };
+}
 
 export interface ProcessHandle {
   proc: ChildProcess;
@@ -171,13 +230,8 @@ export function waitForProcessOutputWithAbortGrace(
     };
 
     const closeReaders = () => {
-      for (const stream of [proc.proc.stdout, proc.proc.stderr]) {
-        if (!stream || stream.destroyed) continue;
-        const ignore = () => undefined;
-        stream.on('error', ignore);
-        stream.once('close', () => stream.removeListener('error', ignore));
-        stream.destroy();
-      }
+      destroyReader(proc.proc.stdout);
+      destroyReader(proc.proc.stderr);
       finish();
     };
 
@@ -220,52 +274,6 @@ export function waitForProcessOutputWithAbortGrace(
       }
     };
 
-    const capture = (
-      stream: ChildProcess['stdout'],
-      label: 'stdout' | 'stderr',
-    ) => {
-      const chunks: Buffer[] = [];
-      let retained = 0;
-      let truncated = false;
-      let settled = false;
-      const settle = (error?: unknown) => {
-        if (settled) return;
-        settled = true;
-        stream?.removeListener('data', onData);
-        stream?.removeListener('end', onEnd);
-        stream?.removeListener('close', onEnd);
-        stream?.removeListener('error', settle);
-        if (label === 'stdout') {
-          stdoutSettled = true;
-          stdoutText = capText(chunks, truncated, label);
-          if (error !== undefined) outputError = error;
-        } else {
-          stderrSettled = true;
-          stderrText = capText(chunks, truncated, label);
-          if (error !== undefined) stderrError = error;
-        }
-        if (error !== undefined) terminate();
-        finish();
-      };
-      const onData = (value: Buffer | string) => {
-        const chunk = typeof value === 'string' ? Buffer.from(value) : value;
-        if (retained >= DIAGNOSTIC_CAP_BYTES) {
-          truncated = true;
-          return;
-        }
-        const available = DIAGNOSTIC_CAP_BYTES - retained;
-        chunks.push(chunk.subarray(0, available));
-        retained += Math.min(available, chunk.length);
-        if (chunk.length > available) truncated = true;
-      };
-      const onEnd = () => settle();
-      stream?.on('data', onData);
-      stream?.once('end', onEnd);
-      stream?.once('close', onEnd);
-      stream?.on('error', settle);
-      if (!stream?.readable) settle();
-    };
-
     const onAbort = () => {
       aborted = true;
       terminate();
@@ -288,8 +296,24 @@ export function waitForProcessOutputWithAbortGrace(
     }, cleanupFailed);
 
     // Observe both output streams immediately.
-    capture(proc.proc.stdout, 'stdout');
-    capture(proc.proc.stderr, 'stderr');
+    watchCappedStream(proc.proc.stdout, 'stdout', (text, error) => {
+      stdoutSettled = true;
+      stdoutText = text;
+      if (error !== undefined) {
+        outputError = error;
+        terminate();
+      }
+      finish();
+    });
+    watchCappedStream(proc.proc.stderr, 'stderr', (text, error) => {
+      stderrSettled = true;
+      stderrText = text;
+      if (error !== undefined) {
+        stderrError = error;
+        terminate();
+      }
+      finish();
+    });
 
     if (signal?.aborted) terminate();
     else signal?.addEventListener('abort', onAbort, { once: true });

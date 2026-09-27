@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { AbortWaitError } from '../../utils/abort';
+import { POST_EXIT_DRAIN_MS } from '../../utils/process-output';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
@@ -19,7 +20,6 @@ import {
   adaptSupervisedSearch,
   DEFAULT_CLEANUP_WAIT_MS,
   type ManagedSearch,
-  POST_EXIT_DRAIN_MS,
   type SearchExit,
   waitForManagedCleanup,
 } from './supervised-search';
@@ -56,6 +56,10 @@ type Done =
       type: 'error';
       error: unknown;
     };
+
+const isTimeoutReason = (signal: AbortSignal) =>
+  signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
 
 function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
   try {
@@ -114,8 +118,7 @@ export function createRipgrepRunner(
     };
 
     if (signal.aborted) {
-      state.timedOut =
-        signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+      state.timedOut = isTimeoutReason(signal);
       state.cancelled = !state.timedOut;
       return interruptedResult();
     }
@@ -148,24 +151,18 @@ export function createRipgrepRunner(
       }
     };
 
-    let finishCancel: ((value: 'cancel') => void) | undefined;
-    const cancelResult = new Promise<'cancel'>((resolve) => {
-      finishCancel = resolve;
-    });
-    let finishTimeout: ((value: 'timeout') => void) | undefined;
-    const timeoutResult = new Promise<'timeout'>((resolve) => {
-      finishTimeout = resolve;
+    let finishInterrupt!: (value: 'cancel' | 'timeout') => void;
+    const interruptResult = new Promise<'cancel' | 'timeout'>((resolve) => {
+      finishInterrupt = resolve;
     });
 
     const onAbort = () => {
-      const timedOut =
-        signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+      const timedOut = isTimeoutReason(signal);
       state.timedOut ||= timedOut;
       state.cancelled ||= !timedOut;
       controller.abort();
       stop();
-      if (timedOut) finishTimeout?.('timeout');
-      else finishCancel?.('cancel');
+      finishInterrupt(timedOut ? 'timeout' : 'cancel');
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
@@ -179,7 +176,7 @@ export function createRipgrepRunner(
       state.timedOut = true;
       controller.abort();
       stop();
-      finishTimeout?.('timeout');
+      finishInterrupt('timeout');
     }, input.timeoutMs);
     timeout.unref?.();
 
@@ -191,8 +188,7 @@ export function createRipgrepRunner(
           })
           .then((cli) => ({ type: 'cli' as const, cli }))
           .catch((error) => ({ type: 'resolve-error' as const, error })),
-        cancelResult,
-        timeoutResult,
+        interruptResult,
       ]);
 
       if (resolved === 'cancel' || resolved === 'timeout') {
@@ -320,14 +316,8 @@ export function createRipgrepRunner(
       // Also handle a synchronous abort from an injected spawn implementation.
       if (controller.signal.aborted) stop();
 
-      const ended = await Promise.race([
-        done,
-        timeoutResult,
-        cancelResult,
-        limitResult,
-      ]);
-      const earlyStop =
-        ended === 'timeout' || ended === 'cancel' || ended === 'limit';
+      const ended = await Promise.race([done, interruptResult, limitResult]);
+      const earlyStop = typeof ended === 'string';
       let finalExit = !earlyStop && ended.type === 'close' ? ended : undefined;
       let cleanupError: string | undefined;
       if (earlyStop && managedCompleted) {
@@ -356,20 +346,11 @@ export function createRipgrepRunner(
         }
         clearDone();
       }
-      const incomplete =
-        state.timedOut ||
-        state.cancelled ||
-        ended === 'timeout' ||
-        ended === 'cancel';
+      const incomplete = state.timedOut || state.cancelled;
       const output = stdout.read();
       const err = stderr.read();
       const result = sliceLimit(input, output);
-      if (
-        ended !== 'timeout' &&
-        ended !== 'cancel' &&
-        ended !== 'limit' &&
-        ended.type !== 'error'
-      ) {
+      if (!earlyStop && ended.type === 'close') {
         clearDone();
       }
 
@@ -377,7 +358,7 @@ export function createRipgrepRunner(
         ? (finalExit?.code ??
           managedExit?.()?.code ??
           child.exitCode ??
-          (ended === 'timeout' ? 124 : ended === 'cancel' ? 130 : 0))
+          INTERRUPT_EXIT_CODES[ended])
         : ended.type === 'close'
           ? (ended.code ?? 1)
           : 1;
@@ -395,9 +376,7 @@ export function createRipgrepRunner(
       // Native parity: exit 2 with rows already collected is a partial
       // success (e.g. a permission-denied subtree), not a hard failure.
       const partialByExitCode =
-        ended !== 'cancel' &&
-        ended !== 'timeout' &&
-        ended !== 'limit' &&
+        !earlyStop &&
         ended.type === 'close' &&
         ended.code === 2 &&
         result.length > 0;
@@ -438,9 +417,7 @@ export function createRipgrepRunner(
       clearReaderErrors();
       stopStdout();
       stopStderr();
-      // Readers have their own error guards through destruction. Their run
-      // listeners are not needed while background termination finishes.
-      // Child listeners remain until close or the bounded escalation timer.
+      // Reader guards survive destruction; child listeners last until close/escalation.
     }
   };
 }
