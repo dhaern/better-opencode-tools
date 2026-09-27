@@ -111,6 +111,36 @@ describe('executeRead', () => {
     expect(MAX_OUTPUT_CHARS - result.output.length).toBeLessThan(251);
   });
 
+  test('budgets directory output with the displayed symlink path', async () => {
+    const directory = await createWorkspace();
+    const target = path.join(directory, 'target');
+    await mkdir(target);
+    await Promise.all(
+      Array.from({ length: 1100 }, (_, index) =>
+        writeFile(
+          path.join(
+            target,
+            `${String(index).padStart(5, '0')}-${'n'.repeat(244)}`,
+          ),
+          '',
+        ),
+      ),
+    );
+    const parent = path.join(directory, 'a'.repeat(200), 'b'.repeat(200));
+    await mkdir(parent, { recursive: true });
+    const link = path.join(parent, 'link');
+    await symlink(target, link);
+
+    const result = await executeRead({
+      args: { filePath: link, limit: 16384 },
+      directory,
+    });
+
+    expect(result.output.startsWith(`<path>${link}</path>`)).toBe(true);
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+  });
+
   test('keeps numbered text lines intact when the output cap is reached', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'numbered.txt');

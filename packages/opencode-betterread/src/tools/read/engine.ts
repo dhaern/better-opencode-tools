@@ -182,7 +182,7 @@ export async function executeRead(input: {
         readPath,
         args.offset,
         args.limit,
-        {},
+        { displayPath: inspection.resolvedPath },
         input.signal,
       )),
       path: inspection.resolvedPath,

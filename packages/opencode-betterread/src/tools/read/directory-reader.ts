@@ -22,6 +22,7 @@ type DirectoryScanResult = {
 
 type ReadDirectoryOptions = {
   scanDirectoryEntries?: (resolvedPath: string) => Promise<DirectoryScanResult>;
+  displayPath?: string;
 };
 
 function directoryPaginationLimitMessage(resolvedPath: string): string {
@@ -169,7 +170,7 @@ export async function readDirectory(
     visible.push(await formatDirectoryEntry(resolvedPath, entry, signal));
   }
   signal?.throwIfAborted();
-  const normalizedPath = path.normalize(resolvedPath);
+  const normalizedPath = path.normalize(options.displayPath ?? resolvedPath);
 
   const { selected, truncatedByBytes } = budgetedDirectoryEntries(
     normalizedPath,
