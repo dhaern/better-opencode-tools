@@ -10,7 +10,9 @@ import {
 } from './constants';
 import type { NormalizedReadArgs, ReadArgs } from './types';
 
-type OutputBudgetState = { chars: number; bytes: number };
+export type OutputBudget = {
+  tryAdd(line: string): boolean;
+};
 
 function clampInteger(
   value: unknown,
@@ -62,25 +64,25 @@ export function splitLogicalLines(raw: string): string[] {
   return lines;
 }
 
-export function createOutputBudgetState(): OutputBudgetState {
-  return { chars: 0, bytes: 0 };
-}
-
-export function appendLineWithinOutputBudget(
-  lines: string[],
-  state: OutputBudgetState,
-  line: string,
-): boolean {
-  const separatorCost = lines.length === 0 ? 0 : 1;
-  const nextChars = state.chars + separatorCost + line.length;
-  if (nextChars > MAX_OUTPUT_CHARS) return false;
-  const nextBytes =
-    state.bytes + separatorCost + Buffer.byteLength(line, 'utf8');
-  if (nextBytes > MAX_OUTPUT_BYTES) return false;
-  lines.push(line);
-  state.chars = nextChars;
-  state.bytes = nextBytes;
-  return true;
+// Single budget accumulator: tracks joined output cost (including the
+// newline separator) and accepts a line only when chars and bytes both fit.
+export function createOutputBudget(): OutputBudget {
+  let chars = 0;
+  let bytes = 0;
+  let count = 0;
+  return {
+    tryAdd(line: string): boolean {
+      const separatorCost = count === 0 ? 0 : 1;
+      const nextChars = chars + separatorCost + line.length;
+      if (nextChars > MAX_OUTPUT_CHARS) return false;
+      const nextBytes = bytes + separatorCost + Buffer.byteLength(line, 'utf8');
+      if (nextBytes > MAX_OUTPUT_BYTES) return false;
+      chars = nextChars;
+      bytes = nextBytes;
+      count += 1;
+      return true;
+    },
+  };
 }
 
 export function selectBudgetedLines(
@@ -96,16 +98,17 @@ export function selectBudgetedLines(
 } {
   const startIndex = Math.max(offset - 1, 0);
   const selected: string[] = [];
-  const budget = createOutputBudgetState();
+  const budget = createOutputBudget();
   let truncatedByBytes = false;
   let truncatedByLineLength = false;
   let firstTruncatedLine: number | undefined;
   for (const line of lines.slice(startIndex, startIndex + limit)) {
     const normalized = truncateLine(line);
-    if (!appendLineWithinOutputBudget(selected, budget, normalized.value)) {
+    if (!budget.tryAdd(normalized.value)) {
       truncatedByBytes = true;
       break;
     }
+    selected.push(normalized.value);
     if (normalized.truncated) {
       truncatedByLineLength = true;
       firstTruncatedLine ??= offset + selected.length - 1;
@@ -118,9 +121,4 @@ export function selectBudgetedLines(
     firstTruncatedLine,
     hasMore: truncatedByBytes || startIndex + selected.length < lines.length,
   };
-}
-
-export function fitsOutputBudget(content: string): boolean {
-  if (content.length > MAX_OUTPUT_CHARS) return false;
-  return Buffer.byteLength(content, 'utf8') <= MAX_OUTPUT_BYTES;
 }

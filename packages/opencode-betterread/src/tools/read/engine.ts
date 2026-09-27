@@ -9,17 +9,18 @@ import {
   readBoundedBytes,
   sniffMime,
 } from './attachments';
-import { MAX_EMBEDDED_ATTACHMENT_BYTES, SAMPLE_BYTES } from './constants';
-import { formatDirectoryResult } from './directory-output';
-import { readDirectory } from './directory-reader';
+import {
+  FAST_PATH_MAX_BYTES,
+  MAX_EMBEDDED_ATTACHMENT_BYTES,
+  SAMPLE_BYTES,
+} from './constants';
+import { formatDirectoryResult, readDirectory } from './directory-reader';
 import {
   buildDirectoryMetadata,
   buildImageMetadata,
   buildPdfMetadata,
   buildStaticMetadata,
   buildTextMetadata,
-} from './enhanced-metadata';
-import {
   escapeStructuredSingleLineValue,
   formatImageInfoResult,
   formatPdfResult,
@@ -34,7 +35,7 @@ import {
   resolveReadPath,
 } from './path-utils';
 import { readPdf } from './pdf-reader';
-import { readTextFile } from './text-reader';
+import { readTextWindow } from './text-reader';
 import type { ReadArgs, ReadExecutionResult, ReadInspection } from './types';
 
 export async function inspectReadTarget(input: {
@@ -99,15 +100,10 @@ export async function executeRead(input: {
     ...(realPath ? { realPath } : {}),
   };
   const done = (
-    kind: ReadExecutionResult['kind'],
     output: string,
     metadata: Record<string, unknown>,
     attachments?: ReadExecutionResult['attachments'],
   ): ReadExecutionResult => ({
-    kind,
-    path: resolvedPath,
-    resolvedPath,
-    realPath,
     output,
     metadata,
     ...(attachments ? { attachments } : {}),
@@ -133,7 +129,6 @@ export async function executeRead(input: {
       signal,
     );
     return done(
-      'directory',
       formatDirectoryResult(directory),
       buildDirectoryMetadata(pathInfo, directory),
     );
@@ -186,7 +181,6 @@ export async function executeRead(input: {
           path: resolvedPath,
         };
         return done(
-          'pdf',
           formatPdfResult(pdf),
           buildPdfMetadata(pathInfo, pdf),
           attachments,
@@ -200,7 +194,6 @@ export async function executeRead(input: {
         ...imageDimensions(mime, bytes),
       };
       return done(
-        'image',
         formatImageInfoResult(image),
         buildImageMetadata(pathInfo, image),
         attachments,
@@ -211,7 +204,6 @@ export async function executeRead(input: {
     if (!notebook && isProbablyBinary(resolvedPath, sample)) {
       const output = `Binary file detected: ${escapeStructuredSingleLineValue(resolvedPath)}`;
       return done(
-        'binary',
         output,
         buildStaticMetadata({ ...pathInfo, kind: 'binary' }, output, false),
       );
@@ -222,19 +214,23 @@ export async function executeRead(input: {
           readPath,
           args.offset,
           args.limit,
-          signal,
           handle,
           handleStat.size,
+          signal,
         )
-      : await readTextFile(
-          readPath,
-          args.offset,
-          args.limit,
-          signal,
-          handle,
-          handleStat.size,
-        );
-    text.path = resolvedPath;
+      : {
+          ...(await readTextWindow(
+            handle,
+            args.offset,
+            args.limit,
+            {
+              countAll: handleStat.size <= FAST_PATH_MAX_BYTES,
+              size: handleStat.size,
+            },
+            signal,
+          )),
+          path: resolvedPath,
+        };
     if (
       text.totalLines !== undefined &&
       text.endLine < text.startLine &&
@@ -245,11 +241,7 @@ export async function executeRead(input: {
       );
     }
     const rendered = renderTextResult(text);
-    return done(
-      text.kind,
-      rendered.output,
-      buildTextMetadata(pathInfo, text, rendered),
-    );
+    return done(rendered.output, buildTextMetadata(pathInfo, text, rendered));
   } finally {
     // Readers use positioned operations and never take ownership of this
     // descriptor, so the engine performs the single close here.

@@ -58,7 +58,9 @@ export async function resolveAccessPath(targetPath: string): Promise<{
 export async function listSimilarPaths(targetPath: string): Promise<string[]> {
   const parent = path.dirname(targetPath);
   const needle = path.basename(targetPath).toLowerCase().slice(0, 3);
-  if (parent === targetPath || needle.length === 0 || needle === path.sep) {
+  // A basename never contains the path separator, so `needle` (sliced from
+  // it) cannot equal the separator either.
+  if (parent === targetPath || needle.length === 0) {
     return [];
   }
   try {

@@ -36,6 +36,25 @@ afterEach(async () => {
   );
 });
 
+async function readSampleNotebook(
+  filePath: string,
+  offset: number,
+  limit: number,
+) {
+  const handle = await open(filePath, 'r');
+  try {
+    return await readNotebook(
+      filePath,
+      offset,
+      limit,
+      handle,
+      (await handle.stat()).size,
+    );
+  } finally {
+    await handle.close();
+  }
+}
+
 describe('readNotebook', () => {
   test('uses the parse path only below the parsed-notebook byte gate', () => {
     expect(shouldParseNotebook(MAX_PARSED_NOTEBOOK_BYTES)).toBe(true);
@@ -44,7 +63,7 @@ describe('readNotebook', () => {
 
   test('does not invent a phantom line for empty notebooks', async () => {
     const filePath = await createNotebookFile({ cells: [] });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.content).toBe('');
     expect(result.mode).toBe('parsed');
@@ -67,7 +86,7 @@ describe('readNotebook', () => {
         },
       ],
     });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.content).toBe(
       '# Cell 1 (code)\n  alpha  \n\nbeta  \n\n# Cell 2 (markdown)\ngamma',
@@ -86,7 +105,7 @@ describe('readNotebook', () => {
         },
       ],
     });
-    const result = await readNotebook(filePath, 1, 100);
+    const result = await readSampleNotebook(filePath, 1, 100);
 
     expect(result.truncatedByBytes).toBe(true);
     expect(result.hasMore).toBe(true);
@@ -105,7 +124,7 @@ describe('readNotebook', () => {
         },
       ],
     });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.mode).toBe('parsed');
     expect(result.content).toContain('…');
@@ -117,7 +136,7 @@ describe('readNotebook', () => {
   test('falls back to streaming text for large notebooks before parsing', async () => {
     const contents = `${'{not valid json}\n'}${'x'.repeat(MAX_PARSED_NOTEBOOK_BYTES + 1)}`;
     const filePath = await createRawNotebookFile(contents);
-    const result = await readNotebook(filePath, 1, 1);
+    const result = await readSampleNotebook(filePath, 1, 1);
 
     expect(result.kind).toBe('notebook');
     expect(result.mode).toBe('raw-fallback');
@@ -128,7 +147,7 @@ describe('readNotebook', () => {
 
   test('falls back to raw text when a small notebook cannot be parsed as JSON', async () => {
     const filePath = await createRawNotebookFile('{not valid json');
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.kind).toBe('notebook');
     expect(result.mode).toBe('raw-fallback');
@@ -137,7 +156,7 @@ describe('readNotebook', () => {
 
   test('falls back to raw text for valid JSON that is not a notebook', async () => {
     const filePath = await createRawNotebookFile('{"hello":"not a notebook"}');
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.kind).toBe('notebook');
     expect(result.mode).toBe('raw-fallback');
@@ -149,7 +168,13 @@ describe('readNotebook', () => {
     const handle = await open(filePath, 'r');
 
     try {
-      const result = await readNotebook(filePath, 1, 10, undefined, handle);
+      const result = await readNotebook(
+        filePath,
+        1,
+        10,
+        handle,
+        (await handle.stat()).size,
+      );
 
       expect(result.mode).toBe('raw-fallback');
       expect(result.content).toContain('"hello"');
@@ -160,7 +185,7 @@ describe('readNotebook', () => {
 
   test('falls back to raw text when cells contain non-object values', async () => {
     const filePath = await createNotebookFile({ cells: [42, null, 'oops'] });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.mode).toBe('raw-fallback');
     expect(result.content).toContain('42');
@@ -175,7 +200,7 @@ describe('readNotebook', () => {
         },
       ],
     });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.kind).toBe('notebook');
     expect(result.mode).toBe('raw-fallback');
@@ -191,7 +216,7 @@ describe('readNotebook', () => {
         },
       ],
     });
-    const result = await readNotebook(filePath, 1, 10);
+    const result = await readSampleNotebook(filePath, 1, 10);
 
     expect(result.content).toBe('# Cell 1 (code)\nalpha\nbeta');
     expect(result.totalLines).toBe(3);

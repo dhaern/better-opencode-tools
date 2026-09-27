@@ -1,12 +1,13 @@
 import path from 'node:path';
 import {
-  ATTACHMENT_UNAVAILABLE_NOTE,
+  ATTACHMENT_DATA_URL_NOTE,
   MAX_LINE_LENGTH,
   MAX_OUTPUT_BYTES,
   MAX_OUTPUT_CHARS,
   OUTPUT_CAPPED_NOTE,
 } from './constants';
 import type {
+  DirectoryReadResult,
   ImageInfoResult,
   NotebookReadResult,
   PdfReadResult,
@@ -167,50 +168,27 @@ export function renderTextResult(
     !fullTooLarge &&
     baseChars + chars + fullTail.length <= MAX_OUTPUT_CHARS &&
     baseBytes + bytes + Buffer.byteLength(fullTail, 'utf8') <= MAX_OUTPUT_BYTES;
-  if (fullFits) {
-    return {
-      startLine: result.startLine,
-      output: buildTextOutput(
-        result,
-        numberedLines,
-        result.hasMore,
-        result.truncatedByBytes,
-        truncatedLineShown(numberedLines.length),
-      ),
-      preview: numberedLines.slice(0, 20).join('\n'),
-      truncated:
-        result.hasMore ||
-        result.truncatedByBytes ||
-        truncatedLineShown(numberedLines.length),
-      hasMore: result.hasMore,
-      truncatedByBytes: result.truncatedByBytes,
-      truncatedByLineLength: truncatedLineShown(numberedLines.length),
-      endLine: result.endLine,
-    };
-  }
-
+  const count = fullFits ? numberedLines.length : selected;
+  const visible = numberedLines.slice(0, count);
+  const hasMore = fullFits ? result.hasMore : true;
+  const truncatedByBytes = fullFits ? result.truncatedByBytes : true;
+  const truncatedByLineLength = truncatedLineShown(count);
   return {
     startLine: result.startLine,
     output: buildTextOutput(
       result,
-      numberedLines.slice(0, selected),
-      true,
-      true,
-      truncatedLineShown(selected),
+      visible,
+      hasMore,
+      truncatedByBytes,
+      truncatedByLineLength,
     ),
-    preview: numberedLines.slice(0, Math.min(selected, 20)).join('\n'),
-    truncated: true,
-    hasMore: true,
-    truncatedByBytes: true,
-    truncatedByLineLength: truncatedLineShown(selected),
-    endLine: result.startLine + selected - 1,
+    preview: visible.slice(0, 20).join('\n'),
+    truncated: hasMore || truncatedByBytes || truncatedByLineLength,
+    hasMore,
+    truncatedByBytes,
+    truncatedByLineLength,
+    endLine: fullFits ? result.endLine : result.startLine + count - 1,
   };
-}
-
-export function formatTextResult(
-  result: TextReadResult | NotebookReadResult,
-): string {
-  return renderTextResult(result).output;
 }
 
 export function formatImageInfoResult(result: ImageInfoResult): string {
@@ -235,6 +213,114 @@ export function formatPdfResult(result: PdfReadResult): string {
     ...(result.pageCount !== undefined
       ? [`<page_count>${result.pageCount}</page_count>`]
       : []),
-    ATTACHMENT_UNAVAILABLE_NOTE,
+    ATTACHMENT_DATA_URL_NOTE,
   ].join('\n');
+}
+
+export function escapeDirectoryEntry(entry: string): string {
+  return /[\\\r\n&<>]/.test(entry)
+    ? escapeStructuredSingleLineValue(entry)
+    : entry;
+}
+
+type MetadataPath = { filePath: string; realPath?: string };
+
+export function buildStaticMetadata(
+  input: MetadataPath & { kind: string },
+  preview: string,
+  truncated: boolean,
+): Record<string, unknown> {
+  return {
+    enhancedBy: 'opencode-betterread',
+    enhancedPath: input.filePath,
+    resolved_path: input.filePath,
+    ...(input.realPath && input.realPath !== input.filePath
+      ? { real_path: input.realPath }
+      : {}),
+    kind: input.kind,
+    loaded: [],
+    preview,
+    truncated,
+  };
+}
+
+export function buildTextMetadata(
+  input: MetadataPath,
+  result: TextReadResult | NotebookReadResult,
+  rendered: RenderedTextResult,
+): Record<string, unknown> {
+  return {
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      rendered.preview,
+      rendered.truncated,
+    ),
+    start_line: rendered.startLine,
+    end_line: rendered.endLine,
+    total_lines: result.totalLines,
+    has_more: rendered.hasMore,
+    truncated_by_bytes: rendered.truncatedByBytes,
+    truncated_by_line_length: rendered.truncatedByLineLength,
+    ...(result.kind === 'notebook' ? { notebookMode: result.mode } : {}),
+  };
+}
+
+export function buildDirectoryMetadata(
+  input: MetadataPath,
+  result: DirectoryReadResult,
+): Record<string, unknown> {
+  return {
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      result.entries.slice(0, 20).map(escapeDirectoryEntry).join('\n'),
+      result.hasMore || result.truncatedByBytes,
+    ),
+    offset: result.offset,
+    limit: result.limit,
+    total_entries: result.totalEntries,
+    total_entries_known: result.totalEntriesKnown,
+    ...(result.totalEntriesKnown
+      ? {}
+      : { scanned_entries: result.totalEntries }),
+    entry_count: result.entries.length,
+    has_more: result.hasMore,
+    truncated_by_bytes: result.truncatedByBytes,
+  };
+}
+
+export function buildPdfMetadata(
+  input: MetadataPath,
+  result: PdfReadResult,
+): Record<string, unknown> {
+  return {
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      result.pageCount !== undefined
+        ? `PDF metadata extracted (${result.pageCount} pages)`
+        : 'PDF metadata extracted',
+      false,
+    ),
+    page_count: result.pageCount,
+    attachment_support: 'embedded',
+    attachment_note: ATTACHMENT_DATA_URL_NOTE,
+  };
+}
+
+export function buildImageMetadata(
+  input: MetadataPath,
+  result: ImageInfoResult,
+): Record<string, unknown> {
+  return {
+    ...buildStaticMetadata(
+      { ...input, kind: result.kind },
+      `Image metadata extracted: ${escapeStructuredSingleLineValue(result.path)}`,
+      false,
+    ),
+    mime: result.mime,
+    size_bytes: result.sizeBytes,
+    width: result.width,
+    height: result.height,
+    attachment_support: 'embedded',
+    attachment_note: ATTACHMENT_DATA_URL_NOTE,
+  };
 }

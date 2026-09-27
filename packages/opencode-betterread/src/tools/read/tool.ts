@@ -10,7 +10,6 @@ import {
   READ_DESCRIPTION,
 } from './constants';
 import { executeRead, inspectReadTarget } from './engine';
-import { normalizeReadArgs } from './limits';
 import {
   askExternalDirectoryPermission,
   askReadPermission,
@@ -61,15 +60,22 @@ export function createReadTool(
     args: readArgsSchema as Parameters<typeof tool>[0]['args'],
     async execute(args, ctx) {
       ctx.abort?.throwIfAborted();
-      const normalized = normalizeReadArgs(args as unknown as ReadArgs);
       const directory = ctx.directory ?? pluginCtx.directory;
       const permissionCtx = {
         ask: ctx.ask,
         directory,
         worktree: ctx.worktree ?? pluginCtx.worktree,
       };
-      const inspection = await inspect({ args: normalized, directory });
-      const { resolvedPath, accessPath, realPath } = inspection;
+      const inspection = await inspect({
+        args: args as unknown as ReadArgs,
+        directory,
+      });
+      const {
+        args: normalized,
+        resolvedPath,
+        accessPath,
+        realPath,
+      } = inspection;
       const externalTarget = selectExternalPermissionTarget({
         ctx: permissionCtx,
         resolvedPath,

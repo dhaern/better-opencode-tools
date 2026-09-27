@@ -71,16 +71,6 @@ export type ReadInspection = {
 };
 
 export type ReadExecutionResult = {
-  kind:
-    | TextReadResult['kind']
-    | DirectoryReadResult['kind']
-    | ImageInfoResult['kind']
-    | NotebookReadResult['kind']
-    | PdfReadResult['kind']
-    | 'binary';
-  path: string;
-  resolvedPath: string;
-  realPath?: string;
   output: string;
   metadata: Record<string, unknown>;
   attachments?: Array<{

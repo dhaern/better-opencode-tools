@@ -1,9 +1,8 @@
 import type { FileHandle } from 'node:fs/promises';
-import { open } from 'node:fs/promises';
 import { readBoundedBytes } from './attachments';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
 import { selectBudgetedLines, splitLogicalLines } from './limits';
-import { readTextFileStreaming } from './text-reader';
+import { readTextWindow } from './text-reader';
 import type { NotebookReadResult } from './types';
 
 type NotebookCell = { cell_type: string; source?: string[] | string };
@@ -49,54 +48,42 @@ export async function readNotebook(
   resolvedPath: string,
   offset: number,
   limit: number,
+  handle: FileHandle,
+  size: number,
   signal?: AbortSignal,
-  handle?: FileHandle,
-  size?: number,
 ): Promise<NotebookReadResult> {
   signal?.throwIfAborted();
-  const file = handle ?? (await open(resolvedPath, 'r'));
-  try {
-    const fileSize = size ?? (await file.stat()).size;
-    if (shouldParseNotebook(fileSize)) {
-      try {
-        const raw = await readBoundedBytes(
-          file,
-          MAX_PARSED_NOTEBOOK_BYTES,
-          signal,
-          fileSize,
-        );
-        const lines = notebookLines(raw.toString('utf8'));
-        const selection = selectBudgetedLines(lines, offset, limit);
-        return {
-          kind: 'notebook',
-          mode: 'parsed',
-          path: resolvedPath,
-          content: selection.selected.join('\n'),
-          startLine: offset,
-          endLine: offset + selection.selected.length - 1,
-          totalLines: lines.length,
-          truncatedByBytes: selection.truncatedByBytes,
-          truncatedByLineLength: selection.truncatedByLineLength,
-          firstTruncatedLine: selection.firstTruncatedLine,
-          hasMore: selection.hasMore,
-        };
-      } catch {
-        signal?.throwIfAborted();
-      }
-    }
-    return {
-      ...(await readTextFileStreaming(
-        resolvedPath,
-        offset,
-        limit,
+  if (shouldParseNotebook(size)) {
+    try {
+      const raw = await readBoundedBytes(
+        handle,
+        MAX_PARSED_NOTEBOOK_BYTES,
         signal,
-        file,
-        fileSize,
-      )),
-      kind: 'notebook',
-      mode: 'raw-fallback',
-    };
-  } finally {
-    if (!handle) await file.close().catch(() => undefined);
+        size,
+      );
+      const lines = notebookLines(raw.toString('utf8'));
+      const selection = selectBudgetedLines(lines, offset, limit);
+      return {
+        kind: 'notebook',
+        mode: 'parsed',
+        path: resolvedPath,
+        content: selection.selected.join('\n'),
+        startLine: offset,
+        endLine: offset + selection.selected.length - 1,
+        totalLines: lines.length,
+        truncatedByBytes: selection.truncatedByBytes,
+        truncatedByLineLength: selection.truncatedByLineLength,
+        firstTruncatedLine: selection.firstTruncatedLine,
+        hasMore: selection.hasMore,
+      };
+    } catch {
+      signal?.throwIfAborted();
+    }
   }
+  return {
+    ...(await readTextWindow(handle, offset, limit, { size }, signal)),
+    kind: 'notebook',
+    mode: 'raw-fallback',
+    path: resolvedPath,
+  };
 }

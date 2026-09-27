@@ -1,7 +1,18 @@
 import path from 'node:path';
 import type { ToolContext } from '@opencode-ai/plugin';
-import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
+import type { Effect } from 'effect';
 import { READ_TOOL_ID } from './constants';
+
+// OpenCode ≤1.15 returns permission asks as Effects, newer hosts as Promises;
+// both must settle (and fail closed) before the tool continues.
+export async function runOpenCodeSideEffect(value: unknown): Promise<void> {
+  const { Effect: runtime } = await import('effect');
+  if (runtime.isEffect(value)) {
+    await runtime.runPromise(value as Effect.Effect<unknown>);
+  } else {
+    await value;
+  }
+}
 
 type AskContext = Pick<ToolContext, 'ask' | 'directory' | 'worktree'>;
 
@@ -95,9 +106,9 @@ export async function askExternalDirectoryPermission(input: {
   targetPath: string;
   kind: 'file' | 'directory';
   metadata?: Record<string, unknown>;
-}): Promise<boolean> {
-  if (isWithinProjectBoundary(input.ctx, input.targetPath)) return false;
-
+}): Promise<void> {
+  // The caller only asks for targets outside the project boundary (see
+  // selectExternalPermissionTarget), so no boundary re-check here.
   const parentDir =
     input.kind === 'directory'
       ? input.targetPath
@@ -117,8 +128,6 @@ export async function askExternalDirectoryPermission(input: {
       },
     }),
   );
-
-  return true;
 }
 
 // The native read tool asks for permission with the target path relative to

@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import {
-  buildDirectoryFooter,
-  buildDirectoryOutput,
-  escapeDirectoryEntry,
-} from './directory-output';
+import { buildDirectoryFooter, buildDirectoryOutput } from './directory-reader';
+import { escapeDirectoryEntry } from './formatter';
 
 describe('escapeDirectoryEntry', () => {
   test('escapes newline characters in directory entry names', () => {

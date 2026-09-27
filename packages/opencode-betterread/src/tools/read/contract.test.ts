@@ -6,15 +6,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as publicModule from '../../index';
 import { MAX_OUTPUT_BYTES, MAX_OUTPUT_CHARS } from './constants';
-import { formatDirectoryResult } from './directory-output';
-import { readDirectory } from './directory-reader';
+import { formatDirectoryResult, readDirectory } from './directory-reader';
 import { executeRead } from './engine';
-import { buildDirectoryMetadata } from './enhanced-metadata';
-import { renderTextResult } from './formatter';
-import {
-  appendLineWithinOutputBudget,
-  createOutputBudgetState,
-} from './limits';
+import { buildDirectoryMetadata, renderTextResult } from './formatter';
+import { createOutputBudget } from './limits';
 import { createExecutionContext } from './test-helpers';
 import { createReadTool } from './tool';
 
@@ -108,27 +103,17 @@ test('out-of-range offset error is stable', async () => {
 
 test('line separator counts against the exact character cap', () => {
   const selected: string[] = [];
-  const budget = createOutputBudgetState();
-  appendLineWithinOutputBudget(
-    selected,
-    budget,
-    'a'.repeat(MAX_OUTPUT_CHARS - 1),
-  );
-  const second = appendLineWithinOutputBudget(selected, budget, 'b');
+  const budget = createOutputBudget();
+  expect(budget.tryAdd('a'.repeat(MAX_OUTPUT_CHARS - 1))).toBe(true);
+  selected.push('a'.repeat(MAX_OUTPUT_CHARS - 1));
+  const second = budget.tryAdd('b');
   expect({
     outputSha256: createHash('sha256')
       .update(selected.join('\n'))
       .digest('hex'),
-    metadataJson: JSON.stringify({ second, budget }),
+    metadataJson: JSON.stringify({ second }),
   }).toMatchSnapshot();
-  const exact: string[] = [];
-  expect(
-    appendLineWithinOutputBudget(
-      exact,
-      createOutputBudgetState(),
-      'é'.repeat(MAX_OUTPUT_CHARS),
-    ),
-  ).toBe(true);
+  expect(createOutputBudget().tryAdd('é'.repeat(MAX_OUTPUT_CHARS))).toBe(true);
 });
 
 test('UTF-8 multibyte output obeys the byte budget independently of characters', () => {

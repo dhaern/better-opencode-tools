@@ -1,11 +1,6 @@
 import type { FileHandle } from 'node:fs/promises';
-import { open } from 'node:fs/promises';
-import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
-import {
-  appendLineWithinOutputBudget,
-  createOutputBudgetState,
-  truncateLine,
-} from './limits';
+import { MAX_LINE_LENGTH } from './constants';
+import { createOutputBudget, truncateLine } from './limits';
 import type { TextReadResult } from './types';
 
 const CHUNK_BYTES = 1024 * 1024;
@@ -15,21 +10,21 @@ const CR = 0x0d;
 // units from any UTF-8 input, so truncation is decided exactly.
 const MAX_LINE_BYTES = (MAX_LINE_LENGTH + 1) * 4;
 
-// Scans line breaks on raw bytes (CR/LF never occur inside UTF-8 sequences)
-// and decodes only the selected window; earlier lines are counted, never
-// decoded. With `countAll` the scan continues to EOF after the window closes
-// so small files report an exact total. Positioned reads keep a shared
-// handle's cursor untouched.
-async function scanText(
+export type ReadTextOptions = { countAll?: boolean; size: number };
+
+// Decode only the selected window; count earlier lines on raw CR/LF bytes.
+// Positioned reads keep the caller's file descriptor cursor untouched.
+export async function readTextWindow(
   handle: FileHandle,
   offset: number,
   limit: number,
-  countAll: boolean,
-  size: number,
+  options: ReadTextOptions,
   signal?: AbortSignal,
 ): Promise<Omit<TextReadResult, 'path'>> {
+  signal?.throwIfAborted();
+  const { size, countAll = false } = options;
   const selected: string[] = [];
-  const budget = createOutputBudgetState();
+  const budget = createOutputBudget();
   const buffer = Buffer.allocUnsafe(
     Math.min(CHUNK_BYTES, Math.max(size + 1, 64 * 1024)),
   );
@@ -54,10 +49,11 @@ async function scanText(
     const line = truncateLine(bytes.toString('utf8'));
     parts = [];
     partBytes = 0;
-    if (!appendLineWithinOutputBudget(selected, budget, line.value)) {
+    if (!budget.tryAdd(line.value)) {
       truncatedByBytes = hasMore = closed = true;
       return;
     }
+    selected.push(line.value);
     if (line.truncated) {
       truncatedByLineLength = true;
       firstTruncatedLine ??= lines;
@@ -129,51 +125,4 @@ async function scanText(
     firstTruncatedLine,
     hasMore,
   };
-}
-
-async function readText(
-  resolvedPath: string,
-  offset: number,
-  limit: number,
-  streaming: boolean,
-  signal?: AbortSignal,
-  handle?: FileHandle,
-  size?: number,
-): Promise<TextReadResult> {
-  signal?.throwIfAborted();
-  const file = handle ?? (await open(resolvedPath, 'r'));
-  try {
-    const fileSize = size ?? (await file.stat()).size;
-    const countAll = !streaming && fileSize <= FAST_PATH_MAX_BYTES;
-    return {
-      ...(await scanText(file, offset, limit, countAll, fileSize, signal)),
-      path: resolvedPath,
-    };
-  } finally {
-    if (!handle) await file.close().catch(() => undefined);
-  }
-}
-
-export function readTextFile(
-  resolvedPath: string,
-  offset: number,
-  limit: number,
-  signal?: AbortSignal,
-  handle?: FileHandle,
-  size?: number,
-): Promise<TextReadResult> {
-  return readText(resolvedPath, offset, limit, false, signal, handle, size);
-}
-
-// Streaming semantics regardless of size: stops at the window and reports an
-// exact total only when EOF was reached.
-export function readTextFileStreaming(
-  resolvedPath: string,
-  offset: number,
-  limit: number,
-  signal?: AbortSignal,
-  handle?: FileHandle,
-  size?: number,
-): Promise<TextReadResult> {
-  return readText(resolvedPath, offset, limit, true, signal, handle, size);
 }

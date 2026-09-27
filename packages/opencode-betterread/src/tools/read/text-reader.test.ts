@@ -4,7 +4,7 @@ import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
-import { readTextFile, readTextFileStreaming } from './text-reader';
+import { readTextWindow } from './text-reader';
 
 const tempDirs: string[] = [];
 
@@ -39,10 +39,41 @@ afterEach(async () => {
   );
 });
 
-describe('readTextFile', () => {
+async function readWindowFromFile(
+  filePath: string,
+  offset: number,
+  limit: number,
+  options: { countAll?: boolean } = {},
+) {
+  const handle = await open(filePath, 'r');
+  try {
+    const { size } = await handle.stat();
+    return await readTextWindow(handle, offset, limit, {
+      size,
+      countAll: options.countAll ?? size <= FAST_PATH_MAX_BYTES,
+    });
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readWindow(
+  contents: string,
+  offset: number,
+  limit: number,
+  options: { countAll?: boolean } = {},
+) {
+  return readWindowFromFile(
+    await createTempFile(contents),
+    offset,
+    limit,
+    options,
+  );
+}
+
+describe('readTextWindow', () => {
   test('reads a selected window with total lines on fast path', async () => {
-    const filePath = await createTempFile('one\ntwo\nthree\nfour\n');
-    const result = await readTextFile(filePath, 2, 2);
+    const result = await readWindow('one\ntwo\nthree\nfour\n', 2, 2);
 
     expect(result.startLine).toBe(2);
     expect(result.endLine).toBe(3);
@@ -52,8 +83,7 @@ describe('readTextFile', () => {
   });
 
   test('does not invent a phantom final line for trailing newlines', async () => {
-    const filePath = await createTempFile('one\ntwo\n');
-    const result = await readTextFile(filePath, 2, 2);
+    const result = await readWindow('one\ntwo\n', 2, 2);
 
     expect(result.startLine).toBe(2);
     expect(result.endLine).toBe(2);
@@ -63,8 +93,7 @@ describe('readTextFile', () => {
   });
 
   test('preserves blank lines and trailing spaces inside the selected window', async () => {
-    const filePath = await createTempFile(' alpha  \n\n beta  \n');
-    const result = await readTextFile(filePath, 1, 3);
+    const result = await readWindow(' alpha  \n\n beta  \n', 1, 3);
 
     expect(result.content).toBe(' alpha  \n\n beta  ');
     expect(result.endLine).toBe(3);
@@ -72,8 +101,7 @@ describe('readTextFile', () => {
   });
 
   test('supports CR-only line endings in the fast path', async () => {
-    const filePath = await createTempFile('one\rtwo\rthree\r');
-    const result = await readTextFile(filePath, 2, 2);
+    const result = await readWindow('one\rtwo\rthree\r', 2, 2);
 
     expect(result.content).toBe('two\nthree');
     expect(result.startLine).toBe(2);
@@ -82,8 +110,7 @@ describe('readTextFile', () => {
   });
 
   test('truncates very long lines for model safety', async () => {
-    const filePath = await createTempFile(`${'x'.repeat(5000)}\n`);
-    const result = await readTextFile(filePath, 1, 1);
+    const result = await readWindow(`${'x'.repeat(5000)}\n`, 1, 1);
     const [line] = result.content.split('\n');
 
     expect(line.length).toBeGreaterThan(4000);
@@ -95,7 +122,7 @@ describe('readTextFile', () => {
 
   test('streams large files without duplicating lines and respects offset and limit', async () => {
     const filePath = await createLargeTempFile();
-    const result = await readTextFile(filePath, 120, 3);
+    const result = await readWindowFromFile(filePath, 120, 3);
     const filler = 'x'.repeat(2048);
 
     expect(result.content.split('\n')).toEqual([
@@ -110,8 +137,9 @@ describe('readTextFile', () => {
   });
 
   test('supports CRLF, LF, and CR line endings in the streaming path', async () => {
-    const filePath = await createTempFile('one\r\ntwo\nthree\rfour\r\n');
-    const result = await readTextFileStreaming(filePath, 2, 3);
+    const result = await readWindow('one\r\ntwo\nthree\rfour\r\n', 2, 3, {
+      countAll: false,
+    });
 
     expect(result.content).toBe('two\nthree\nfour');
     expect(result.startLine).toBe(2);
@@ -121,10 +149,11 @@ describe('readTextFile', () => {
   });
 
   test('streams giant physical lines without retaining the whole line', async () => {
-    const filePath = await createTempFile(
+    const result = await readWindow(
       `${'x'.repeat(FAST_PATH_MAX_BYTES + 4096)}\nsecond\n`,
+      1,
+      1,
     );
-    const result = await readTextFile(filePath, 1, 1);
 
     expect(result.content).toBe(`${'x'.repeat(MAX_LINE_LENGTH)}…`);
     expect(result.truncatedByLineLength).toBe(true);
@@ -140,7 +169,6 @@ describe('readTextFile', () => {
     try {
       for (const step of [1, 2, 3]) {
         const handle = {
-          stat: () => file.stat(),
           read: (
             buffer: Buffer,
             offset: number,
@@ -149,20 +177,18 @@ describe('readTextFile', () => {
           ) => file.read(buffer, offset, Math.min(length, step), position),
         } as any;
 
-        const all = await readTextFile(filePath, 1, 10, undefined, handle);
+        const size = (await file.stat()).size;
+        const all = await readTextWindow(handle, 1, 10, {
+          countAll: true,
+          size,
+        });
         expect(all.content).toBe(
           `a€\nb😀\n\n${'€'.repeat(MAX_LINE_LENGTH)}…\ntail`,
         );
         expect(all.totalLines).toBe(5);
         expect(all.truncatedByLineLength).toBe(true);
 
-        const window = await readTextFileStreaming(
-          filePath,
-          2,
-          2,
-          undefined,
-          handle,
-        );
+        const window = await readTextWindow(handle, 2, 2, { size });
         expect(window.content).toBe('b😀\n');
         expect(window.hasMore).toBe(true);
         expect(window.totalLines).toBeUndefined();
@@ -178,8 +204,9 @@ describe('readTextFile', () => {
       [`${'\n'.repeat(65535)}\r`.repeat(64), 64 * 65535 + 1],
       [`${'\r'.repeat(65535)}\n`.repeat(64), 64 * 65535],
     ] as const) {
-      const filePath = await createTempFile(contents);
-      const result = await readTextFileStreaming(filePath, total - 1, 5);
+      const result = await readWindow(contents, total - 1, 5, {
+        countAll: false,
+      });
       expect(result.content).toBe('\n');
       expect(result.totalLines).toBe(total);
       expect(result.hasMore).toBe(false);

@@ -1,10 +1,12 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
+import { Effect } from 'effect';
 import {
   askReadPermission,
   assertSafePermissionPath,
   isWithinProjectBoundary,
   permissionGlob,
+  runOpenCodeSideEffect,
   selectExternalPermissionTarget,
 } from './permissions';
 
@@ -174,5 +176,19 @@ describe('tools/read/permissions', () => {
       isWithinProjectBoundary(ctx as any, '/workspace/project/file.txt'),
     ).toBe(true);
     expect(isWithinProjectBoundary(ctx as any, '/tmp/outside.txt')).toBe(false);
+  });
+
+  test('propagates OpenCode InstanceRef bridge failures', async () => {
+    await expect(
+      runOpenCodeSideEffect(
+        Effect.fail(new Error('Service not found: InstanceRef not provided')),
+      ),
+    ).rejects.toThrow('InstanceRef not provided');
+  });
+
+  test('does not suppress unrelated Effect failures', async () => {
+    await expect(
+      runOpenCodeSideEffect(Effect.fail(new Error('permission denied'))),
+    ).rejects.toThrow('permission denied');
   });
 });

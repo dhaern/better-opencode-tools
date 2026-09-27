@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readBoundedBytes } from './attachments';
 import {
-  ATTACHMENT_UNAVAILABLE_NOTE,
+  ATTACHMENT_DATA_URL_NOTE,
   MAX_OUTPUT_BYTES,
   MAX_OUTPUT_CHARS,
 } from './constants';
@@ -362,7 +362,7 @@ describe('executeRead', () => {
     expect(result.output).toContain(linked);
     expect(result.output).toContain('1: alpha');
     expect(result.output).not.toContain('1: beta');
-    expect(result.realPath).toBe(firstTarget);
+    expect(result.metadata.real_path).toBe(firstTarget);
   });
 
   test('rejects special files before attempting to open them', async () => {
@@ -642,7 +642,7 @@ describe('executeRead', () => {
     });
 
     expect(result.output).toContain('<type>pdf</type>');
-    expect(result.output).toContain(ATTACHMENT_UNAVAILABLE_NOTE);
+    expect(result.output).toContain(ATTACHMENT_DATA_URL_NOTE);
     expect(result.metadata.attachment_support).toBe('embedded');
     expect(result.attachments).toEqual([
       {

@@ -12,17 +12,7 @@ const server: Plugin = async (ctx) => {
       read,
     },
 
-    'tool.execute.after': async (input, output) => {
-      await hook['tool.execute.after'](
-        input as {
-          tool: string;
-          args?: { filePath?: unknown };
-        },
-        output as {
-          title?: unknown;
-        },
-      );
-    },
+    ...hook,
   };
 };
 

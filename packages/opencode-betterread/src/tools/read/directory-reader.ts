@@ -1,13 +1,13 @@
 import type { Dirent } from 'node:fs';
 import { opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { MAX_OUTPUT_BYTES, MAX_OUTPUT_CHARS } from './constants';
 import {
-  buildDirectoryFooter,
-  buildDirectoryOutput,
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_CHARS,
+  OUTPUT_CAPPED_NOTE,
+} from './constants';
+import {
   escapeDirectoryEntry,
-} from './directory-output';
-import {
   escapeStructuredSingleLineValue,
   escapeStructuredTagValue,
 } from './formatter';
@@ -49,41 +49,20 @@ async function scanDirectoryEntries(
   signal?.throwIfAborted();
   const directory = await opendir(resolvedPath);
   const entries: ScannedDirectoryEntry[] = [];
-
+  let totalEntriesKnown = true;
   try {
     while (entries.length < MAX_DIRECTORY_SCAN_ENTRIES) {
-      // Cooperative cancellation: a scan aborted by the user stops instead
-      // of walking up to 65k entries with the signal already fired.
       signal?.throwIfAborted();
       const entry = await directory.read();
-      if (!entry) {
-        return {
-          entries,
-          totalEntries: entries.length,
-          totalEntriesKnown: true,
-        };
-      }
-
+      if (!entry) break;
       entries.push({ name: entry.name, dirent: entry });
     }
-
-    const nextEntry = await directory.read();
-    if (nextEntry) {
-      return {
-        entries,
-        totalEntries: entries.length,
-        totalEntriesKnown: false,
-      };
-    }
-
-    return {
-      entries,
-      totalEntries: entries.length,
-      totalEntriesKnown: true,
-    };
+    if (entries.length === MAX_DIRECTORY_SCAN_ENTRIES)
+      totalEntriesKnown = !(await directory.read());
   } finally {
     await directory.close();
   }
+  return { entries, totalEntries: entries.length, totalEntriesKnown };
 }
 
 // Trailing "/" for real directories and for symlinks that resolve to a
@@ -104,6 +83,68 @@ async function formatDirectoryEntry(
     }
   }
   return entry.name;
+}
+
+type DirectoryFooterInput = {
+  offset: number;
+  entriesCount: number;
+  totalEntries: number;
+  totalEntriesKnown?: boolean;
+  hasMore: boolean;
+  truncatedByBytes: boolean;
+};
+
+export function buildDirectoryFooter(input: DirectoryFooterInput): string {
+  const known = input.totalEntriesKnown ?? true;
+  if (
+    input.entriesCount === 0 &&
+    known &&
+    input.offset > Math.max(input.totalEntries, 1)
+  ) {
+    return `(Offset ${input.offset} is out of range for this directory (${input.totalEntries} entries))`;
+  }
+  if (known && !input.hasMore) {
+    return `(End of directory - ${input.totalEntries} entries)`;
+  }
+  const range = `${input.offset}-${input.offset + input.entriesCount - 1}`;
+  const message = known
+    ? `(Showing entries ${range} of ${input.totalEntries}. Use offset=${input.offset + input.entriesCount} to continue.)`
+    : input.entriesCount === 0
+      ? `(No entries returned from a bounded directory scan of at least ${input.totalEntries} entries. Exact pagination beyond the first window is not supported; use a more specific path.)`
+      : `(Showing entries ${range} of at least ${input.totalEntries} from a bounded directory scan. Exact pagination beyond the first window is not supported; use a more specific path.)`;
+  return input.truncatedByBytes ? `${message}\n${OUTPUT_CAPPED_NOTE}` : message;
+}
+
+export function buildDirectoryOutput(
+  displayPath: string,
+  entries: string[],
+  footer: string,
+  escapedEntries = entries.map(escapeDirectoryEntry),
+): string {
+  return [
+    `<path>${escapeStructuredTagValue(displayPath)}</path>`,
+    '<type>directory</type>',
+    '<entries>',
+    escapedEntries.join('\n'),
+    '</entries>',
+    footer,
+  ].join('\n');
+}
+
+export function formatDirectoryResult(result: DirectoryReadResult): string {
+  if (result.formattedOutput !== undefined) return result.formattedOutput;
+  return buildDirectoryOutput(
+    result.path,
+    result.entries,
+    buildDirectoryFooter({
+      offset: result.offset,
+      entriesCount: result.entries.length,
+      totalEntries: result.totalEntries,
+      totalEntriesKnown: result.totalEntriesKnown,
+      hasMore: result.hasMore,
+      truncatedByBytes: result.truncatedByBytes,
+    }),
+  );
 }
 
 // Measure each escaped entry once. The full page uses its actual footer flags;
@@ -193,6 +234,10 @@ export async function readDirectory(
   }
   signal?.throwIfAborted();
   const normalizedPath = path.normalize(options.displayPath ?? resolvedPath);
+  const hasMore = (count: number, truncated: boolean): boolean =>
+    truncated ||
+    !scan.totalEntriesKnown ||
+    startIndex + count < scan.entries.length;
 
   const { selected, truncatedByBytes, formattedOutput } =
     budgetedDirectoryEntries(
@@ -204,18 +249,10 @@ export async function readDirectory(
           entriesCount,
           totalEntries: scan.totalEntries,
           totalEntriesKnown: scan.totalEntriesKnown,
-          hasMore:
-            truncated ||
-            !scan.totalEntriesKnown ||
-            startIndex + entriesCount < sortedEntries.length,
+          hasMore: hasMore(entriesCount, truncated),
           truncatedByBytes: truncated,
         }),
     );
-
-  const hasMore =
-    truncatedByBytes ||
-    !scan.totalEntriesKnown ||
-    startIndex + selected.length < sortedEntries.length;
 
   return {
     kind: 'directory',
@@ -225,7 +262,7 @@ export async function readDirectory(
     limit: directoryLimit,
     totalEntries: scan.totalEntries,
     totalEntriesKnown: scan.totalEntriesKnown,
-    hasMore,
+    hasMore: hasMore(selected.length, truncatedByBytes),
     truncatedByBytes,
     formattedOutput,
   };
