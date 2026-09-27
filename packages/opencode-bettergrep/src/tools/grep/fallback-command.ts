@@ -5,7 +5,7 @@ import { translatePatternToEre } from './fallback-ere';
 import { appendContextArgs } from './rg-args';
 import type { NormalizedGrepInput } from './types';
 
-interface BuiltGrepCommand {
+export interface BuiltGrepCommand {
   command: string[];
   warnings: string[];
   patternError?: string;

@@ -63,6 +63,8 @@ function uniqueStrings(values: Iterable<string | undefined>): string[] {
   return normalized;
 }
 
+const realpath = realpathSync.native ?? realpathSync;
+
 function normalizeSearchTarget(
   target: string,
   base: string,
@@ -75,16 +77,12 @@ function normalizeSearchTarget(
   const resolvedPath = path.isAbsolute(target)
     ? target
     : path.resolve(base, target);
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Search path does not exist: ${target}`);
-  }
-
   let searchPath: string;
   try {
-    searchPath = realpathSync.native
-      ? realpathSync.native(resolvedPath)
-      : realpathSync(resolvedPath);
+    searchPath = realpath(resolvedPath);
   } catch (error) {
+    if (!existsSync(resolvedPath))
+      throw new Error(`Search path does not exist: ${target}`);
     throw new Error(
       `Failed to resolve search path: ${target} (${error instanceof Error ? error.message : String(error)})`,
     );
@@ -131,15 +129,10 @@ export function normalizeGrepInput(
     : path.resolve(cwd, rawWorktree);
   let worktree: string;
   try {
-    worktree = existsSync(absoluteRawWorktree)
-      ? realpathSync.native
-        ? realpathSync.native(absoluteRawWorktree)
-        : realpathSync(absoluteRawWorktree)
-      : absoluteRawWorktree;
+    worktree = realpath(absoluteRawWorktree);
   } catch {
     worktree = absoluteRawWorktree;
   }
-  const base = cwd;
   const rawTargets = cleanStringArray(args.paths);
   if (
     rawTargets.length === 0 &&
@@ -156,7 +149,7 @@ export function normalizeGrepInput(
   const normalizedTargets: Array<ReturnType<typeof normalizeSearchTarget>> = [];
   const normalizedPaths = new Set<string>();
   for (const target of requestedTargets) {
-    const normalized = normalizeSearchTarget(target, base);
+    const normalized = normalizeSearchTarget(target, cwd);
     if (normalizedPaths.has(normalized.searchPath)) continue;
     normalizedPaths.add(normalized.searchPath);
     normalizedTargets.push(normalized);

@@ -1,7 +1,7 @@
 import { DEFAULT_GREP_RETRY_COUNT, RG_BINARY } from './constants';
 import { executeDirectMode } from './direct';
 import { executeGrepFallback } from './fallback';
-import { buildGrepCommand } from './fallback-command';
+import { type BuiltGrepCommand, buildGrepCommand } from './fallback-command';
 import { buildDiscoveryInput, executeMtimeMode } from './mtime';
 import {
   invalidateGrepCliResolverCache,
@@ -56,31 +56,18 @@ async function executeOnce(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
+  prepared?: BuiltGrepCommand,
 ): Promise<GrepSearchResult> {
   if (cli.backend === 'grep') {
-    return executeGrepFallback(input, signal, cli);
+    return executeGrepFallback(input, signal, cli, prepared);
   }
 
   if (input.sortBy === 'mtime') {
     return executeMtimeMode(input, signal, cli);
   }
 
-  return executeDirectMode(input, signal, cli);
-}
-
-function buildPreviewCommand(
-  input: NormalizedGrepInput,
-  cli: ResolvedGrepCli,
-): string[] | undefined {
-  if (cli.backend === 'grep') {
-    return buildGrepCommand(input, cli.path).command;
-  }
-
-  if (input.sortBy === 'mtime') {
-    return undefined;
-  }
-
-  return buildRgCommand(input, cli.path);
+  return executeDirectMode(input, signal, cli, command);
 }
 
 async function resolveCliForExecution(
@@ -101,7 +88,7 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
     backend: 'rg',
     source: 'missing-rg',
   };
-  let command = buildPreviewCommand(input, previewCli);
+  let command = input.sortBy === 'mtime' ? undefined : buildRgCommand(input);
 
   const createAbortedResult = (
     attempt: number,
@@ -121,11 +108,20 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
     finalResult = await RUNNER_SEMAPHORE.use(async () => {
       let attempt = 0;
       let cli: ResolvedGrepCli;
+      let prepared: BuiltGrepCommand | undefined;
 
       try {
         cli = await resolveCliForExecution(globalAbort.signal);
         previewCli = cli;
-        command = buildPreviewCommand(input, previewCli);
+        prepared =
+          cli.backend === 'grep'
+            ? buildGrepCommand(input, cli.path)
+            : undefined;
+        command =
+          prepared?.command ??
+          (input.sortBy === 'mtime'
+            ? undefined
+            : [cli.path, ...(command ?? buildRgCommand(input)).slice(1)]);
       } catch (error) {
         if (error instanceof AbortWaitError || globalAbort.signal.aborted) {
           return createAbortedResult(attempt);
@@ -142,7 +138,13 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
           ...input,
           timeoutMs: Math.max(1, remainingTimeout(deadline)),
         };
-        const result = await executeOnce(grepInput, globalAbort.signal, cli);
+        const result = await executeOnce(
+          grepInput,
+          globalAbort.signal,
+          cli,
+          command,
+          prepared,
+        );
         result.retryCount = attempt;
         return result;
       }
@@ -166,6 +168,7 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
             scopedInput,
             globalAbort.signal,
             cli,
+            command,
           );
           result.retryCount = attempt;
           return result;

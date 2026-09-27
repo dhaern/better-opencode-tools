@@ -20,6 +20,7 @@ import {
   escapeControlChars,
   escapeControlCharsPreservingNewlines,
   escapePathBytes,
+  tryDecodeUtf8,
 } from './path-utils';
 import { AbortWaitError } from './runtime';
 
@@ -167,6 +168,11 @@ test('byte and text escaping keep tab, CR and newline contracts', () => {
   expect(escapeControlCharsPreservingNewlines('\t\n\r\u0000')).toBe(
     '\\t\n\\r\\x00',
   );
+});
+
+test('shared UTF-8 decoder resets after malformed input', () => {
+  expect(tryDecodeUtf8(Uint8Array.from([0xff]))).toBeUndefined();
+  expect(tryDecodeUtf8(new TextEncoder().encode('café'))).toBe('café');
 });
 
 test('abort errors preserve exact message and class for each caller', async () => {

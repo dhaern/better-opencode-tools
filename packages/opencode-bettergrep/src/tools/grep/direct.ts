@@ -178,8 +178,10 @@ export async function executeContentLikeMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
+    command,
     init: (): ContentState => ({
       aggregator: new GrepAggregator({
         cwd: input.cwd,
@@ -229,8 +231,10 @@ export async function executeFileListMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
+    command,
     init: (): FileListState => ({
       files: [],
       limitReached: false,
@@ -260,8 +264,9 @@ export function executeDirectMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
   return input.outputMode === 'content'
-    ? executeContentLikeMode(input, signal, cli)
-    : executeFileListMode(input, signal, cli);
+    ? executeContentLikeMode(input, signal, cli, command)
+    : executeFileListMode(input, signal, cli, command);
 }

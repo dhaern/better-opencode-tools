@@ -13,9 +13,11 @@ const CONTROL_ESCAPES: Record<number, string> = {
   13: '\\r',
 };
 
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true });
+
 export function tryDecodeUtf8(bytes: Uint8Array): string | undefined {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return UTF8_DECODER.decode(bytes);
   } catch {
     return undefined;
   }

@@ -1,6 +1,6 @@
 import { ensureGnuGrep } from './cli-probe';
 import { executeMode } from './direct';
-import { buildGrepCommand } from './fallback-command';
+import { type BuiltGrepCommand, buildGrepCommand } from './fallback-command';
 import { consumeContentOutput } from './fallback-content';
 import { collectFileEntries, finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
@@ -20,8 +20,10 @@ export async function executeGrepFallback(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  prepared?: BuiltGrepCommand,
 ): Promise<GrepSearchResult> {
-  const { command, warnings, patternError } = buildGrepCommand(input, cli.path);
+  const { command, warnings, patternError } =
+    prepared ?? buildGrepCommand(input, cli.path);
   const base = {
     ...createEmptyResult(input, command),
     backend: 'grep' as const,
