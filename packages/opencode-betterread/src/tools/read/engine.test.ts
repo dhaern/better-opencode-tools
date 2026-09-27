@@ -7,6 +7,7 @@ import path from 'node:path';
 import { readBoundedBytes } from './attachments';
 import {
   ATTACHMENT_DATA_URL_NOTE,
+  FAST_PATH_MAX_BYTES,
   MAX_OUTPUT_BYTES,
   MAX_OUTPUT_CHARS,
 } from './constants';
@@ -34,6 +35,72 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('counts all lines of an exactly 1 MiB file even for a one-line window', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'exact-1m.txt');
+    const bytes = Buffer.concat([
+      Buffer.alloc(FAST_PATH_MAX_BYTES - 2, 0x61),
+      Buffer.from('\nb'),
+    ]);
+    expect(bytes.length).toBe(FAST_PATH_MAX_BYTES);
+    await writeFile(filePath, bytes);
+    const result = await executeRead({
+      args: { filePath, limit: 1 },
+      directory,
+    });
+    expect(result.metadata.total_lines).toBe(2);
+    expect(result.metadata.has_more).toBe(true);
+  });
+
+  test('allows an attachment size hint equal to the cap without rejecting it', async () => {
+    const payload = Buffer.from('0123456789');
+    let reads = 0;
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        reads += 1;
+        const bytesRead = Math.min(
+          length,
+          Math.max(0, payload.length - position),
+        );
+        payload.copy(buffer, offset, position, position + bytesRead);
+        return { buffer, bytesRead };
+      },
+    } as any;
+    expect(
+      await readBoundedBytes(handle, payload.length, undefined, payload.length),
+    ).toEqual(payload);
+    expect(reads).toBeGreaterThan(0);
+  });
+
+  test('shows the requested path for both text and notebooks through a linked directory', async () => {
+    const directory = await createWorkspace();
+    const canonical = path.join(directory, 'canonical');
+    const alias = path.join(directory, 'alias');
+    await mkdir(canonical);
+    await writeFile(path.join(canonical, 'sample.txt'), 'hello\n');
+    await writeFile(
+      path.join(canonical, 'sample.ipynb'),
+      JSON.stringify({ cells: [{ cell_type: 'code', source: ['hello\n'] }] }),
+    );
+    await symlink(canonical, alias, 'dir');
+
+    for (const file of ['sample.txt', 'sample.ipynb']) {
+      const requested = path.join(alias, file);
+      const result = await executeRead({
+        args: { filePath: requested },
+        directory,
+      });
+      expect(result.output.startsWith(`<path>${requested}</path>`)).toBe(true);
+      expect(result.metadata.resolved_path).toBe(requested);
+      expect(result.metadata.real_path).toBe(path.join(canonical, file));
+    }
+  });
+
   test('grows past a stale attachment size hint and still enforces the cap', async () => {
     const payload = Buffer.from('0123456789abcdefghijklmn');
     const handle = {

@@ -39,19 +39,18 @@ function notebookLines(raw: string): string[] {
     if (source.length === 0) continue;
     if (lines.length > 0) lines.push('');
     lines.push(`# Cell ${index + 1} (${cell.cell_type})`);
-    lines.push(...splitLogicalLines(source));
+    for (const line of splitLogicalLines(source)) lines.push(line);
   }
   return lines;
 }
 
 export async function readNotebook(
-  resolvedPath: string,
   offset: number,
   limit: number,
   handle: FileHandle,
   size: number,
   signal?: AbortSignal,
-): Promise<NotebookReadResult> {
+): Promise<Omit<NotebookReadResult, 'path'>> {
   signal?.throwIfAborted();
   if (shouldParseNotebook(size)) {
     try {
@@ -66,7 +65,6 @@ export async function readNotebook(
       return {
         kind: 'notebook',
         mode: 'parsed',
-        path: resolvedPath,
         content: selection.selected.join('\n'),
         startLine: offset,
         endLine: offset + selection.selected.length - 1,
@@ -84,6 +82,5 @@ export async function readNotebook(
     ...(await readTextWindow(handle, offset, limit, { size }, signal)),
     kind: 'notebook',
     mode: 'raw-fallback',
-    path: resolvedPath,
   };
 }

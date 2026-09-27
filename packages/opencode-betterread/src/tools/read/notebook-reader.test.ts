@@ -4,6 +4,7 @@ import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MAX_OUTPUT_BYTES, MAX_PARSED_NOTEBOOK_BYTES } from './constants';
+import { renderTextResult } from './formatter';
 import { readNotebook, shouldParseNotebook } from './notebook-reader';
 
 const tempDirs: string[] = [];
@@ -44,7 +45,6 @@ async function readSampleNotebook(
   const handle = await open(filePath, 'r');
   try {
     return await readNotebook(
-      filePath,
       offset,
       limit,
       handle,
@@ -59,6 +59,16 @@ describe('readNotebook', () => {
   test('uses the parse path only below the parsed-notebook byte gate', () => {
     expect(shouldParseNotebook(MAX_PARSED_NOTEBOOK_BYTES)).toBe(true);
     expect(shouldParseNotebook(MAX_PARSED_NOTEBOOK_BYTES + 1)).toBe(false);
+  });
+
+  test('parses a near-cap notebook with 1,048,553 empty source lines', async () => {
+    const raw = `${JSON.stringify({ cells: [{ cell_type: 'code', source: '\n'.repeat(1_048_553) }] })} `;
+    expect(Buffer.byteLength(raw)).toBe(MAX_PARSED_NOTEBOOK_BYTES - 1);
+    const filePath = await createRawNotebookFile(raw);
+    const result = await readSampleNotebook(filePath, 1, 2);
+    expect(result.mode).toBe('parsed');
+    expect(result.totalLines).toBe(1_048_554);
+    expect(result.content).toBe('# Cell 1 (code)\n');
   });
 
   test('does not invent a phantom line for empty notebooks', async () => {
@@ -133,6 +143,36 @@ describe('readNotebook', () => {
     expect(result.hasMore).toBe(false);
   });
 
+  test('marks a long notebook line truncated when it is the last emitted line', async () => {
+    const filePath = await createNotebookFile({
+      cells: [{ cell_type: 'code', source: ['x'.repeat(5000)] }],
+    });
+    const result = await readSampleNotebook(filePath, 1, 2);
+    const rendered = renderTextResult({ ...result, path: filePath });
+    expect(result.firstTruncatedLine).toBe(2);
+    expect(rendered.endLine).toBe(2);
+    expect(rendered.truncatedByLineLength).toBe(true);
+  });
+
+  test('does not mark an omitted long notebook line as emitted or truncated', async () => {
+    const source = [
+      ...Array.from(
+        { length: 2070 },
+        (_, index) => `${'x'.repeat(index < 200 ? 119 : 118)}\n`,
+      ),
+      'z'.repeat(5000),
+    ];
+    const filePath = await createNotebookFile({
+      cells: [{ cell_type: 'code', source }],
+    });
+    const result = await readSampleNotebook(filePath, 1, 4096);
+    const rendered = renderTextResult({ ...result, path: filePath });
+    expect(result.firstTruncatedLine).toBe(2072);
+    expect(rendered.endLine).toBeLessThan(result.firstTruncatedLine as number);
+    expect(rendered.truncatedByLineLength).toBe(false);
+    expect(rendered.output).not.toContain('One or more lines were truncated');
+  });
+
   test('falls back to streaming text for large notebooks before parsing', async () => {
     const contents = `${'{not valid json}\n'}${'x'.repeat(MAX_PARSED_NOTEBOOK_BYTES + 1)}`;
     const filePath = await createRawNotebookFile(contents);
@@ -169,7 +209,6 @@ describe('readNotebook', () => {
 
     try {
       const result = await readNotebook(
-        filePath,
         1,
         10,
         handle,

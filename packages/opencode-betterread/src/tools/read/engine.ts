@@ -211,37 +211,37 @@ export async function executeRead(input: {
 
     const text = notebook
       ? await readNotebook(
-          readPath,
           args.offset,
           args.limit,
           handle,
           handleStat.size,
           signal,
         )
-      : {
-          ...(await readTextWindow(
-            handle,
-            args.offset,
-            args.limit,
-            {
-              countAll: handleStat.size <= FAST_PATH_MAX_BYTES,
-              size: handleStat.size,
-            },
-            signal,
-          )),
-          path: resolvedPath,
-        };
+      : await readTextWindow(
+          handle,
+          args.offset,
+          args.limit,
+          {
+            countAll: handleStat.size <= FAST_PATH_MAX_BYTES,
+            size: handleStat.size,
+          },
+          signal,
+        );
+    const visible = { ...text, path: resolvedPath };
     if (
-      text.totalLines !== undefined &&
-      text.endLine < text.startLine &&
-      !(text.totalLines === 0 && text.startLine === 1)
+      visible.totalLines !== undefined &&
+      visible.endLine < visible.startLine &&
+      !(visible.totalLines === 0 && visible.startLine === 1)
     ) {
       throw new Error(
-        `Offset ${text.startLine} is out of range for this file (${text.totalLines} lines)`,
+        `Offset ${visible.startLine} is out of range for this file (${visible.totalLines} lines)`,
       );
     }
-    const rendered = renderTextResult(text);
-    return done(rendered.output, buildTextMetadata(pathInfo, text, rendered));
+    const rendered = renderTextResult(visible);
+    return done(
+      rendered.output,
+      buildTextMetadata(pathInfo, visible, rendered),
+    );
   } finally {
     // Readers use positioned operations and never take ownership of this
     // descriptor, so the engine performs the single close here.
