@@ -43,18 +43,7 @@ export const readArgsSchema: Record<string, unknown> = {
     ),
 };
 
-interface CreateReadToolOptions {
-  inspect?: typeof inspectReadTarget;
-  execute?: typeof executeRead;
-}
-
-export function createReadTool(
-  pluginCtx: PluginInput,
-  options: CreateReadToolOptions = {},
-): ToolDefinition {
-  const inspect = options.inspect ?? inspectReadTarget;
-  const execute = options.execute ?? executeRead;
-
+export function createReadTool(pluginCtx: PluginInput): ToolDefinition {
   return tool({
     description: READ_DESCRIPTION,
     args: readArgsSchema as Parameters<typeof tool>[0]['args'],
@@ -66,7 +55,7 @@ export function createReadTool(
         directory,
         worktree: ctx.worktree ?? pluginCtx.worktree,
       };
-      const inspection = await inspect({
+      const inspection = await inspectReadTarget({
         args: args as unknown as ReadArgs,
         directory,
       });
@@ -107,7 +96,7 @@ export function createReadTool(
 
       // executeRead opens the target once after the asks and verifies the
       // descriptor against the inspected identity (TOCTOU closes there).
-      const result = await execute({
+      const result = await executeRead({
         args: normalized,
         directory,
         inspection,
