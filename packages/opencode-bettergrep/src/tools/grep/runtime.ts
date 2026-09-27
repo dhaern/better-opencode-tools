@@ -2,7 +2,6 @@ import { AbortWaitError, createSearchAbortError } from '../../utils/abort';
 import {
   type CrossSpawnResult,
   crossSpawn,
-  hasProcessExited,
   terminateProcess,
 } from '../../utils/compat';
 import {
@@ -113,13 +112,7 @@ export function sleepWithSignal(
   }
 
   if (signal.aborted) {
-    return Promise.reject(
-      new AbortWaitError(
-        isTimedOutAbort(signal)
-          ? 'Search retry backoff timed out.'
-          : 'Search retry backoff was aborted.',
-      ),
-    );
+    return Promise.reject(retryAbortError(signal));
   }
 
   return new Promise((resolve, reject) => {
@@ -129,17 +122,19 @@ export function sleepWithSignal(
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(
-        new AbortWaitError(
-          isTimedOutAbort(signal)
-            ? 'Search retry backoff timed out.'
-            : 'Search retry backoff was aborted.',
-        ),
-      );
+      reject(retryAbortError(signal));
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function retryAbortError(signal: AbortSignal): AbortWaitError {
+  return new AbortWaitError(
+    isTimedOutAbort(signal)
+      ? 'Search retry backoff timed out.'
+      : 'Search retry backoff was aborted.',
+  );
 }
 
 export function remainingTimeout(deadline: number): number {
@@ -157,13 +152,11 @@ export function createGlobalAbortState(
   timeout: () => void;
 } {
   const controller = new AbortController();
-  let kind: 'timeout' | 'cancel' | undefined;
 
   const settle = (next: 'timeout' | 'cancel', reason: string) => {
     if (!setAbortKind(controller.signal, next)) {
       return false;
     }
-    kind = next;
     controller.abort(reason);
     return true;
   };
@@ -193,8 +186,8 @@ export function createGlobalAbortState(
       clearTimeout(timeoutId);
       signal.removeEventListener('abort', onAbort);
     },
-    getTimedOut: () => kind === 'timeout',
-    getCancelled: () => kind === 'cancel',
+    getTimedOut: () => getAbortKind(controller.signal) === 'timeout',
+    getCancelled: () => getAbortKind(controller.signal) === 'cancel',
     timeout: () => {
       if (settle('timeout', 'grep-timeout')) {
         clearTimeout(timeoutId);
@@ -205,7 +198,6 @@ export function createGlobalAbortState(
 }
 
 export function killProcess(proc: GrepProcess): void {
-  if (hasProcessExited(proc)) return;
   void terminateProcess(proc);
 }
 
@@ -294,15 +286,11 @@ export function isTransientFailure(error: unknown): boolean {
   const message = toErrorMessage(error);
   const text = `${code} ${message}`.toLowerCase();
 
-  return [
-    'eagain',
-    'emfile',
-    'enfile',
-    'etxtbsy',
-    'resource temporarily unavailable',
-    'too many open files',
-    'text file busy',
-  ].some((needle) => text.includes(needle));
+  return (
+    ['eagain', 'emfile', 'enfile', 'etxtbsy'].some((needle) =>
+      text.includes(needle),
+    ) || isTransientStderr(text)
+  );
 }
 
 export function isTransientStderr(stderr: string): boolean {

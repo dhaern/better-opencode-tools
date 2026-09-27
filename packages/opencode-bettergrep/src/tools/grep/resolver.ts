@@ -3,6 +3,7 @@ import {
   defaultFindExecutable,
   defaultIsSupportedGrep,
   defaultIsSupportedRipgrep,
+  isSupportedVersion,
   probeExecutable,
   raceWithAbort,
 } from './cli-probe';
@@ -31,7 +32,6 @@ interface GrepResolverDependencies {
   installLatestStableRipgrep?: (signal?: AbortSignal) => Promise<string>;
   isSupportedRipgrep?: (path: string) => boolean;
   isSupportedGrep?: (path: string) => boolean;
-  logger?: (message: string, data?: unknown) => void;
 }
 
 const DEFAULT_DEPS: GrepResolverDependencies = {};
@@ -143,9 +143,7 @@ async function supportsBinary(
   if (override) return override(binary) === true;
   const probe = await probeExecutable(binary, ['--version'], signal);
   if (probe.timedOut || probe.exitCode !== 0) return false;
-  return kind === 'rg'
-    ? /ripgrep/i.test(`${probe.stdout}\n${probe.stderr}`)
-    : (probe.stdout.split(/\r?\n/, 1)[0] ?? '').includes('GNU grep');
+  return isSupportedVersion(kind, probe.stdout, probe.stderr);
 }
 
 async function resolveAsync(
@@ -261,24 +259,14 @@ function createSharedAutoInstall(
       }
 
       const fallback = await resolveAsync(deps, controller.signal);
-      // The file logger is gone; deps.logger stays as an optional no-op seam.
-      const logger = deps.logger ?? (() => undefined);
-
       if (fallback.backend === 'grep') {
         failedInstallRetryAfter.set(
           deps,
           Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
         );
-        logger('ripgrep auto-install failed; falling back to GNU grep.', {
-          error: error instanceof Error ? error.message : String(error),
-          grep_path: fallback.path,
-        });
         return fallback;
       }
 
-      logger('ripgrep auto-install failed and no GNU grep fallback exists.', {
-        error: error instanceof Error ? error.message : String(error),
-      });
       throw new Error(buildUnavailableBackendMessage(error));
     } finally {
       clearTimeout(installTimer);

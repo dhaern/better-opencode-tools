@@ -245,7 +245,6 @@ describe('tools/grep/resolver', () => {
         name === 'grep' ? '/usr/bin/grep' : null,
       getInstalledRipgrepPath: () => installedPath,
       installLatestStableRipgrep: installLatest,
-      logger: () => undefined,
     };
 
     const first = await resolveGrepCliWithAutoInstall(resolverDeps);
@@ -261,15 +260,12 @@ describe('tools/grep/resolver', () => {
   });
 
   test('resolveGrepCliWithAutoInstall falls back to system grep when install fails', async () => {
-    const logger = mock(() => undefined);
-
     const cli = await resolveGrepCliWithAutoInstall({
       findExecutable: (name) => (name === 'grep' ? '/usr/bin/grep' : null),
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: async () => {
         throw new Error('network down');
       },
-      logger,
     });
 
     expect(cli).toEqual({
@@ -277,7 +273,6 @@ describe('tools/grep/resolver', () => {
       backend: 'grep',
       source: 'system-gnu-grep',
     });
-    expect(logger.mock.calls).toHaveLength(1);
   });
 
   test('failed install with GNU grep retries only after the negative-cache TTL', async () => {
@@ -382,7 +377,6 @@ describe('tools/grep/resolver', () => {
           installLatestStableRipgrep: async () => {
             throw new Error('should not reach installer when already aborted');
           },
-          logger: () => undefined,
         },
         controller.signal,
       ),
@@ -392,7 +386,6 @@ describe('tools/grep/resolver', () => {
       findExecutable: () => null,
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: async () => '/tmp/managed-rg',
-      logger: () => undefined,
     });
 
     expect(cli).toEqual({
@@ -425,7 +418,6 @@ describe('tools/grep/resolver', () => {
           });
           return '/tmp/unreachable';
         },
-        logger: () => undefined,
       },
       controller.signal,
     );
@@ -443,7 +435,6 @@ describe('tools/grep/resolver', () => {
         attempts += 1;
         return '/tmp/managed-rg';
       },
-      logger: () => undefined,
     });
 
     expect(attempts).toBe(2);
@@ -482,7 +473,6 @@ describe('tools/grep/resolver', () => {
       findExecutable: () => null,
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: installLatest,
-      logger: () => undefined,
     };
 
     const firstWaiter = resolveGrepCliWithAutoInstall(
@@ -544,7 +534,6 @@ describe('tools/grep/resolver', () => {
           });
           return '/tmp/unreachable';
         },
-        logger: () => undefined,
       },
       controller.signal,
     );
@@ -562,7 +551,6 @@ describe('tools/grep/resolver', () => {
       findExecutable: () => null,
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: async () => '/tmp/managed-rg',
-      logger: () => undefined,
     });
 
     expect(retry).toEqual({
@@ -580,7 +568,6 @@ describe('tools/grep/resolver', () => {
         installLatestStableRipgrep: async () => {
           throw new Error('network down');
         },
-        logger: () => undefined,
       }),
     ).rejects.toThrow(/Neither ripgrep \(rg\) nor GNU grep is available\./);
   });
@@ -596,7 +583,6 @@ describe('tools/grep/resolver', () => {
           attempts += 1;
           throw new Error(`network down ${attempts}`);
         },
-        logger: () => undefined,
       }),
     ).rejects.toThrow(/network down 1/);
 
@@ -607,7 +593,6 @@ describe('tools/grep/resolver', () => {
         attempts += 1;
         return '/tmp/managed-rg';
       },
-      logger: () => undefined,
     });
 
     expect(attempts).toBe(2);

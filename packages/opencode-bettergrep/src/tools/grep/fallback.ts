@@ -39,6 +39,7 @@ export async function executeGrepFallback(
   if (patternError) return { ...base, error: patternError };
   const grepError = await ensureGnuGrep(cli.path, signal, input.timeoutMs);
   if (grepError) return { ...base, error: grepError };
+  let skippedLines = 0;
 
   return executeMode(input, signal, cli, {
     command,
@@ -67,6 +68,7 @@ export async function executeGrepFallback(
     },
     buildResult: (baseResult, state) => {
       const parsed = state.parsed;
+      skippedLines = parsed.skippedLines;
       const result = finishFileListMode(
         baseResult,
         parsed.files,
@@ -98,9 +100,7 @@ export async function executeGrepFallback(
         return result;
       }
       if (
-        result.warnings.some((warning) =>
-          warning.startsWith('GNU grep fallback skipped'),
-        ) &&
+        skippedLines > 0 &&
         !hasVisibleResults(result) &&
         result.exitCode === 0 &&
         !result.timedOut &&

@@ -217,31 +217,28 @@ export function buildGrepCommand(
     args.push('--exclude=.*', '--exclude-dir=.*');
   }
 
+  const unsupported = (patternError: string): BuiltGrepCommand => ({
+    command: [binaryPath, ...args],
+    warnings,
+    patternError,
+  });
+
   if (input.pattern.includes('\n') || input.pattern.includes('\r')) {
-    return {
-      command: [binaryPath, ...args],
-      warnings,
-      patternError:
-        'literal line breaks cannot be reproduced by the GNU grep fallback',
-    };
+    return unsupported(
+      'literal line breaks cannot be reproduced by the GNU grep fallback',
+    );
   }
 
   if (shouldUseIgnoreCase(input)) {
-    return {
-      command: [binaryPath, ...args],
-      warnings,
-      patternError:
-        'case-insensitive matching cannot be reproduced by the GNU grep fallback without changing Unicode case-folding semantics',
-    };
+    return unsupported(
+      'case-insensitive matching cannot be reproduced by the GNU grep fallback without changing Unicode case-folding semantics',
+    );
   }
 
   if (input.wordRegexp) {
-    return {
-      command: [binaryPath, ...args],
-      warnings,
-      patternError:
-        'word_regexp cannot be reproduced by the GNU grep fallback without changing Unicode word-boundary semantics',
-    };
+    return unsupported(
+      'word_regexp cannot be reproduced by the GNU grep fallback without changing Unicode word-boundary semantics',
+    );
   }
 
   let effectivePattern = input.pattern;
@@ -250,11 +247,9 @@ export function buildGrepCommand(
   } else {
     const translated = translatePatternToEre(input.pattern);
     if (translated.error) {
-      return {
-        command: [binaryPath, ...args],
-        warnings,
-        patternError: `Cannot reproduce this regex with the GNU grep fallback: ${translated.error}. Install ripgrep or use fixed_strings for literal searches.`,
-      };
+      return unsupported(
+        `Cannot reproduce this regex with the GNU grep fallback: ${translated.error}. Install ripgrep or use fixed_strings for literal searches.`,
+      );
     }
     args.push('-E');
     effectivePattern = translated.ere ?? input.pattern;

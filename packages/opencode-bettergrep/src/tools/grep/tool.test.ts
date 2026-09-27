@@ -240,6 +240,26 @@ describe('tools/grep/tool', () => {
     expect(getMetadataInput(ctx).metadata).toEqual(complete);
   });
 
+  test('metadata delivery is best-effort when the host rejects it', async () => {
+    const repo = temps.createRepo();
+    const grep = createGrepTool(
+      { directory: repo, worktree: repo, client: {} } as any,
+      { run: async () => buildResult(repo) },
+    );
+    const ctx = {
+      ...createExecutionContext(repo),
+      metadata: mock(async () => {
+        throw new Error('metadata failed');
+      }),
+    };
+    const result = await grep.execute(
+      { pattern: 'createTool', path: 'src' },
+      ctx as any,
+    );
+    expect(result).toMatchObject({ title: 'createTool' });
+    expect(ctx.metadata).toHaveBeenCalledTimes(1);
+  });
+
   test('fails closed when permission Effect loses OpenCode context', async () => {
     const repoDir = temps.createRepo();
     const run: GrepRunner = mock(async () => buildResult(repoDir));

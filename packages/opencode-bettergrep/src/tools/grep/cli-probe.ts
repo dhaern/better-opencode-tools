@@ -124,6 +124,16 @@ export function hasExecutable(name: string): boolean {
   return defaultFindExecutable(name) !== null;
 }
 
+export function isSupportedVersion(
+  kind: 'rg' | 'grep',
+  stdout: string,
+  stderr: string,
+): boolean {
+  return kind === 'rg'
+    ? /ripgrep/i.test(`${stdout}\n${stderr}`)
+    : (stdout.split(/\r?\n/, 1)[0] ?? '').includes('GNU grep');
+}
+
 function defaultIsSupported(binaryPath: string, kind: 'rg' | 'grep'): boolean {
   try {
     const result = spawnSync(binaryPath, ['--version'], {
@@ -131,14 +141,11 @@ function defaultIsSupported(binaryPath: string, kind: 'rg' | 'grep'): boolean {
       timeout: PROBE_TIMEOUT_MS,
     });
     if (result.error || result.status !== 0) return false;
-    if (kind === 'grep') {
-      return (result.stdout?.toString().split(/\r?\n/, 1)[0] ?? '').includes(
-        'GNU grep',
-      );
-    }
-    return `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`
-      .toLowerCase()
-      .includes('ripgrep');
+    return isSupportedVersion(
+      kind,
+      result.stdout?.toString() ?? '',
+      result.stderr?.toString() ?? '',
+    );
   } catch {
     return false;
   }
@@ -183,7 +190,7 @@ async function checkGnuGrep(
       cacheable: !isTransientStderr(stderr),
     };
   const firstLine = stdout.trim().split(/\r?\n/, 1)[0] ?? '';
-  if (!firstLine.includes('GNU grep'))
+  if (!isSupportedVersion('grep', firstLine, ''))
     return {
       error: firstLine
         ? 'System grep fallback requires GNU grep; the detected grep is not GNU grep.'
