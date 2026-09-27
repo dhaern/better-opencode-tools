@@ -1,320 +1,171 @@
 import type { FileHandle } from 'node:fs/promises';
-import { open, stat } from 'node:fs/promises';
-import { StringDecoder } from 'node:string_decoder';
+import { open } from 'node:fs/promises';
 import { FAST_PATH_MAX_BYTES, MAX_LINE_LENGTH } from './constants';
 import {
   appendLineWithinOutputBudget,
   createOutputBudgetState,
-  selectBudgetedLines,
-  splitLogicalLines,
+  truncateLine,
 } from './limits';
 import type { TextReadResult } from './types';
 
-const STREAM_CHUNK_BYTES = 64 * 1024;
+const CHUNK_BYTES = 1024 * 1024;
+const LF = 0x0a;
+const CR = 0x0d;
+// Bytes kept per selected line: enough to decode MAX_LINE_LENGTH + 1 UTF-16
+// units from any UTF-8 input, so truncation is decided exactly.
+const MAX_LINE_BYTES = (MAX_LINE_LENGTH + 1) * 4;
 
-function buildTextResult(
-  resolvedPath: string,
-  lines: string[],
-  startLine: number,
-  totalLines: number | undefined,
-  truncatedByBytes: boolean,
-  truncatedByLineLength: boolean,
-  hasMore: boolean,
-): TextReadResult {
-  const endLine =
-    lines.length === 0 ? startLine - 1 : startLine + lines.length - 1;
+// Scans line breaks on raw bytes (CR/LF never occur inside UTF-8 sequences)
+// and decodes only the selected window; earlier lines are counted, never
+// decoded. With `countAll` the scan continues to EOF after the window closes
+// so small files report an exact total. Positioned reads keep a shared
+// handle's cursor untouched.
+async function scanText(
+  handle: FileHandle,
+  offset: number,
+  limit: number,
+  countAll: boolean,
+  size: number,
+  signal?: AbortSignal,
+): Promise<Omit<TextReadResult, 'path'>> {
+  const selected: string[] = [];
+  const budget = createOutputBudgetState();
+  const buffer = Buffer.allocUnsafe(
+    Math.min(CHUNK_BYTES, Math.max(size + 1, 64 * 1024)),
+  );
+  let parts: Buffer[] = [];
+  let partBytes = 0;
+  let lines = 0;
+  let lineOpen = false;
+  let skipLF = false;
+  let closed = false;
+  let hasMore = false;
+  let truncatedByBytes = false;
+  let truncatedByLineLength = false;
+  let position = 0;
+
+  const finishLine = (): void => {
+    lines += 1;
+    lineOpen = false;
+    if (closed || lines < offset) return;
+    const bytes =
+      parts.length === 1 ? parts[0] : Buffer.concat(parts, partBytes);
+    const line = truncateLine(bytes.toString('utf8'));
+    parts = [];
+    partBytes = 0;
+    if (!appendLineWithinOutputBudget(selected, budget, line.value)) {
+      truncatedByBytes = hasMore = closed = true;
+      return;
+    }
+    truncatedByLineLength ||= line.truncated;
+    if (selected.length >= limit) closed = true;
+  };
+
+  scan: for (;;) {
+    signal?.throwIfAborted();
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    const chunk = buffer.subarray(0, bytesRead);
+    let index = skipLF && chunk[0] === LF ? 1 : 0;
+    skipLF = false;
+    // Next known break positions; each is searched at most once per chunk
+    // position, so LF-only or CR-only input stays linear.
+    let nextLF = -2;
+    let nextCR = -2;
+    while (index < chunk.length) {
+      // Any byte at a line start after the window closed proves more input.
+      if (closed && !lineOpen) {
+        hasMore = true;
+        if (!countAll) break scan;
+      }
+      if (nextLF !== -1 && nextLF < index) nextLF = chunk.indexOf(LF, index);
+      if (nextCR !== -1 && nextCR < index) nextCR = chunk.indexOf(CR, index);
+      const brk =
+        nextLF === -1
+          ? nextCR
+          : nextCR === -1
+            ? nextLF
+            : Math.min(nextLF, nextCR);
+      const end = brk === -1 ? chunk.length : brk;
+      const selecting = !closed && lines + 1 >= offset;
+      if (selecting && partBytes < MAX_LINE_BYTES) {
+        const piece = chunk.subarray(
+          index,
+          Math.min(end, index + MAX_LINE_BYTES - partBytes),
+        );
+        parts.push(piece);
+        partBytes += piece.length;
+      }
+      if (brk === -1) {
+        // The read buffer is reused: copy the open line's bytes out of it.
+        if (selecting && parts.length > 0)
+          parts.push(Buffer.from(parts.pop() as Buffer));
+        lineOpen = true;
+        break;
+      }
+      finishLine();
+      index = brk + 1;
+      if (chunk[brk] === CR) {
+        if (index === chunk.length) skipLF = true;
+        else if (chunk[index] === LF) index += 1;
+      }
+    }
+  }
+  if (lineOpen && !(closed && !countAll)) finishLine();
+
   return {
     kind: 'text',
-    path: resolvedPath,
-    content: lines.join('\n'),
-    startLine,
-    endLine,
-    totalLines,
+    content: selected.join('\n'),
+    startLine: offset,
+    endLine: offset + selected.length - 1,
+    totalLines: countAll || !hasMore ? lines : undefined,
     truncatedByBytes,
     truncatedByLineLength,
     hasMore,
   };
 }
 
-async function readFastPath(
+async function readText(
   resolvedPath: string,
   offset: number,
   limit: number,
+  streaming: boolean,
   signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
   const file = handle ?? (await open(resolvedPath, 'r'));
-  const ownsHandle = !handle;
-  let raw: string;
   try {
-    raw = (await readAllFileBytes(file, signal)).toString('utf8');
+    const { size } = await file.stat();
+    const countAll = !streaming && size <= FAST_PATH_MAX_BYTES;
+    return {
+      ...(await scanText(file, offset, limit, countAll, size, signal)),
+      path: resolvedPath,
+    };
   } finally {
-    if (ownsHandle) await file.close().catch(() => undefined);
+    if (!handle) await file.close().catch(() => undefined);
   }
-  signal?.throwIfAborted();
-  const split = splitLogicalLines(raw);
-  const { selected, truncatedByBytes, truncatedByLineLength, hasMore } =
-    selectBudgetedLines(split, offset, limit);
-
-  return buildTextResult(
-    resolvedPath,
-    selected,
-    offset,
-    split.length,
-    truncatedByBytes,
-    truncatedByLineLength,
-    hasMore,
-  );
 }
 
-// Read a file through explicitly positioned operations. Keeping the position
-// explicit makes this safe to reuse after a parser has consumed the same
-// descriptor and lets cancellation be checked between bounded chunks.
-export async function readAllFileBytes(
-  handle: FileHandle,
-  signal?: AbortSignal,
-): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  const chunkBuffer = Buffer.alloc(STREAM_CHUNK_BYTES);
-  let position = 0;
-
-  for (;;) {
-    signal?.throwIfAborted();
-    const { bytesRead } = await handle.read(
-      chunkBuffer,
-      0,
-      chunkBuffer.length,
-      position,
-    );
-    if (bytesRead === 0) break;
-    position += bytesRead;
-    chunks.push(Buffer.from(chunkBuffer.subarray(0, bytesRead)));
-  }
-
-  signal?.throwIfAborted();
-  return Buffer.concat(chunks);
-}
-
-// Reads the file with explicitly positioned handle reads. A shared handle is
-// consumed without moving its cursor and never handed to a stream, so the
-// engine keeps single ownership of the descriptor lifecycle; when no handle
-// is provided (direct API use) a private one is opened and closed here.
-async function readStreamingPath(
-  resolvedPath: string,
-  offset: number,
-  limit: number,
-  signal?: AbortSignal,
-  sharedHandle?: FileHandle,
-): Promise<TextReadResult> {
-  signal?.throwIfAborted();
-  const handle = sharedHandle ?? (await open(resolvedPath, 'r'));
-  const ownsHandle = !sharedHandle;
-  const decoder = new StringDecoder('utf8');
-  const selected: string[] = [];
-  const budget = createOutputBudgetState();
-  let lineNumber = 0;
-  let truncatedByBytes = false;
-  let truncatedByLineLength = false;
-  let hasMore = false;
-  let currentLine = '';
-  let currentLineTruncated = false;
-  let currentLineStarted = false;
-  let pendingCarriageReturn = false;
-  let stopped = false;
-  let aborted = false;
-
-  const onAbort = (): void => {
-    aborted = true;
-    hasMore = true;
-    stopped = true;
-  };
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  function stopWithMore(): void {
-    hasMore = true;
-    stopped = true;
-  }
-
-  function appendChunkToCurrentLine(chunk: string): void {
-    if (chunk.length === 0 || stopped) return;
-
-    currentLineStarted = true;
-
-    if (lineNumber + 1 < offset) {
-      return;
-    }
-
-    if (selected.length >= limit) {
-      stopWithMore();
-      return;
-    }
-
-    if (currentLine.length >= MAX_LINE_LENGTH) {
-      currentLineTruncated = true;
-      return;
-    }
-
-    const remaining = MAX_LINE_LENGTH - currentLine.length;
-    if (chunk.length <= remaining) {
-      currentLine += chunk;
-      return;
-    }
-
-    currentLine += chunk.slice(0, remaining);
-    currentLineTruncated = true;
-  }
-
-  function finishCurrentLine(): void {
-    if (stopped) return;
-
-    lineNumber += 1;
-    if (lineNumber >= offset) {
-      if (selected.length >= limit) {
-        stopWithMore();
-        return;
-      }
-
-      const normalized = currentLineTruncated ? `${currentLine}…` : currentLine;
-      if (!appendLineWithinOutputBudget(selected, budget, normalized)) {
-        truncatedByBytes = true;
-        stopWithMore();
-        return;
-      }
-
-      truncatedByLineLength ||= currentLineTruncated;
-    }
-
-    currentLine = '';
-    currentLineTruncated = false;
-    currentLineStarted = false;
-  }
-
-  function processChunk(chunk: string): void {
-    let index = 0;
-
-    if (pendingCarriageReturn) {
-      pendingCarriageReturn = false;
-      finishCurrentLine();
-      if (stopped) return;
-      if (chunk.startsWith('\n')) {
-        index = 1;
-      }
-    }
-
-    while (index < chunk.length && !stopped) {
-      const carriageReturnIndex = chunk.indexOf('\r', index);
-      const lineFeedIndex = chunk.indexOf('\n', index);
-      const nextBreakIndex =
-        carriageReturnIndex === -1
-          ? lineFeedIndex
-          : lineFeedIndex === -1
-            ? carriageReturnIndex
-            : Math.min(carriageReturnIndex, lineFeedIndex);
-
-      if (nextBreakIndex === -1) {
-        appendChunkToCurrentLine(chunk.slice(index));
-        break;
-      }
-
-      appendChunkToCurrentLine(chunk.slice(index, nextBreakIndex));
-      if (stopped) break;
-
-      if (chunk[nextBreakIndex] === '\r') {
-        if (
-          nextBreakIndex + 1 < chunk.length &&
-          chunk[nextBreakIndex + 1] === '\n'
-        ) {
-          finishCurrentLine();
-          index = nextBreakIndex + 2;
-          continue;
-        }
-
-        if (nextBreakIndex + 1 >= chunk.length) {
-          pendingCarriageReturn = true;
-          break;
-        }
-      }
-
-      finishCurrentLine();
-      index = nextBreakIndex + 1;
-    }
-  }
-
-  try {
-    signal?.throwIfAborted();
-    const chunkBuffer = Buffer.alloc(STREAM_CHUNK_BYTES);
-    let position = 0;
-    // Positioned reads: the shared handle cursor is never moved, and each
-    // short read just means fewer bytes this round.
-    for (;;) {
-      if (aborted) throw new Error('Read aborted');
-      const { bytesRead } = await handle.read(
-        chunkBuffer,
-        0,
-        chunkBuffer.length,
-        position,
-      );
-      if (bytesRead === 0) break;
-      position += bytesRead;
-      processChunk(decoder.write(chunkBuffer.subarray(0, bytesRead)));
-      if (stopped) break;
-    }
-    if (!stopped) {
-      const tail = decoder.end();
-      if (tail.length > 0) {
-        processChunk(tail);
-      }
-    }
-
-    if (aborted) throw new Error('Read aborted');
-
-    if (!stopped) {
-      if (pendingCarriageReturn) {
-        pendingCarriageReturn = false;
-        finishCurrentLine();
-      } else if (currentLineStarted) {
-        finishCurrentLine();
-      }
-    }
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
-    if (ownsHandle) await handle.close().catch(() => undefined);
-  }
-
-  return buildTextResult(
-    resolvedPath,
-    selected,
-    offset,
-    hasMore ? undefined : lineNumber,
-    truncatedByBytes,
-    truncatedByLineLength,
-    hasMore,
-  );
-}
-
-export async function readTextFile(
+export function readTextFile(
   resolvedPath: string,
   offset: number,
   limit: number,
   signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<TextReadResult> {
-  signal?.throwIfAborted();
-  const fileStat = handle ? await handle.stat() : await stat(resolvedPath);
-  if (fileStat.size <= FAST_PATH_MAX_BYTES) {
-    return readFastPath(resolvedPath, offset, limit, signal, handle);
-  }
-  return readStreamingPath(resolvedPath, offset, limit, signal, handle);
+  return readText(resolvedPath, offset, limit, false, signal, handle);
 }
 
-export async function readTextFileStreaming(
+// Streaming semantics regardless of size: stops at the window and reports an
+// exact total only when EOF was reached.
+export function readTextFileStreaming(
   resolvedPath: string,
   offset: number,
   limit: number,
   signal?: AbortSignal,
   handle?: FileHandle,
 ): Promise<TextReadResult> {
-  signal?.throwIfAborted();
-  return readStreamingPath(resolvedPath, offset, limit, signal, handle);
+  return readText(resolvedPath, offset, limit, true, signal, handle);
 }

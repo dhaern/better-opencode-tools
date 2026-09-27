@@ -171,4 +171,18 @@ describe('readTextFile', () => {
       await file.close();
     }
   });
+
+  test('scans sparse line-break kinds in linear time', async () => {
+    for (const [contents, total] of [
+      ['\n'.repeat(8 * 1024 * 1024), 8 * 1024 * 1024],
+      [`${'\n'.repeat(65535)}\r`.repeat(64), 64 * 65535 + 1],
+      [`${'\r'.repeat(65535)}\n`.repeat(64), 64 * 65535],
+    ] as const) {
+      const filePath = await createTempFile(contents);
+      const result = await readTextFileStreaming(filePath, total - 1, 5);
+      expect(result.content).toBe('\n');
+      expect(result.totalLines).toBe(total);
+      expect(result.hasMore).toBe(false);
+    }
+  }, 4000);
 });
