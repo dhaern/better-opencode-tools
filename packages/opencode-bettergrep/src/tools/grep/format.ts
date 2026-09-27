@@ -12,9 +12,10 @@ function formatLine(
   text: string,
 ): string {
   const escapedText = escapeControlCharsPreservingNewlines(text);
+  // Contract: visible text never exceeds MAX_LINE_LENGTH (ellipsis included).
   const visibleText =
     escapedText.length > MAX_LINE_LENGTH
-      ? `${escapedText.slice(0, MAX_LINE_LENGTH)}...`
+      ? `${escapedText.slice(0, MAX_LINE_LENGTH - 1)}...`
       : escapedText;
   const parts = visibleText.split('\n');
   if (parts.length <= 1) {
