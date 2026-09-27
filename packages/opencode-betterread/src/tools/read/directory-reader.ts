@@ -1,9 +1,17 @@
 import type { Dirent } from 'node:fs';
 import { opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { buildDirectoryFooter, buildDirectoryOutput } from './directory-output';
-import { escapeStructuredSingleLineValue } from './formatter';
-import { fitsOutputBudget, getDirectoryLimit } from './limits';
+import { MAX_OUTPUT_BYTES, MAX_OUTPUT_CHARS } from './constants';
+import {
+  buildDirectoryFooter,
+  buildDirectoryOutput,
+  escapeDirectoryEntry,
+} from './directory-output';
+import {
+  escapeStructuredSingleLineValue,
+  escapeStructuredTagValue,
+} from './formatter';
+import { getDirectoryLimit } from './limits';
 import type { DirectoryReadResult } from './types';
 
 const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;
@@ -98,41 +106,51 @@ async function formatDirectoryEntry(
   return entry.name;
 }
 
-// Largest prefix of `entries` whose rendered output still fits the byte/char
-// budget, found by binary search instead of rebuilding the output once per
-// dropped entry (which is quadratic on large directories). The full page is
-// first checked with its real footer flags; the truncation note is only
-// budgeted once an actual cut is needed.
+// Measure each escaped entry once. The full page uses its actual footer flags;
+// a shortened page uses the exact footer and truncation note for its count.
 function budgetedDirectoryEntries(
   normalizedPath: string,
   entries: string[],
   buildFooter: (entriesCount: number, truncatedByBytes: boolean) => string,
-): { selected: string[]; truncatedByBytes: boolean } {
-  const build = (count: number, truncatedByBytes: boolean): string =>
-    buildDirectoryOutput(
-      normalizedPath,
-      entries.slice(0, count),
-      buildFooter(count, truncatedByBytes),
-    );
-
-  if (entries.length === 0 || fitsOutputBudget(build(entries.length, false))) {
-    return { selected: entries, truncatedByBytes: false };
-  }
-  if (!fitsOutputBudget(build(0, true))) {
-    return { selected: [], truncatedByBytes: true };
-  }
-
-  let low = 0;
-  let high = entries.length;
-  while (low + 1 < high) {
-    const mid = low + ((high - low) >> 1);
-    if (fitsOutputBudget(build(mid, true))) {
-      low = mid;
+): { selected: string[]; truncatedByBytes: boolean; formattedOutput: string } {
+  const escapedPath = escapeStructuredTagValue(normalizedPath);
+  const frame = `<path>${escapedPath}</path>\n<type>directory</type>\n<entries>\n\n</entries>\n`;
+  let chars = frame.length;
+  let bytes = Buffer.byteLength(frame, 'utf8');
+  const fits = (footer: string): boolean =>
+    chars + footer.length <= MAX_OUTPUT_CHARS &&
+    bytes + Buffer.byteLength(footer, 'utf8') <= MAX_OUTPUT_BYTES;
+  let selectedCount = 0;
+  let checking = fits(buildFooter(0, true));
+  const escapedEntries: string[] = [];
+  for (const entry of entries) {
+    const escaped = escapeDirectoryEntry(entry);
+    chars += escaped.length + (escapedEntries.length === 0 ? 0 : 1);
+    bytes +=
+      Buffer.byteLength(escaped, 'utf8') +
+      (escapedEntries.length === 0 ? 0 : 1);
+    escapedEntries.push(escaped);
+    if (checking && fits(buildFooter(escapedEntries.length, true))) {
+      selectedCount = escapedEntries.length;
     } else {
-      high = mid;
+      checking = false;
     }
   }
-  return { selected: entries.slice(0, low), truncatedByBytes: true };
+  const truncatedByBytes =
+    entries.length > 0 && !fits(buildFooter(entries.length, false));
+  const selected = truncatedByBytes ? entries.slice(0, selectedCount) : entries;
+  return {
+    selected,
+    truncatedByBytes,
+    formattedOutput: buildDirectoryOutput(
+      normalizedPath,
+      selected,
+      buildFooter(selected.length, truncatedByBytes),
+      truncatedByBytes
+        ? escapedEntries.slice(0, selectedCount)
+        : escapedEntries,
+    ),
+  };
 }
 
 export async function readDirectory(
@@ -176,22 +194,23 @@ export async function readDirectory(
   signal?.throwIfAborted();
   const normalizedPath = path.normalize(options.displayPath ?? resolvedPath);
 
-  const { selected, truncatedByBytes } = budgetedDirectoryEntries(
-    normalizedPath,
-    visible,
-    (entriesCount, truncated) =>
-      buildDirectoryFooter({
-        offset,
-        entriesCount,
-        totalEntries: scan.totalEntries,
-        totalEntriesKnown: scan.totalEntriesKnown,
-        hasMore:
-          truncated ||
-          !scan.totalEntriesKnown ||
-          startIndex + entriesCount < sortedEntries.length,
-        truncatedByBytes: truncated,
-      }),
-  );
+  const { selected, truncatedByBytes, formattedOutput } =
+    budgetedDirectoryEntries(
+      normalizedPath,
+      visible,
+      (entriesCount, truncated) =>
+        buildDirectoryFooter({
+          offset,
+          entriesCount,
+          totalEntries: scan.totalEntries,
+          totalEntriesKnown: scan.totalEntriesKnown,
+          hasMore:
+            truncated ||
+            !scan.totalEntriesKnown ||
+            startIndex + entriesCount < sortedEntries.length,
+          truncatedByBytes: truncated,
+        }),
+    );
 
   const hasMore =
     truncatedByBytes ||
@@ -208,5 +227,6 @@ export async function readDirectory(
     totalEntriesKnown: scan.totalEntriesKnown,
     hasMore,
     truncatedByBytes,
+    formattedOutput,
   };
 }

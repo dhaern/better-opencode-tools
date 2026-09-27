@@ -37,6 +37,7 @@ export type DirectoryReadResult = {
   totalEntriesKnown: boolean;
   hasMore: boolean;
   truncatedByBytes: boolean;
+  formattedOutput?: string;
 };
 
 export type ImageInfoResult = {

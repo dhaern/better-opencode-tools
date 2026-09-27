@@ -5,11 +5,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as publicModule from '../../index';
-import { MAX_OUTPUT_CHARS } from './constants';
+import { MAX_OUTPUT_BYTES, MAX_OUTPUT_CHARS } from './constants';
 import { formatDirectoryResult } from './directory-output';
 import { readDirectory } from './directory-reader';
 import { executeRead } from './engine';
 import { buildDirectoryMetadata } from './enhanced-metadata';
+import { renderTextResult } from './formatter';
 import {
   appendLineWithinOutputBudget,
   createOutputBudgetState,
@@ -120,6 +121,133 @@ test('line separator counts against the exact character cap', () => {
       .digest('hex'),
     metadataJson: JSON.stringify({ second, budget }),
   }).toMatchSnapshot();
+  const exact: string[] = [];
+  expect(
+    appendLineWithinOutputBudget(
+      exact,
+      createOutputBudgetState(),
+      'é'.repeat(MAX_OUTPUT_CHARS),
+    ),
+  ).toBe(true);
+});
+
+test('UTF-8 multibyte output obeys the byte budget independently of characters', () => {
+  const result = {
+    kind: 'text' as const,
+    path: '/tmp/multibyte.txt',
+    content: Array.from({ length: 50 }, () => '€'.repeat(4096)).join('\n'),
+    startLine: 1,
+    endLine: 50,
+    totalLines: 50,
+    truncatedByBytes: false,
+    truncatedByLineLength: false,
+    hasMore: false,
+  };
+  const rendered = renderTextResult(result);
+  expect(Buffer.byteLength(rendered.output, 'utf8')).toBeLessThanOrEqual(
+    MAX_OUTPUT_BYTES,
+  );
+  expect(
+    contract(rendered.output, {
+      endLine: rendered.endLine,
+      truncated: rendered.truncated,
+      hasMore: rendered.hasMore,
+      truncatedByBytes: rendered.truncatedByBytes,
+    }),
+  ).toMatchSnapshot();
+});
+
+test('a fully rendered text output fits when it equals the character cap', () => {
+  const result = {
+    kind: 'text' as const,
+    path: '/tmp/exact-fit.txt',
+    content: '',
+    startLine: 1,
+    endLine: 1,
+    totalLines: 1,
+    truncatedByBytes: false,
+    truncatedByLineLength: false,
+    hasMore: false,
+  };
+  const overhead = renderTextResult(result).output.length;
+  const rendered = renderTextResult({
+    ...result,
+    content: 'a'.repeat(MAX_OUTPUT_CHARS - overhead),
+  });
+  expect(rendered.output.length).toBe(MAX_OUTPUT_CHARS);
+  expect(rendered.truncatedByBytes).toBe(false);
+});
+
+test('the exact continuation footer is included when selecting a line at 9 to 10', () => {
+  const first = Array.from(
+    { length: 8 },
+    (_, index) => `${index + 1}: ${'x'.repeat(10)}`,
+  );
+  const frame = `<path>/tmp/footer.txt</path>\n<type>file</type>\n<content>\n${first.join('\n')}\n9: \n</content>\n(Showing lines 1-9. Use offset=10 to continue.)\n(Output capped by byte budget.)`;
+  const ninth = 'a'.repeat(MAX_OUTPUT_CHARS - frame.length);
+  const rendered = renderTextResult({
+    kind: 'text',
+    path: '/tmp/footer.txt',
+    content: `${first.map((line) => line.slice(3)).join('\n')}\n${ninth}\n${'b'.repeat(100)}`,
+    startLine: 1,
+    endLine: 10,
+    totalLines: 10,
+    truncatedByBytes: false,
+    truncatedByLineLength: false,
+    hasMore: false,
+  });
+  expect(rendered.endLine).toBe(9);
+  expect(rendered.output.length).toBe(MAX_OUTPUT_CHARS);
+});
+
+test('directory escaped names are budgeted before rendering', async () => {
+  const directory = '/tmp/betterread-escaped-contract';
+  const entries = Array.from({ length: 3000 }, (_, index) => ({
+    name: `entry${index.toString().padStart(5, '0')}${'&< >\n'.repeat(15)}`,
+    dirent: {
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    } as any,
+  }));
+  const result = await readDirectory(directory, 1, 4096, {
+    scanDirectoryEntries: async () => ({
+      entries,
+      totalEntries: entries.length,
+      totalEntriesKnown: true,
+    }),
+  });
+  const output = formatDirectoryResult(result);
+  expect(output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+  expect(
+    contract(output, buildDirectoryMetadata({ filePath: directory }, result)),
+  ).toMatchSnapshot();
+});
+
+test('directory trim budgets the truncation note, not the full-page footer', async () => {
+  const directory = '/tmp/betterread-note-contract';
+  const entries = Array.from({ length: 20000 }, (_, index) => ({
+    name: `n${index.toString().padStart(5, '0')}${'e'.repeat(14)}`,
+    dirent: {
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    } as any,
+  }));
+  const result = await readDirectory(directory, 1, 30000, {
+    scanDirectoryEntries: async () => ({
+      entries,
+      totalEntries: entries.length,
+      totalEntriesKnown: true,
+    }),
+  });
+  const output = formatDirectoryResult(result);
+  expect(output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+  expect(result.truncatedByBytes).toBe(true);
+  expect(
+    contract(output, {
+      selected: result.entries.length,
+      truncatedByBytes: result.truncatedByBytes,
+    }),
+  ).toMatchSnapshot();
 });
 
 test('directory escaping, ASCII, multibyte and bounded scan contracts', async () => {

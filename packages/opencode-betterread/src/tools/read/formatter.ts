@@ -2,9 +2,10 @@ import path from 'node:path';
 import {
   ATTACHMENT_UNAVAILABLE_NOTE,
   MAX_LINE_LENGTH,
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_CHARS,
   OUTPUT_CAPPED_NOTE,
 } from './constants';
-import { fitsOutputBudget } from './limits';
 import type {
   ImageInfoResult,
   NotebookReadResult,
@@ -77,35 +78,105 @@ function buildTextOutput(
 }
 
 // Renders the reader window; when numbering and framing push it past the
-// output budget, keeps the largest fitting prefix (binary search instead of
-// one rebuild per line, which is quadratic on large windows).
+// output budget, walks line costs once and keeps the largest fitting prefix.
 export function renderTextResult(
   result: TextReadResult | NotebookReadResult,
 ): RenderedTextResult {
-  const numberedLines =
-    result.endLine < result.startLine
-      ? []
-      : result.content
-          .split('\n')
-          .map((line, index) => `${result.startLine + index}: ${line}`);
+  const rawLines =
+    result.endLine < result.startLine ? [] : result.content.split('\n');
+  const numberedLines: string[] = [];
   const truncatedLineShown = (count: number): boolean =>
     result.firstTruncatedLine === undefined
       ? result.truncatedByLineLength
       : count > 0 && result.firstTruncatedLine <= result.startLine + count - 1;
-  const fullOutput = buildTextOutput(
-    result,
-    numberedLines,
-    result.hasMore,
-    result.truncatedByBytes,
-    truncatedLineShown(numberedLines.length),
+  const frame = `<path>${escapeStructuredTagValue(result.path)}</path>\n<type>${result.kind === 'notebook' ? 'notebook' : 'file'}</type>\n<content>\n</content>\n`;
+  const baseChars = frame.length;
+  const baseBytes = Buffer.byteLength(frame, 'utf8');
+  const noteChars = 1 + LINE_TRUNCATED_NOTE.length;
+  const cappedFooterChars =
+    `(Showing lines ${result.startLine}-`.length +
+    '. Use offset='.length +
+    ' to continue.)'.length +
+    1 +
+    OUTPUT_CAPPED_NOTE.length;
+  let endDigits = String(result.startLine).length;
+  let nextDigits = String(result.startLine + 1).length;
+  let endThreshold = 10 ** endDigits;
+  let nextThreshold = 10 ** nextDigits;
+  const emptyFooter = formatFooter(
+    result.startLine,
+    result.startLine - 1,
+    result.totalLines,
+    true,
   );
-  const rendered = {
-    startLine: result.startLine,
-  };
-  if (fitsOutputBudget(fullOutput)) {
+  let chars = 0;
+  let bytes = 0;
+  const asciiContent =
+    Buffer.byteLength(result.content, 'utf8') === result.content.length;
+  let selected = 0;
+  let checking =
+    baseChars +
+      emptyFooter.length +
+      (truncatedLineShown(0) ? noteChars : 0) +
+      1 +
+      OUTPUT_CAPPED_NOTE.length <=
+      MAX_OUTPUT_CHARS &&
+    baseBytes +
+      emptyFooter.length +
+      (truncatedLineShown(0) ? noteChars : 0) +
+      1 +
+      OUTPUT_CAPPED_NOTE.length <=
+      MAX_OUTPUT_BYTES;
+  let fullTooLarge = false;
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const line = `${result.startLine + index}: ${rawLines[index]}`;
+    numberedLines.push(line);
+    chars += line.length + 1;
+    bytes += (asciiContent ? line.length : Buffer.byteLength(line, 'utf8')) + 1;
+    if (
+      baseChars + chars > MAX_OUTPUT_CHARS ||
+      baseBytes + bytes > MAX_OUTPUT_BYTES
+    ) {
+      fullTooLarge = true;
+      break;
+    }
+    if (!checking) continue;
+    const end = result.startLine + index;
+    if (end >= endThreshold) {
+      endDigits += 1;
+      endThreshold *= 10;
+    }
+    if (end + 1 >= nextThreshold) {
+      nextDigits += 1;
+      nextThreshold *= 10;
+    }
+    // The footer's numbers are the only variable-width part; all its bytes
+    // are ASCII, so the same exact cost applies to UTF-16 and UTF-8 budgets.
+    const footerCost =
+      cappedFooterChars +
+      endDigits +
+      nextDigits +
+      (truncatedLineShown(index + 1) ? noteChars : 0);
+    checking =
+      baseChars + chars + footerCost <= MAX_OUTPUT_CHARS &&
+      baseBytes + bytes + footerCost <= MAX_OUTPUT_BYTES;
+    if (checking) selected = index + 1;
+  }
+  const fullTail = `${formatFooter(result.startLine, result.endLine, result.totalLines, result.hasMore)}${truncatedLineShown(rawLines.length) ? `\n${LINE_TRUNCATED_NOTE}` : ''}${result.truncatedByBytes ? `\n${OUTPUT_CAPPED_NOTE}` : ''}`;
+  const fullFits =
+    !fullTooLarge &&
+    baseChars + chars + fullTail.length <= MAX_OUTPUT_CHARS &&
+    baseBytes + bytes + Buffer.byteLength(fullTail, 'utf8') <= MAX_OUTPUT_BYTES;
+  if (fullFits) {
     return {
-      ...rendered,
-      output: fullOutput,
+      startLine: result.startLine,
+      output: buildTextOutput(
+        result,
+        numberedLines,
+        result.hasMore,
+        result.truncatedByBytes,
+        truncatedLineShown(numberedLines.length),
+      ),
       preview: numberedLines.slice(0, 20).join('\n'),
       truncated:
         result.hasMore ||
@@ -118,32 +189,21 @@ export function renderTextResult(
     };
   }
 
-  const build = (count: number) =>
-    buildTextOutput(
-      result,
-      numberedLines.slice(0, count),
-      true,
-      true,
-      truncatedLineShown(count),
-    );
-  let low = 0;
-  if (fitsOutputBudget(build(0))) {
-    let high = numberedLines.length;
-    while (low + 1 < high) {
-      const mid = low + ((high - low) >> 1);
-      if (fitsOutputBudget(build(mid))) low = mid;
-      else high = mid;
-    }
-  }
   return {
-    ...rendered,
-    output: build(low),
-    preview: numberedLines.slice(0, Math.min(low, 20)).join('\n'),
+    startLine: result.startLine,
+    output: buildTextOutput(
+      result,
+      numberedLines.slice(0, selected),
+      true,
+      true,
+      truncatedLineShown(selected),
+    ),
+    preview: numberedLines.slice(0, Math.min(selected, 20)).join('\n'),
     truncated: true,
     hasMore: true,
     truncatedByBytes: true,
-    truncatedByLineLength: truncatedLineShown(low),
-    endLine: result.startLine + low - 1,
+    truncatedByLineLength: truncatedLineShown(selected),
+    endLine: result.startLine + selected - 1,
   };
 }
 

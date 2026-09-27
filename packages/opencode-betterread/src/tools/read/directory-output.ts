@@ -36,25 +36,29 @@ export function buildDirectoryFooter(input: DirectoryFooterInput): string {
 }
 
 export function escapeDirectoryEntry(entry: string): string {
-  return escapeStructuredSingleLineValue(entry);
+  return /[\\\r\n&<>]/.test(entry)
+    ? escapeStructuredSingleLineValue(entry)
+    : entry;
 }
 
 export function buildDirectoryOutput(
   displayPath: string,
   entries: string[],
   footer: string,
+  escapedEntries = entries.map(escapeDirectoryEntry),
 ): string {
   return [
     `<path>${escapeStructuredTagValue(displayPath)}</path>`,
     '<type>directory</type>',
     '<entries>',
-    entries.map(escapeDirectoryEntry).join('\n'),
+    escapedEntries.join('\n'),
     '</entries>',
     footer,
   ].join('\n');
 }
 
 export function formatDirectoryResult(result: DirectoryReadResult): string {
+  if (result.formattedOutput !== undefined) return result.formattedOutput;
   return buildDirectoryOutput(
     result.path,
     result.entries,
