@@ -4,6 +4,7 @@ import { describe, expect, jest, mock, test } from 'bun:test';
 import { symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
+import { resolveOpenCodeEffect } from '../../utils/opencode-effects';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
 import { createExecutionContext, createTempTracker } from './test-helpers';
 import { createGlobTool } from './tool';
@@ -590,6 +591,9 @@ describe('tools/glob/tool', () => {
       metadata: expect.objectContaining({ count: 1 }),
     });
     expect(calls).toBe(1);
+    await expect(
+      resolveOpenCodeEffect(Effect.fail(new Error('effect failed'))),
+    ).rejects.toThrow('effect failed');
   });
 
   test('normalizes Windows permission separators without altering POSIX paths', () => {

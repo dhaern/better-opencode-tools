@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { getPlatformCandidatesAsync, platformCandidates } from './rg-release';
 
 describe('ripgrep platform candidates', () => {
-  test('maps the platform/arch/libc matrix in preferred order', () => {
+  test('maps the platform/arch/libc matrix without probing unsupported Linux arch', async () => {
     for (const [platform, arch, libc, targets] of [
       ['darwin', 'arm64', 'gnu', ['aarch64-apple-darwin']],
       ['darwin', 'x64', 'gnu', ['x86_64-apple-darwin']],
@@ -48,9 +48,6 @@ describe('ripgrep platform candidates', () => {
         targets: [...targets],
       });
     }
-  });
-
-  test('unsupported Linux arch never probes libc', async () => {
     let probed = false;
     expect(
       await getPlatformCandidatesAsync(

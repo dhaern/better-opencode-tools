@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { lock } from 'proper-lockfile';
+import type { lock } from 'proper-lockfile';
 import { raceSignal, throwIfAborted } from '../../utils/abort';
 import { InvalidCachedBinaryError, writeMetadataFile } from './install-io';
 import {
@@ -16,7 +16,7 @@ async function withInstallLock<T>(
   dir: string,
   fn: (signal: AbortSignal, canonicalDir: string) => Promise<T>,
   signal?: AbortSignal,
-  acquireLock: typeof lock = lock,
+  acquireLock?: typeof lock,
 ): Promise<T> {
   throwIfAborted(signal);
   await mkdir(dir, { recursive: true });
@@ -33,7 +33,8 @@ async function withInstallLock<T>(
     compromised.signal,
   ]);
 
-  const acquired = acquireLock(canonicalDir, {
+  const lockFile = acquireLock ?? (await import('proper-lockfile')).lock;
+  const acquired = lockFile(canonicalDir, {
     stale: LOCK_STALE_MS,
     update: Math.floor(LOCK_STALE_MS / 2),
     retries: { retries: 60, factor: 1, minTimeout: 100, maxTimeout: 250 },
