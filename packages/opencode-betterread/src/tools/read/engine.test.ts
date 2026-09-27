@@ -34,6 +34,44 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('does not misclassify text with BM or high-bit signatures as images/PDFs', async () => {
+    const directory = await createWorkspace();
+    const cases: [string, Buffer | string][] = [
+      ['bm25.md', 'BM25 ranking notes\n'],
+      ['bmw.md', 'BMW notes on vehicle history\n'],
+      ['latin1-gif.txt', Buffer.from('ÇÉÆ¸¹á text\n', 'latin1')],
+      [
+        'high-gif.txt',
+        Buffer.concat([
+          Buffer.from('GIF89a').map((byte) => byte | 0x80),
+          Buffer.from(' text\n'),
+        ]),
+      ],
+      [
+        'high-pdf.txt',
+        Buffer.concat([
+          Buffer.from('%PDF-').map((byte) => byte | 0x80),
+          Buffer.from(' text\n'),
+        ]),
+      ],
+    ];
+    for (const [name, contents] of cases) {
+      const filePath = path.join(directory, name);
+      await writeFile(filePath, contents);
+      const result = await executeRead({ args: { filePath }, directory });
+      expect(result.metadata.kind).toBe('text');
+      expect(result.attachments).toBeUndefined();
+    }
+    const invalidBmp = Buffer.alloc(58);
+    invalidBmp.write('BM');
+    invalidBmp.writeUInt32LE(24, 14);
+    const filePath = path.join(directory, 'invalid.bmp');
+    await writeFile(filePath, invalidBmp);
+    expect(
+      (await executeRead({ args: { filePath }, directory })).metadata.kind,
+    ).not.toBe('image');
+  });
+
   test('embeds BMP images with a valid DIB header', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'tiny.bmp');

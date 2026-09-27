@@ -29,6 +29,23 @@ const TEXT_EXTENSIONS = new Set([
   '.yml',
 ]);
 
+// A BM prefix alone is common in ordinary text. Require a recognized DIB
+// header before treating it as a bitmap.
+const BMP_DIB_HEADER_SIZES = new Set([12, 16, 40, 52, 56, 64, 108, 124]);
+
+function startsWithBytes(
+  sample: Buffer,
+  signature: string,
+  offset = 0,
+): boolean {
+  return (
+    sample.length >= offset + signature.length &&
+    sample
+      .subarray(offset, offset + signature.length)
+      .equals(Buffer.from(signature, 'latin1'))
+  );
+}
+
 export function sniffMime(sample: Buffer): string | undefined {
   if (
     sample.length >= 8 &&
@@ -46,30 +63,23 @@ export function sniffMime(sample: Buffer): string | undefined {
   ) {
     return 'image/jpeg';
   }
-  if (
-    sample.length >= 6 &&
-    sample.subarray(0, 6).toString('ascii') === 'GIF87a'
-  )
-    return 'image/gif';
-  if (
-    sample.length >= 6 &&
-    sample.subarray(0, 6).toString('ascii') === 'GIF89a'
-  )
+  if (startsWithBytes(sample, 'GIF87a') || startsWithBytes(sample, 'GIF89a'))
     return 'image/gif';
   if (
     sample.length >= 12 &&
-    sample.subarray(0, 4).toString('ascii') === 'RIFF' &&
-    sample.subarray(8, 12).toString('ascii') === 'WEBP'
+    startsWithBytes(sample, 'RIFF') &&
+    startsWithBytes(sample, 'WEBP', 8)
   ) {
     return 'image/webp';
   }
-  if (sample.length >= 2 && sample.subarray(0, 2).toString('ascii') === 'BM') {
+  if (
+    startsWithBytes(sample, 'BM') &&
+    sample.length >= 18 &&
+    BMP_DIB_HEADER_SIZES.has(sample.readUInt32LE(14))
+  ) {
     return 'image/bmp';
   }
-  if (
-    sample.length >= 5 &&
-    sample.subarray(0, 5).toString('ascii') === '%PDF-'
-  ) {
+  if (startsWithBytes(sample, '%PDF-')) {
     return 'application/pdf';
   }
   return undefined;
