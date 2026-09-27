@@ -1,10 +1,12 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import { AbortWaitError } from '../../utils/abort';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
+  duration,
   spawnSupervised,
 } from '../../utils/process-supervisor';
-import { AbortWaitError, resolveGlobCliWithAutoInstall } from './resolver';
+import { resolveGlobCliWithAutoInstall } from './resolver';
 import { buildRgCommand } from './rg-args';
 import {
   collectMatchedPaths,
@@ -22,14 +24,6 @@ import {
   waitForManagedCleanup,
 } from './supervised-search';
 import type { GlobRunner } from './types';
-
-export { collectMatchedPaths } from './runner-output';
-export {
-  adaptSupervisedSearch,
-  DEFAULT_CLEANUP_WAIT_MS,
-  type ManagedSearch,
-  POST_EXIT_DRAIN_MS,
-} from './supervised-search';
 
 interface SpawnOptions {
   cwd: string;
@@ -365,9 +359,7 @@ export function createRipgrepRunner(
           DEFAULT_CLEANUP_TIMEOUT_MS +
           (deps.postExitDrainMs ?? POST_EXIT_DRAIN_MS);
         const requestedBudget = deps.cleanupWaitMs ?? defaultBudget;
-        const budget = Number.isFinite(requestedBudget)
-          ? Math.max(0, Math.min(requestedBudget, 2_147_483_647))
-          : DEFAULT_CLEANUP_WAIT_MS;
+        const budget = duration(requestedBudget, DEFAULT_CLEANUP_WAIT_MS);
         const remaining = Math.max(
           0,
           budget - (performance.now() - (stopRequestedAt ?? performance.now())),

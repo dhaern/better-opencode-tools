@@ -1,14 +1,13 @@
 import { performance } from 'node:perf_hooks';
+import { raceSignal } from '../../utils/abort';
 import { DEFAULT_GLOB_TIMEOUT_MS } from './constants';
 import { MAX_TIMEOUT_MS } from './normalize';
 import { DEFAULT_CLEANUP_WAIT_MS } from './supervised-search';
 
 export const TIMEOUT_ERROR_MESSAGE =
   'glob search exceeded its automatic deadline.';
-// The runner has an independent TERM grace, supervisor watchdog and output
-// drain phase. The small margin lets the outer promise observe that bounded
-// result instead of rejecting first due to timer scheduling.
-const RUNNER_ABORT_GRACE_MS = DEFAULT_CLEANUP_WAIT_MS + 250;
+// Allow the runner's TERM/watchdog/drain to settle before the outer deadline.
+export const RUNNER_ABORT_GRACE_MS = DEFAULT_CLEANUP_WAIT_MS + 250;
 
 /** Measures automatic work and aborts pending preparation when it expires. */
 export class AutoClock {
@@ -110,69 +109,5 @@ export function raceAbort<T>(
   operation: () => Promise<T> | T,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-
-  const promise = Promise.resolve().then(() => {
-    if (signal.aborted) throw abortReason(signal);
-    return operation();
-  });
-
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener('abort', onAbort);
-    const onAbort = () => {
-      cleanup();
-      reject(abortReason(signal));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
-}
-
-export function runWithDeadline<T>(
-  operation: () => Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-
-  const promise = Promise.resolve().then(() => {
-    if (signal.aborted) throw abortReason(signal);
-    return operation();
-  });
-
-  return new Promise<T>((resolve, reject) => {
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      clearTimeout(graceTimer);
-      signal.removeEventListener('abort', onAbort);
-    };
-    const onAbort = () => {
-      if (graceTimer) return;
-      graceTimer = setTimeout(() => {
-        cleanup();
-        reject(abortReason(signal));
-      }, RUNNER_ABORT_GRACE_MS);
-      graceTimer.unref?.();
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
-    );
-  });
+  return raceSignal(operation, signal, { reason: abortReason });
 }

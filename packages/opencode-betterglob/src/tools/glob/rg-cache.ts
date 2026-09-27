@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { throwIfAborted } from '../../utils/abort';
 import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
 import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
@@ -8,7 +9,6 @@ import {
   InvalidCachedBinaryError,
   MAX_CACHE_METADATA_BYTES,
   readRegularFile,
-  throwIfAborted,
 } from './install-io';
 
 export interface InstalledRipgrepMetadata {

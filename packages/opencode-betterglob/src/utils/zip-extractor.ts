@@ -1,4 +1,5 @@
 import { release } from 'node:os';
+import { createAbortError } from './abort';
 import {
   crossSpawn,
   isMissingExecutableError,
@@ -107,12 +108,6 @@ export async function getZipExtractionSupportErrorAsync(
   return (await commandSucceeds('unzip', ['-v'], signal))
     ? undefined
     : 'ripgrep auto-install requires unzip to extract zip archives.';
-}
-
-function createAbortError(): Error {
-  const error = new Error('ripgrep auto-install was aborted');
-  error.name = 'AbortError';
-  return error;
 }
 
 export async function extractZip(

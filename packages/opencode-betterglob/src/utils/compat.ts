@@ -2,6 +2,8 @@ import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import {
   ABORT_KILL_GRACE_MS,
+  capText,
+  DIAGNOSTIC_CAP_BYTES,
   POST_EXIT_DRAIN_MS,
   waitForProcessOutputWithAbortGrace,
 } from './process-output';
@@ -13,10 +15,6 @@ import {
 } from './process-supervisor';
 
 export { waitForProcessOutputWithAbortGrace } from './process-output';
-
-// Diagnostic cap mirroring the native adapter. Streams keep draining past
-// the cap so a chatty child never blocks on a full pipe.
-const COLLECT_CAP_BYTES = 8 * 1024;
 
 export function isMissingExecutableError(error: unknown): boolean {
   return (
@@ -50,13 +48,13 @@ function collectStream(
   let truncated = false;
   const onData = (value: Buffer | string) => {
     const chunk = typeof value === 'string' ? Buffer.from(value) : value;
-    if (retained >= COLLECT_CAP_BYTES) {
+    if (retained >= DIAGNOSTIC_CAP_BYTES) {
       truncated = true;
       return;
     }
-    if (retained + chunk.length > COLLECT_CAP_BYTES) {
-      chunks.push(chunk.subarray(0, COLLECT_CAP_BYTES - retained));
-      retained = COLLECT_CAP_BYTES;
+    if (retained + chunk.length > DIAGNOSTIC_CAP_BYTES) {
+      chunks.push(chunk.subarray(0, DIAGNOSTIC_CAP_BYTES - retained));
+      retained = DIAGNOSTIC_CAP_BYTES;
       truncated = true;
       return;
     }
@@ -66,13 +64,9 @@ function collectStream(
   // Observe data AND errors at construction, not when stdout()/stderr() is
   // eventually called. Keep one stable, already-observed promise per stream.
   const collected = new Promise<string>((resolve, reject) => {
-    const text = () => {
-      const body = Buffer.concat(chunks).toString('utf-8');
-      return truncated ? `${body}\n[${label} truncated at 8192 bytes]` : body;
-    };
     const finish = () => {
       stream.removeListener('data', onData);
-      resolve(text());
+      resolve(capText(chunks, truncated, label));
     };
     stream.on('error', reject);
     stream.once('end', finish);

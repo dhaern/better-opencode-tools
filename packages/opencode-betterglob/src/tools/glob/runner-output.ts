@@ -1,13 +1,10 @@
 import path from 'node:path';
+import { capText, DIAGNOSTIC_CAP_BYTES } from '../../utils/process-output';
 import type { GlobSearchResult, NormalizedGlobInput } from './types';
 
 export function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-// Diagnostic cap mirroring the native core-ripgrep adapter (8 KiB). The
-// stream keeps being drained so a chatty child cannot block on a full pipe.
-const STDERR_CAP_BYTES = 8 * 1024;
 
 export function sliceLimit(
   input: NormalizedGlobInput,
@@ -81,19 +78,18 @@ export function watchStderr(stream: NodeJS.ReadableStream | null): StderrWatch {
     };
   }
 
-  let buffer = Buffer.alloc(0);
   let truncated = false;
   const chunks: Buffer[] = [];
   let retained = 0;
   const onData = (chunk: Buffer | string) => {
     const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    if (retained >= STDERR_CAP_BYTES) {
+    if (retained >= DIAGNOSTIC_CAP_BYTES) {
       truncated = true;
       return;
     }
-    if (retained + data.length > STDERR_CAP_BYTES) {
-      chunks.push(data.subarray(0, STDERR_CAP_BYTES - retained));
-      retained = STDERR_CAP_BYTES;
+    if (retained + data.length > DIAGNOSTIC_CAP_BYTES) {
+      chunks.push(data.subarray(0, DIAGNOSTIC_CAP_BYTES - retained));
+      retained = DIAGNOSTIC_CAP_BYTES;
       truncated = true;
       return;
     }
@@ -104,11 +100,7 @@ export function watchStderr(stream: NodeJS.ReadableStream | null): StderrWatch {
   const stop = watchReader(stream, onData);
 
   return {
-    read: () => {
-      buffer = Buffer.concat(chunks);
-      const text = buffer.toString('utf-8');
-      return truncated ? `${text}\n[stderr truncated at 8192 bytes]` : text;
-    },
+    read: () => capText(chunks, truncated, 'stderr'),
     stop,
   };
 }

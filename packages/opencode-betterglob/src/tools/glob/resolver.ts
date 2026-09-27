@@ -1,4 +1,5 @@
 import which from 'which';
+import { AbortWaitError, raceSignal } from '../../utils/abort';
 import {
   crossSpawn,
   ensureSupervisorRuntime,
@@ -9,8 +10,6 @@ import { isSupervisorError } from '../../utils/process-supervisor';
 import { RG_BINARY } from './constants';
 import { installLatestStableRipgrep } from './downloader';
 import { getInstalledRipgrepPathAsync } from './rg-cache';
-
-export class AbortWaitError extends Error {}
 
 export interface ResolvedGlobCli {
   path: string;
@@ -69,7 +68,7 @@ async function defaultValidateExecutableAsync(
   signal?: AbortSignal,
 ): Promise<boolean> {
   if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw new AbortWaitError();
   }
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), PROBE_TIMEOUT_MS);
@@ -96,9 +95,7 @@ async function defaultValidateExecutableAsync(
     );
 
     if (signal?.aborted) {
-      throw new AbortWaitError(
-        'Search was cancelled before execution started.',
-      );
+      throw new AbortWaitError();
     }
     if (result.aborted || timeout.signal.aborted) {
       throw new Error('ripgrep executable validation timed out.');
@@ -111,9 +108,7 @@ async function defaultValidateExecutableAsync(
   } catch (error) {
     if (isSupervisorError(error)) throw error;
     if (signal?.aborted) {
-      throw new AbortWaitError(
-        'Search was cancelled before execution started.',
-      );
+      throw new AbortWaitError();
     }
     if (isMissingExecutable(error)) return false;
     throw error;
@@ -127,7 +122,7 @@ export async function resolveGlobCliAsync(
   signal?: AbortSignal,
 ): Promise<ResolvedGlobCli> {
   if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw new AbortWaitError();
   }
 
   await race(
@@ -166,38 +161,7 @@ function isAbortLike(error: unknown): boolean {
 }
 
 function race<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) {
-    // The shared installation promise is already running. Observe it even
-    // when this waiter is rejected before the race is installed, otherwise a
-    // later failure can become an unhandled rejection.
-    void promise.catch(() => undefined);
-    return Promise.reject(
-      new AbortWaitError('Search was cancelled before execution started.'),
-    );
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener('abort', onAbort);
-    const onAbort = () => {
-      cleanup();
-      reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
+  return raceSignal(promise, signal, { reason: () => new AbortWaitError() });
 }
 
 function release(current: SharedAutoInstallState): void {
@@ -247,9 +211,7 @@ function create(deps: GlobResolverDependencies): SharedAutoInstallState {
     } catch (error) {
       if (isSupervisorError(error)) throw error;
       if (isAbortLike(error) || controller.signal.aborted) {
-        throw new AbortWaitError(
-          'Search was cancelled before execution started.',
-        );
+        throw new AbortWaitError();
       }
 
       const logger = deps.logger ?? logAsync;
@@ -286,7 +248,7 @@ export async function resolveGlobCliWithAutoInstall(
   options: { allowAutoInstall?: boolean } = {},
 ): Promise<ResolvedGlobCli> {
   if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
+    throw new AbortWaitError();
   }
 
   const current = await resolveGlobCliAsync(deps, signal);

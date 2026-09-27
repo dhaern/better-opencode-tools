@@ -1,8 +1,8 @@
 import { access, writeFile } from 'node:fs/promises';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
 import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
 import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
-import { createAbortError, throwIfAborted } from './install-io';
 
 interface RipgrepReleaseAsset {
   name?: string;

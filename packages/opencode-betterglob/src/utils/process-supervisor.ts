@@ -174,10 +174,13 @@ process.on('message', message => {
 });
 `;
 
-function duration(value: number | undefined): number {
+export function duration(
+  value: number | undefined,
+  fallback = DEFAULT_KILL_GRACE_MS,
+): number {
   return value !== undefined && Number.isFinite(value)
     ? Math.max(0, Math.min(value, 2_147_483_647))
-    : DEFAULT_KILL_GRACE_MS;
+    : fallback;
 }
 
 /** POSIX-only primitive. The caller drains output, then releases or stops. */

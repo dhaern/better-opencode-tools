@@ -6,12 +6,21 @@ import {
   SupervisorRuntimeError,
 } from './process-supervisor';
 
-// Waits for a helper process after termination. There is no implicit
-// deadline for healthy runs: the grace window that escalates SIGTERM to
-// SIGKILL starts only on abort, failure or expired post-task drain, so long
-// legitimate extractions are never aborted early.
+// Only abort/failure/drain expiry starts the bounded TERM→KILL window.
 export const ABORT_KILL_GRACE_MS = 5_000;
 export const POST_EXIT_DRAIN_MS = 1_000;
+export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
+
+export function capText(
+  chunks: Buffer[],
+  truncated: boolean,
+  label: 'stdout' | 'stderr',
+): string {
+  const text = Buffer.concat(chunks).toString('utf-8');
+  return truncated
+    ? `${text}\n[${label} truncated at ${DIAGNOSTIC_CAP_BYTES} bytes]`
+    : text;
+}
 
 export function waitForProcessOutputWithAbortGrace(
   proc: CrossSpawnResult,

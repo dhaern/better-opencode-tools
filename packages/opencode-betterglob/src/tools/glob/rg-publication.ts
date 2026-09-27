@@ -2,21 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { lock } from 'proper-lockfile';
-import {
-  InvalidCachedBinaryError,
-  throwIfAborted,
-  writeMetadataFile,
-} from './install-io';
+import { raceSignal, throwIfAborted } from '../../utils/abort';
+import { InvalidCachedBinaryError, writeMetadataFile } from './install-io';
 import {
   type InstalledRipgrepMetadata,
   validateCachedBinaryAsync,
 } from './rg-cache';
 
-// Cross-process publication lock built on proper-lockfile: atomic acquisition
-// with an mtime heartbeat (stale detection) and compromise reporting. Held
-// only for the short publish phase (never during download). Acquisition is
-// raced against the caller's AbortSignal; a lock acquired after the signal
-// fired is released immediately instead of being used.
+// Lock only during publication; release late acquisitions after abort.
 const LOCK_STALE_MS = 60_000;
 
 async function withInstallLock<T>(
@@ -51,18 +44,8 @@ async function withInstallLock<T>(
   });
 
   let release: () => Promise<void>;
-  let removeAbortListener: () => void = () => undefined;
   try {
-    const abort = new Promise<never>((_, reject) => {
-      if (operationSignal.aborted) reject(operationSignal.reason);
-      else {
-        const onAbort = () => reject(operationSignal.reason);
-        operationSignal.addEventListener('abort', onAbort, { once: true });
-        removeAbortListener = () =>
-          operationSignal.removeEventListener('abort', onAbort);
-      }
-    });
-    release = await Promise.race([acquired, abort]);
+    release = await raceSignal(acquired, operationSignal);
   } catch (error) {
     // The acquisition may still complete after the race was lost; release
     // it so the lock is not held by a dead waiter.
@@ -73,8 +56,6 @@ async function withInstallLock<T>(
       () => undefined,
     );
     throw error;
-  } finally {
-    removeAbortListener();
   }
 
   try {

@@ -1,20 +1,8 @@
 import { O_NONBLOCK, O_RDONLY } from 'node:constants';
 import { createHash } from 'node:crypto';
 import { type FileHandle, open, rm } from 'node:fs/promises';
+import { throwIfAborted } from '../../utils/abort';
 import { isMissingExecutableError } from '../../utils/compat';
-
-export function createAbortError(): Error {
-  const error = new Error('ripgrep auto-install was aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
-export function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    if (signal.reason instanceof Error) throw signal.reason;
-    throw createAbortError();
-  }
-}
 
 export class InvalidCachedBinaryError extends Error {
   constructor(detail: string, options?: ErrorOptions) {

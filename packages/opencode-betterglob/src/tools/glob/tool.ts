@@ -3,6 +3,7 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import { raceSignal } from '../../utils/abort';
 import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
 import {
   GLOB_DESCRIPTION,
@@ -26,8 +27,8 @@ import {
 import {
   AutoClock,
   abortReason,
+  RUNNER_ABORT_GRACE_MS,
   raceAbort,
-  runWithDeadline,
   TIMEOUT_ERROR_MESSAGE,
   timeoutBudget,
   withHumanPause,
@@ -175,7 +176,7 @@ export function createGlobTool(
             // The runner's deadline covers its async resolver and rg process;
             // cap it by the remaining automatic budget. runWithDeadline then
             // waits long enough to receive the runner's bounded cleanup result.
-            const result = await runWithDeadline(
+            const result = await raceSignal(
               () =>
                 run(
                   {
@@ -185,6 +186,7 @@ export function createGlobTool(
                   executionSignal,
                 ),
               executionSignal,
+              { graceMs: RUNNER_ABORT_GRACE_MS, reason: abortReason },
             );
             const output = formatGlobResult(executionInput, result);
             const metadata = resultMetadata(raw, executionInput, result);

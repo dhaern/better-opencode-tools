@@ -10,12 +10,9 @@ import {
   spawnSupervised,
 } from '../../utils/process-supervisor';
 import { normalizeGlobInputAsync } from './normalize';
-import {
-  adaptSupervisedSearch,
-  collectMatchedPaths,
-  createRipgrepRunner,
-  type ManagedSearch,
-} from './runner';
+import { createRipgrepRunner } from './runner';
+import { collectMatchedPaths } from './runner-output';
+import { adaptSupervisedSearch, type ManagedSearch } from './supervised-search';
 import { createRepoContext, createTempTracker, until } from './test-helpers';
 
 function spawnTestSearch(

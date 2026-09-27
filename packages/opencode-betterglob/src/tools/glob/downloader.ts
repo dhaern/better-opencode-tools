@@ -1,5 +1,6 @@
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
 import { crossSpawn } from '../../utils/compat';
 import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
 import {
@@ -9,10 +10,8 @@ import {
 } from '../../utils/zip-extractor';
 import {
   computeSha256Async,
-  createAbortError,
   MAX_ARCHIVE_BYTES,
   MAX_EXTRACTED_ENTRIES,
-  throwIfAborted,
 } from './install-io';
 import {
   getInstalledRipgrepPathAsync,
