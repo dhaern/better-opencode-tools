@@ -1,9 +1,10 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, jest, spyOn, test } from 'bun:test';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { adaptSupervisedSearch } from '../tools/glob/supervised-search';
 import {
   ensureSupervisorRuntime,
   type ProcessHandle,
@@ -37,7 +38,66 @@ function fakeProcess() {
   return { child, result, signals };
 }
 
+const releaseCount = (send: ReturnType<typeof spyOn>) =>
+  send.mock.calls.filter(
+    (call: unknown[]) => (call[0] as { type?: string })?.type === 'release',
+  ).length;
+
 describe('utils/process-output collection lifecycle', () => {
+  test('clears completed drain timers in collection and search modes', async () => {
+    jest.useFakeTimers();
+    const set = spyOn(globalThis, 'setTimeout');
+    const clear = spyOn(globalThis, 'clearTimeout');
+    try {
+      for (const mode of ['collection', 'search'] as const) {
+        const { child, result } = fakeProcess();
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        const closed = Promise.withResolvers<void>();
+        const from = set.mock.calls.length;
+        const pending =
+          mode === 'collection'
+            ? waitForProcessOutputWithAbortGrace(
+                {
+                  ...result,
+                  exited: Promise.resolve(0),
+                  closed: closed.promise,
+                  release: async () => closed.resolve(),
+                },
+                undefined,
+                { postCloseDrainMs: 25 },
+              )
+            : adaptSupervisedSearch(
+                {
+                  proc: child,
+                  exited: Promise.resolve({ code: 0, signal: null }),
+                  closed: closed.promise,
+                  release: async () => closed.resolve(),
+                  stop: async () => closed.resolve(),
+                  exitCode: 0,
+                } as any,
+                { postExitDrainMs: 25 },
+              ).completed;
+        await Promise.resolve();
+        await Promise.resolve();
+        const drain = set.mock.results.find(
+          (_, index) => index >= from && set.mock.calls[index]?.[1] === 25,
+        )?.value;
+        expect(drain).toBeDefined();
+        child.stdout.emit('end');
+        child.stderr.emit('end');
+        await pending;
+        expect(clear.mock.calls.some(([handle]) => handle === drain)).toBe(
+          true,
+        );
+      }
+    } finally {
+      set.mockRestore();
+      clear.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   test.each([
     new SupervisorRuntimeError(),
     new CleanupUnconfirmedError('probe supervisor died'),
@@ -405,15 +465,7 @@ describe.skipIf(process.platform === 'win32')(
           stderr: 'nonzero',
           aborted: false,
         });
-        expect(
-          send.mock.calls.filter(
-            (call: unknown[]) =>
-              typeof call[0] === 'object' &&
-              call[0] !== null &&
-              'type' in call[0] &&
-              call[0].type === 'release',
-          ),
-        ).toHaveLength(1);
+        expect(releaseCount(send)).toBe(1);
       } finally {
         send.mockRestore();
         await child.stop(0);
@@ -475,15 +527,7 @@ describe.skipIf(process.platform === 'win32')(
         );
         expect(result.aborted).toBe(true);
         expect(child.proc.signalCode).toBe('SIGKILL');
-        expect(
-          send.mock.calls.filter(
-            (call: unknown[]) =>
-              typeof call[0] === 'object' &&
-              call[0] !== null &&
-              'type' in call[0] &&
-              call[0].type === 'release',
-          ),
-        ).toHaveLength(0);
+        expect(releaseCount(send)).toBe(0);
       } finally {
         send?.mockRestore();
         await child.stop(0);

@@ -154,19 +154,19 @@ describe('tools/glob/resolver', () => {
     },
   );
 
-  test('prefers system rg when available', async () => {
+  test.each([
+    ['valid system', true, null, '/usr/bin/rg', 'system-rg'],
+    ['managed fallback', false, '/managed/rg', '/managed/rg', 'managed-rg'],
+    ['missing', false, null, 'rg', 'missing-rg'],
+  ] as const)('resolves %s with precedence', async (_name, valid, managed, path, source) => {
     await expect(
       resolveGlobCliAsync({
         ensureSupervisorRuntimeAsync: async () => {},
         findExecutableAsync: async () => '/usr/bin/rg',
-        getInstalledRipgrepPathAsync: async () => null,
-        validateExecutableAsync: async () => true,
+        validateExecutableAsync: async () => valid,
+        getInstalledRipgrepPathAsync: async () => managed,
       }),
-    ).resolves.toEqual({
-      path: '/usr/bin/rg',
-      backend: 'rg',
-      source: 'system-rg',
-    });
+    ).resolves.toEqual({ path, backend: 'rg', source });
   });
 
   test.skipIf(process.platform === 'win32' || !process.versions.bun)(
@@ -214,36 +214,6 @@ describe('tools/glob/resolver', () => {
       }
     },
   );
-
-  test('falls back to managed rg when system rg is present but invalid', async () => {
-    await expect(
-      resolveGlobCliAsync({
-        ensureSupervisorRuntimeAsync: async () => {},
-        findExecutableAsync: async () => '/usr/bin/rg',
-        validateExecutableAsync: async () => false,
-        getInstalledRipgrepPathAsync: async () => '/managed/rg',
-      }),
-    ).resolves.toEqual({
-      path: '/managed/rg',
-      backend: 'rg',
-      source: 'managed-rg',
-    });
-  });
-
-  test('treats invalid system rg as missing when no managed rg exists', async () => {
-    await expect(
-      resolveGlobCliAsync({
-        ensureSupervisorRuntimeAsync: async () => {},
-        findExecutableAsync: async () => '/usr/bin/rg',
-        validateExecutableAsync: async () => false,
-        getInstalledRipgrepPathAsync: async () => null,
-      }),
-    ).resolves.toEqual({
-      path: 'rg',
-      backend: 'rg',
-      source: 'missing-rg',
-    });
-  });
 
   test('uses an asynchronous executable probe in the execution resolver', async () => {
     let probed = false;

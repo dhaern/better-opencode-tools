@@ -20,8 +20,11 @@ describe('tools/glob/tool', () => {
     source: 'system-rg' as const,
   });
 
-  function getAskInput(ctx: ReturnType<typeof createExecutionContext>) {
-    const call = ctx.ask.mock.calls[0] as unknown as
+  function getAskInput(
+    ctx: ReturnType<typeof createExecutionContext>,
+    index = 0,
+  ) {
+    const call = ctx.ask.mock.calls[index] as unknown as
       | [
           {
             permission: string;
@@ -88,13 +91,6 @@ describe('tools/glob/tool', () => {
     expect(ctx.metadata).toHaveBeenCalledTimes(1);
 
     const ask = getAskInput(ctx);
-    expect(ask.permission).toBe('glob');
-    expect(ask.patterns).toEqual(['*.ts']);
-    expect(ask.always).toEqual(['*']);
-    expect(ask.metadata.limit).toBe(DEFAULT_GLOB_LIMIT);
-    expect(ask.metadata.timeout_ms).toBe(DEFAULT_GLOB_TIMEOUT_MS);
-    expect(ask.metadata.hidden).toBe(true);
-    expect(ask.metadata.follow_symlinks).toBe(false);
     expect(ask).toEqual({
       permission: 'glob',
       patterns: ['*.ts'],
@@ -203,18 +199,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: outside }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const externalCall = ctx.ask.mock.calls[1] as unknown as
-      | [
-          {
-            permission: string;
-            patterns: string[];
-            always: string[];
-            metadata: Record<string, unknown>;
-          },
-        ]
-      | undefined;
-    if (!externalCall) throw new Error('external_directory ask was not called');
-    const external = externalCall[0];
+    const external = getAskInput(ctx, 1);
     const pattern = `${outside.replace(/\\/g, '/')}/*`;
     expect(external).toEqual({
       permission: 'external_directory',
@@ -278,9 +263,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: outside }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [{ permission: string }]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
   });
 
@@ -300,9 +283,7 @@ describe('tools/glob/tool', () => {
     ).rejects.toThrow(/Search path does not exist/);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [{ permission: string }]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
   });
 
@@ -386,16 +367,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: 'linked' }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [
-        {
-          permission: string;
-          patterns: string[];
-          always: string[];
-          metadata: Record<string, unknown>;
-        },
-      ]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
     expect(external.metadata.filepath).toBe(outside);
   });
@@ -568,16 +540,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: 'src' }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const install = (
-      ctx.ask.mock.calls[1] as unknown as [
-        {
-          permission: string;
-          patterns: string[];
-          always: string[];
-          metadata: Record<string, unknown>;
-        },
-      ]
-    )[0];
+    const install = getAskInput(ctx, 1);
     expect(install.permission).toBe('install_ripgrep');
     expect(install.metadata.action).toBe('auto_install_ripgrep');
     const cacheDir = permissionPath(getRipgrepCacheDir());

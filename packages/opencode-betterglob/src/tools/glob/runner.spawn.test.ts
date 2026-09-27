@@ -61,6 +61,16 @@ const fakeResolve = async () =>
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+function normalizeSearchInput(
+  args: Partial<Parameters<typeof normalizeGlobInputAsync>[0]>,
+  repoDir: string,
+) {
+  return normalizeGlobInputAsync(
+    { pattern: '*.ts', path: 'src', ...args },
+    createRepoContext(repoDir) as any,
+  );
+}
+
 function isAlive(pid: number | undefined): boolean {
   if (!pid) return false;
   try {
@@ -105,9 +115,9 @@ describe('tools/glob/runner spawn failures', () => {
       }),
       cleanupWaitMs: 2000,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: ending === 'limit' ? 1 : 10 },
-      createRepoContext(repoDir) as any,
+    const input = await normalizeSearchInput(
+      { limit: ending === 'limit' ? 1 : 10 },
+      repoDir,
     );
     const pending = run(input, controller.signal);
     void pending.then(() => {
@@ -183,10 +193,7 @@ describe('tools/glob/runner spawn failures', () => {
       }),
       cleanupWaitMs: 0,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: 1 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ limit: 1 }, repoDir);
     const pending = run(input, controller.signal);
     await nextTurn();
     child.stdout?.emit('data', 'a.ts\0');
@@ -229,9 +236,9 @@ describe('tools/glob/runner spawn failures', () => {
       },
       cleanupWaitMs: 2000,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: 1, timeout_ms: 1 },
-      createRepoContext(temps.createRepo()) as any,
+    const input = await normalizeSearchInput(
+      { limit: 1, timeout_ms: 1 },
+      temps.createRepo(),
     );
     const result = await run(input, new AbortController().signal);
     expect(result.truncated).toBe(true);
@@ -253,10 +260,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () =>
         adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
     const pending = run(input, new AbortController().signal);
     await nextTurn();
     fixture.child.stdout?.emit('data', 'a.ts\0');
@@ -297,10 +301,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () =>
         adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
     const pending = run(input, new AbortController().signal);
     await nextTurn();
     fixture.child.stdout?.emit('data', 'a.ts\0');
@@ -327,10 +328,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: fakeResolve,
       spawn: () => adaptSupervisedSearch(fixture.supervised),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(temps.createRepo()) as any,
-    );
+    const input = await normalizeSearchInput({}, temps.createRepo());
     let finished = false;
     const pending = run(input, new AbortController().signal);
     void pending.then(() => {
@@ -410,10 +408,7 @@ describe('tools/glob/runner spawn failures', () => {
     'timeout',
   ] as const)('does not spawn when %s arrives after CLI resolution wins the race', async (reason) => {
     const controller = new AbortController();
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(temps.createRepo()) as any,
-    );
+    const input = await normalizeSearchInput({}, temps.createRepo());
     let resolvedPathRead = false;
     let spawns = 0;
     const run = createRipgrepRunner({
@@ -474,10 +469,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: unexpected,
       spawn: unexpected,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(temps.createRepo()) as any,
-    );
+    const input = await normalizeSearchInput({}, temps.createRepo());
     const result = await run(input, controller.signal);
     expect(result.exitCode).toBe(reason === 'cancel' ? 130 : 124);
     expect(result.cancelled).toBe(reason === 'cancel');
@@ -493,10 +485,7 @@ describe('tools/glob/runner spawn failures', () => {
       resolve: fakeResolve,
       spawn: () => child,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(temps.createRepo()) as any,
-    );
+    const input = await normalizeSearchInput({}, temps.createRepo());
     const pending = run(input, new AbortController().signal);
     await nextTurn();
     child.stderr?.emit('data', stderr);
@@ -533,10 +522,7 @@ describe('tools/glob/runner spawn failures', () => {
       killGraceMs: 10,
     });
     const repoDir = temps.createRepo();
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({}, repoDir);
     const pending = run(input, controller.signal);
     await nextTurn();
     stdout.write('a.ts\0partial');
@@ -581,10 +567,7 @@ describe('tools/glob/runner spawn failures', () => {
       spawn: () => child,
       killGraceMs: 10,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(temps.createRepo()) as any,
-    );
+    const input = await normalizeSearchInput({}, temps.createRepo());
     // Pretend every numeric process/group lookup succeeds, including after
     // the old group disappeared and the PGID was reused. No ESRCH safety
     // assumption, and no probe can be mistaken for an ownership guarantee.
@@ -668,10 +651,7 @@ describe('tools/glob/runner spawn failures', () => {
         },
       });
       const repoDir = temps.createRepo();
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
-        createRepoContext(repoDir) as any,
-      );
+      const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
       try {
         const result = await run(input, controller.signal);
         expect(descendant).toBeDefined();
@@ -729,10 +709,7 @@ describe('tools/glob/runner spawn failures', () => {
           return managed;
         },
       });
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src', timeout_ms: 3000 },
-        createRepoContext(repoDir) as any,
-      );
+      const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
       try {
         const result = await run(input, new AbortController().signal);
         expect(descendant).toBeDefined();
@@ -764,10 +741,7 @@ describe('tools/glob/runner spawn failures', () => {
             options,
           ),
       });
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src' },
-        createRepoContext(temps.createRepo()) as any,
-      );
+      const input = await normalizeSearchInput({}, temps.createRepo());
       const result = await run(input, new AbortController().signal);
       expect(result.error).toContain('SIGTERM');
       expect(result.incomplete).toBe(true);
@@ -802,10 +776,7 @@ describe('tools/glob/runner spawn failures', () => {
           return spawned;
         },
       });
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src' },
-        createRepoContext(repoDir) as any,
-      );
+      const input = await normalizeSearchInput({}, repoDir);
       const result = await run(input, new AbortController().signal);
       expect(result.exitCode).toBe(code);
       expect(result.incomplete).toBe(incomplete);
@@ -843,10 +814,7 @@ describe('tools/glob/runner spawn failures', () => {
             supervisorExecutable: `${repoDir}/nonexistent-node`,
           }),
       });
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src' },
-        createRepoContext(repoDir) as any,
-      );
+      const input = await normalizeSearchInput({}, repoDir);
       const result = await run(input, new AbortController().signal);
       expect(result.error).toContain('infrastructure unavailable');
       expect(result.incomplete).toBe(true);
@@ -883,10 +851,7 @@ describe('tools/glob/runner spawn failures', () => {
           return managed;
         },
       });
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
-        createRepoContext(repoDir) as any,
-      );
+      const input = await normalizeSearchInput({ timeout_ms: 2000 }, repoDir);
       try {
         const result = await run(input, new AbortController().signal);
         expect(worker).toBeDefined();
@@ -911,10 +876,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn failed');
       },
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src' },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({}, repoDir);
     const result = await runRipgrep(input, new AbortController().signal);
 
     expect(result.files).toEqual([]);
@@ -931,10 +893,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn should not run');
       },
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 1000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 1000 }, repoDir);
     const started = Date.now();
     const result = await runRipgrep(input, new AbortController().signal);
 
@@ -953,10 +912,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn should not run');
       },
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 20 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 20 }, repoDir);
     const started = Date.now();
     const result = await runRipgrep(input, new AbortController().signal);
 
@@ -976,10 +932,7 @@ describe('tools/glob/runner spawn failures', () => {
         throw new Error('spawn threw');
       },
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 1000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 1000 }, repoDir);
     const started = Date.now();
     const result = await runRipgrep(input, new AbortController().signal);
 
@@ -1007,10 +960,7 @@ describe('tools/glob/runner spawn failures', () => {
           },
         ),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 200 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 200 }, repoDir);
     const started = Date.now();
     const result = await runRipgrep(input, new AbortController().signal);
     const elapsed = Date.now() - started;
@@ -1048,13 +998,10 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 20 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 20 }, repoDir);
 
     const result = await runRipgrep(input, new AbortController().signal);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await until(() => !isAlive(child?.pid), { timeoutMs: 1000, intervalMs: 5 });
 
     expect(result.timedOut).toBe(true);
     expect(isAlive(child?.pid)).toBe(false);
@@ -1080,9 +1027,9 @@ describe('tools/glob/runner spawn failures', () => {
           },
         ),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: 2, timeout_ms: 5000 },
-      createRepoContext(repoDir) as any,
+    const input = await normalizeSearchInput(
+      { limit: 2, timeout_ms: 5000 },
+      repoDir,
     );
     const started = Date.now();
     const result = await runRipgrep(input, new AbortController().signal);
@@ -1097,10 +1044,7 @@ describe('tools/glob/runner spawn failures', () => {
     // Direct stream test: every PassThrough.write() is one data event, so
     // the multibyte sequence is guaranteed to be split across chunks.
     const repoDir = temps.createRepo();
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 2000 }, repoDir);
     const stream = new PassThrough();
     const collected = collectMatchedPaths(input, stream);
     const payload = Buffer.from('é.ts\0odd\nname.ts\0', 'utf-8');
@@ -1118,10 +1062,7 @@ describe('tools/glob/runner spawn failures', () => {
 
   test('never publishes a path from a fragment without NUL terminator', async () => {
     const repoDir = temps.createRepo();
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 2000 }, repoDir);
     const stream = new PassThrough();
     const collected = collectMatchedPaths(input, stream);
     stream.write(Buffer.from('a.ts\0')); // complete record
@@ -1157,13 +1098,13 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: 2, timeout_ms: 5000 },
-      createRepoContext(repoDir) as any,
+    const input = await normalizeSearchInput(
+      { limit: 2, timeout_ms: 5000 },
+      repoDir,
     );
 
     const result = await runRipgrep(input, new AbortController().signal);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await until(() => !isAlive(child?.pid), { timeoutMs: 1000, intervalMs: 5 });
 
     expect(result.truncated).toBe(true);
     expect(result.timedOut).toBe(false);
@@ -1199,10 +1140,7 @@ describe('tools/glob/runner spawn failures', () => {
       },
       killGraceMs: 20,
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 5000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 5000 }, repoDir);
 
     // Inject only after the first data event; a wall-clock delay may fire
     // before a slow child has produced any bytes.
@@ -1239,9 +1177,9 @@ describe('tools/glob/runner spawn failures', () => {
           { stdio: ['pipe', 'pipe', 'pipe'] },
         ),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', limit: 1, timeout_ms: 3000 },
-      createRepoContext(repoDir) as any,
+    const input = await normalizeSearchInput(
+      { limit: 1, timeout_ms: 3000 },
+      repoDir,
     );
     const result = await runRipgrep(input, new AbortController().signal);
 
@@ -1272,10 +1210,7 @@ describe('tools/glob/runner spawn failures', () => {
           { stdio: ['pipe', 'pipe', 'pipe'] },
         ),
     });
-    const input = await normalizeGlobInputAsync(
-      { pattern: '*.ts', path: 'src', timeout_ms: 2000 },
-      createRepoContext(repoDir) as any,
-    );
+    const input = await normalizeSearchInput({ timeout_ms: 2000 }, repoDir);
     const result = await runRipgrep(input, new AbortController().signal);
 
     expect(result.files).toEqual([`${repoDir}/src/a.ts`]);

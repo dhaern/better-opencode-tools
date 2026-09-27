@@ -7,6 +7,7 @@ import fs, {
   chmodSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -22,6 +23,12 @@ import { lock } from 'proper-lockfile';
 import { runProcess } from '../../utils/process-output';
 import { extractZip } from '../../utils/zip-extractor';
 import { extractTarGz, installLatestStableRipgrep } from './downloader';
+import {
+  computeSha256Async,
+  fileStamp,
+  InvalidCachedBinaryError,
+  readRegularFile,
+} from './install-io';
 import {
   getInstalledRipgrepPathAsync,
   getRipgrepBinaryName,
@@ -109,6 +116,28 @@ describe('tools/glob/downloader', () => {
     };
   }
 
+  test('reads and hashes bounded regular files, rejecting excess and non-files', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'betterglob-io-'));
+    tempDirs.push(dir);
+    const file = path.join(dir, 'fixture');
+    writeFileSync(file, 'hello');
+    expect((await readRegularFile(file, 5)).toString()).toBe('hello');
+    expect(await computeSha256Async(file)).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    );
+    expect(await fileStamp(file)).toMatch(/^[^:]+:[^:]+:5:/);
+    await expect(readRegularFile(file, 4)).rejects.toThrow(
+      'Cached file exceeds its size limit:',
+    );
+    await expect(computeSha256Async(file, undefined, 4)).rejects.toBeInstanceOf(
+      InvalidCachedBinaryError,
+    );
+    if (process.platform !== 'win32')
+      await expect(readRegularFile(dir, 1024)).rejects.toThrow(
+        'Cached file is not a regular file:',
+      );
+  });
+
   (process.platform === 'linux' && ['arm64', 'x64'].includes(process.arch)
     ? test
     : test.skip)(
@@ -168,32 +197,27 @@ describe('tools/glob/downloader', () => {
         for (const call of syncCalls) expect(call).not.toHaveBeenCalled();
         const invalid = path.join(dir, 'invalid-archive');
         writeFileSync(invalid, 'not an archive');
-        const tarResult = await runProcess(
-          ['tar', '-xzf', invalid, '-C', source],
-          { stdout: 'ignore' },
-        );
-        expect(tarResult.stderr.trim().length).toBeGreaterThan(0);
-        const tarError = await extractTarGz(invalid, source).catch(
-          (error: Error) => error,
-        );
-        expect(tarError).toBeInstanceOf(Error);
-        expect((tarError as Error).message).toContain(
-          'ripgrep extraction failed (exit',
-        );
-        expect((tarError as Error).message).toContain(tarResult.stderr.trim());
-        const zipResult = await runProcess(
-          ['unzip', '-o', invalid, '-d', source],
-          { stdout: 'ignore' },
-        );
-        expect(zipResult.stderr.trim().length).toBeGreaterThan(0);
-        const zipError = await extractZip(invalid, source).catch(
-          (error: Error) => error,
-        );
-        expect(zipError).toBeInstanceOf(Error);
-        expect((zipError as Error).message).toContain(
-          'zip extraction failed (exit',
-        );
-        expect((zipError as Error).message).toContain(zipResult.stderr.trim());
+        for (const [command, extract, message] of [
+          [
+            ['tar', '-xzf', invalid, '-C', source],
+            extractTarGz,
+            'ripgrep extraction failed (exit',
+          ],
+          [
+            ['unzip', '-o', invalid, '-d', source],
+            extractZip,
+            'zip extraction failed (exit',
+          ],
+        ] as const) {
+          const output = await runProcess([...command], { stdout: 'ignore' });
+          expect(output.stderr.trim().length).toBeGreaterThan(0);
+          const error = await extract(invalid, source).catch(
+            (failure: Error) => failure,
+          );
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).message).toContain(message);
+          expect((error as Error).message).toContain(output.stderr.trim());
+        }
       } finally {
         for (const call of syncCalls) call.mockRestore();
         fetchMock.mockRestore();

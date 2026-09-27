@@ -109,79 +109,38 @@ describe('tools/glob/format', () => {
   });
 
   test('golden format and fallback parser matrix', async () => {
-    for (const { label, flags, note, count, truncated } of [
-      { label: 'empty', flags: {}, note: '', count: 0, truncated: false },
-      {
-        label: 'timeout',
-        flags: { timedOut: true },
-        note: 'Search timed out before completing.',
-        count: 0,
-        truncated: false,
-      },
-      {
-        label: 'cancelled',
-        flags: { cancelled: true },
-        note: 'Search was cancelled before completing.',
-        count: 0,
-        truncated: false,
-      },
-      {
-        label: 'incomplete',
-        flags: { incomplete: true },
-        note: 'Search stopped before completing.',
-        count: 0,
-        truncated: false,
-      },
-      {
-        label: 'timeout wins',
-        flags: { timedOut: true, cancelled: true, incomplete: true },
-        note: 'Search timed out before completing.',
-        count: 0,
-        truncated: false,
-      },
-      {
-        label: 'cancel wins',
-        flags: { cancelled: true, incomplete: true },
-        note: 'Search was cancelled before completing.',
-        count: 0,
-        truncated: false,
-      },
-      { label: 'rows', flags: {}, note: '', count: 1, truncated: false },
-      {
-        label: 'truncated rows',
-        flags: { truncated: true },
-        note: '',
-        count: 1,
-        truncated: true,
-      },
-      {
-        label: 'truncated timeout',
-        flags: { truncated: true, timedOut: true },
-        note: 'Search timed out before completing.',
-        count: 1,
-        truncated: true,
-      },
-      {
-        label: 'truncated cancelled',
-        flags: { truncated: true, cancelled: true },
-        note: 'Search was cancelled before completing.',
-        count: 1,
-        truncated: true,
-      },
-      {
-        label: 'truncated incomplete',
-        flags: { truncated: true, incomplete: true },
-        note: 'Search stopped before completing.',
-        count: 1,
-        truncated: true,
-      },
-    ]) {
-      const repoDir = temps.createRepo();
-      const file = path.join(repoDir, 'src', 'a.ts');
-      const input = await normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'src', limit: 1 },
-        createRepoContext(repoDir) as any,
-      );
+    const repoDir = temps.createRepo();
+    const file = path.join(repoDir, 'src', 'a.ts');
+    const input = await normalizeGlobInputAsync(
+      { pattern: '*.ts', path: 'src', limit: 1 },
+      createRepoContext(repoDir) as any,
+    );
+    // t=timeout, c=cancelled, i=incomplete, x=truncated.
+    for (const [label, status, note, count] of [
+      ['empty', '', '', 0],
+      ['timeout', 't', 'Search timed out before completing.', 0],
+      ['cancelled', 'c', 'Search was cancelled before completing.', 0],
+      ['incomplete', 'i', 'Search stopped before completing.', 0],
+      ['timeout wins', 'tci', 'Search timed out before completing.', 0],
+      ['cancel wins', 'ci', 'Search was cancelled before completing.', 0],
+      ['rows', '', '', 1],
+      ['truncated rows', 'x', '', 1],
+      ['truncated timeout', 'xt', 'Search timed out before completing.', 1],
+      [
+        'truncated cancelled',
+        'xc',
+        'Search was cancelled before completing.',
+        1,
+      ],
+      ['truncated incomplete', 'xi', 'Search stopped before completing.', 1],
+    ] as const) {
+      const flags = {
+        timedOut: status.includes('t'),
+        cancelled: status.includes('c'),
+        incomplete: status.includes('i'),
+        truncated: status.includes('x'),
+      };
+      const truncated = flags.truncated;
       const result = {
         ...createResult(repoDir),
         files: count ? [file] : [],

@@ -10,13 +10,13 @@ import { createRepoContext, createTempTracker } from './test-helpers';
 describe('tools/glob/normalize', () => {
   const temps = createTempTracker();
 
+  const normalizeOnly = (input: any, repoDir: string) =>
+    normalizeGlobInputAsync(input, createRepoContext(repoDir) as any);
+
   async function createNormalized(input: any, repoDir = temps.createRepo()) {
     return {
       repoDir,
-      normalized: await normalizeGlobInputAsync(
-        input,
-        createRepoContext(repoDir) as any,
-      ),
+      normalized: await normalizeOnly(input, repoDir),
     };
   }
 
@@ -41,9 +41,9 @@ describe('tools/glob/normalize', () => {
 
   test('resolves relative path against current directory', async () => {
     const repoDir = temps.createRepo();
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: '*.ts', path: 'src' },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
@@ -52,10 +52,7 @@ describe('tools/glob/normalize', () => {
 
   test('normalizes leading dot-slash relative patterns', async () => {
     const repoDir = temps.createRepo();
-    const normalized = await normalizeGlobInputAsync(
-      { pattern: './src/*.ts' },
-      createRepoContext(repoDir) as any,
-    );
+    const normalized = await normalizeOnly({ pattern: './src/*.ts' }, repoDir);
 
     expect(normalized.searchPath).toBe(repoDir);
     expect(normalized.relativePattern).toBe('src/*.ts');
@@ -65,10 +62,7 @@ describe('tools/glob/normalize', () => {
     if (process.platform === 'win32') return;
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, 'a[1].ts'), '');
-    const normalized = await normalizeGlobInputAsync(
-      { pattern: 'a\\[1\\].ts' },
-      createRepoContext(repoDir) as any,
-    );
+    const normalized = await normalizeOnly({ pattern: 'a\\[1\\].ts' }, repoDir);
 
     expect(normalized.relativePattern).toBe('a\\[1\\].ts');
   });
@@ -77,10 +71,7 @@ describe('tools/glob/normalize', () => {
     if (process.platform === 'win32') return;
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, 'a[1].ts'), '');
-    const normalized = await normalizeGlobInputAsync(
-      { pattern: 'a\\[1\\].ts' },
-      createRepoContext(repoDir) as any,
-    );
+    const normalized = await normalizeOnly({ pattern: 'a\\[1\\].ts' }, repoDir);
 
     expect(normalized.relativePattern).toBe('a\\[1\\].ts');
   });
@@ -96,9 +87,9 @@ describe('tools/glob/normalize', () => {
 
   test('extracts base directory and root-anchored pattern from absolute patterns', async () => {
     const repoDir = temps.createRepo();
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: path.join(repoDir, 'src', '*.ts') },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
@@ -110,9 +101,9 @@ describe('tools/glob/normalize', () => {
   test('lets absolute patterns take precedence over path like Claude-style normalization', async () => {
     const repoDir = temps.createRepo();
     const otherDir = temps.createRepo();
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: path.join(repoDir, 'src', '*.ts'), path: otherDir },
-      createRepoContext(otherDir) as any,
+      otherDir,
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
@@ -123,15 +114,12 @@ describe('tools/glob/normalize', () => {
     const repoDir = temps.createRepo();
 
     await expect(
-      normalizeGlobInputAsync(
-        { pattern: '*.ts', timeout_ms: 2_147_483_648 },
-        createRepoContext(repoDir) as any,
-      ),
+      normalizeOnly({ pattern: '*.ts', timeout_ms: 2_147_483_648 }, repoDir),
     ).rejects.toThrow(/timeout_ms must not exceed/);
 
-    const boundary = await normalizeGlobInputAsync(
+    const boundary = await normalizeOnly(
       { pattern: '*.ts', timeout_ms: 2_147_483_647 },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
     expect(boundary.timeoutMs).toBe(2_147_483_647);
   });
@@ -140,17 +128,11 @@ describe('tools/glob/normalize', () => {
     const repoDir = temps.createRepo();
 
     await expect(
-      normalizeGlobInputAsync(
-        { pattern: '*.ts', path: 'missing' },
-        createRepoContext(repoDir) as any,
-      ),
+      normalizeOnly({ pattern: '*.ts', path: 'missing' }, repoDir),
     ).rejects.toThrow(/Search path does not exist/);
 
     await expect(
-      normalizeGlobInputAsync(
-        { pattern: '*.md', path: 'README.md' },
-        createRepoContext(repoDir) as any,
-      ),
+      normalizeOnly({ pattern: '*.md', path: 'README.md' }, repoDir),
     ).rejects.toThrow(/Search path must be a directory/);
   });
 
@@ -177,10 +159,7 @@ describe('tools/glob/normalize', () => {
   test('honors .gitignore natively outside git repos via --no-require-git', async () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
-    const normalized = await normalizeGlobInputAsync(
-      { pattern: '*.ts' },
-      createRepoContext(repoDir) as any,
-    );
+    const normalized = await normalizeOnly({ pattern: '*.ts' }, repoDir);
 
     // rg reads .gitignore hierarchies itself with correct bases; the
     // plugin no longer reparents them through --ignore-file.
@@ -191,9 +170,9 @@ describe('tools/glob/normalize', () => {
   test('nested searches keep native hierarchical ignore semantics', async () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: '*.ts', path: 'src' },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     expect(buildRgArgs(normalized)).toContain('--no-require-git');
@@ -203,9 +182,9 @@ describe('tools/glob/normalize', () => {
     const repoDir = temps.createRepo();
     const outside = temps.createRepo();
     writeFileSync(path.join(repoDir, '.gitignore'), 'node_modules/\n');
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: '*.ts', path: outside },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     // Outside the worktree there is no ignore inheritance to emulate:
@@ -218,9 +197,9 @@ describe('tools/glob/normalize', () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, 'pkg-a'), { recursive: true });
     writeFileSync(path.join(repoDir, 'pkg-a', 'index.ts'), '');
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: path.join(repoDir, 'pkg-*', '*.ts') },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     expect(normalized.searchPath).toBe(repoDir);
@@ -230,10 +209,7 @@ describe('tools/glob/normalize', () => {
   test('supports absolute patterns with forward slashes', async () => {
     const repoDir = temps.createRepo();
     const pattern = `${repoDir.replace(/\\/g, '/')}/src/*.ts`;
-    const normalized = await normalizeGlobInputAsync(
-      { pattern },
-      createRepoContext(repoDir) as any,
-    );
+    const normalized = await normalizeOnly({ pattern }, repoDir);
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
     expect(normalized.relativePattern).toBe('/*.ts');
@@ -255,9 +231,9 @@ describe('tools/glob/normalize', () => {
   test('does not treat closing glob delimiters as magic by themselves', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, 'src]literal'), { recursive: true });
-    const normalized = await normalizeGlobInputAsync(
+    const normalized = await normalizeOnly(
       { pattern: path.join(repoDir, 'src]literal', '*.ts') },
-      createRepoContext(repoDir) as any,
+      repoDir,
     );
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src]literal'));

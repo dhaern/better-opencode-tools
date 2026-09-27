@@ -11,50 +11,33 @@ import {
 
 describe('ripgrep platform candidates', () => {
   test('maps the platform/arch/libc matrix without probing unsupported Linux arch', async () => {
-    for (const [platform, arch, libc, targets] of [
-      ['darwin', 'arm64', 'gnu', ['aarch64-apple-darwin']],
-      ['darwin', 'x64', 'gnu', ['x86_64-apple-darwin']],
-      ['win32', 'arm64', 'gnu', ['aarch64-pc-windows-msvc']],
-      ['win32', 'x64', 'gnu', ['x86_64-pc-windows-msvc']],
-      [
-        'linux',
-        'arm64',
-        'gnu',
-        ['aarch64-unknown-linux-gnu', 'aarch64-unknown-linux-musl'],
-      ],
-      [
-        'linux',
-        'arm64',
-        'musl',
-        ['aarch64-unknown-linux-musl', 'aarch64-unknown-linux-gnu'],
-      ],
-      [
-        'linux',
-        'x64',
-        'gnu',
-        ['x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl'],
-      ],
-      [
-        'linux',
-        'x64',
-        'musl',
-        ['x86_64-unknown-linux-musl', 'x86_64-unknown-linux-gnu'],
-      ],
-      ['linux', 'mips64', 'gnu', []],
+    for (const [platform, arch, libc, primary] of [
+      ['darwin', 'arm64', 'gnu', 'aarch64-apple-darwin'],
+      ['darwin', 'x64', 'gnu', 'x86_64-apple-darwin'],
+      ['win32', 'arm64', 'gnu', 'aarch64-pc-windows-msvc'],
+      ['win32', 'x64', 'gnu', 'x86_64-pc-windows-msvc'],
+      ['linux', 'arm64', 'gnu', 'aarch64-unknown-linux-gnu'],
+      ['linux', 'arm64', 'musl', 'aarch64-unknown-linux-musl'],
+      ['linux', 'x64', 'gnu', 'x86_64-unknown-linux-gnu'],
+      ['linux', 'x64', 'musl', 'x86_64-unknown-linux-musl'],
+      ['linux', 'mips64', 'gnu', ''],
     ] as const) {
-      expect({
-        platform,
-        arch,
-        libc,
-        targets: platformCandidates(platform, arch, libc).map(
-          (item) => item.target,
-        ),
-      }).toEqual({
-        platform,
-        arch,
-        libc,
-        targets: [...targets],
-      });
+      const targets = platformCandidates(platform, arch, libc).map(
+        (item) => item.target,
+      );
+      expect(targets).toEqual(
+        primary
+          ? platform === 'linux'
+            ? [
+                primary,
+                primary.replace(
+                  /-(gnu|musl)$/,
+                  libc === 'gnu' ? '-musl' : '-gnu',
+                ),
+              ]
+            : [primary]
+          : [],
+      );
     }
     let probed = false;
     expect(
@@ -90,20 +73,21 @@ describe('ripgrep platform candidates', () => {
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
-      fetch: (request) =>
-        request.url.endsWith('/exact')
-          ? new Response(new Uint8Array(maxBytes))
-          : request.url.endsWith('/oversize')
-            ? new Response(new Uint8Array(maxBytes + 1))
-            : new Response(
-                new ReadableStream({
-                  async pull(controller) {
-                    await Bun.sleep(10);
-                    sent += chunk.length;
-                    controller.enqueue(chunk);
-                  },
-                }),
-              ),
+      fetch(request) {
+        if (request.url.endsWith('/exact'))
+          return new Response(new Uint8Array(maxBytes));
+        if (request.url.endsWith('/oversize'))
+          return new Response(new Uint8Array(maxBytes + 1));
+        return new Response(
+          new ReadableStream({
+            async pull(controller) {
+              await Bun.sleep(10);
+              sent += chunk.length;
+              controller.enqueue(chunk);
+            },
+          }),
+        );
+      },
     });
     const abort = new AbortController();
     const deadline = setTimeout(
@@ -120,14 +104,15 @@ describe('ripgrep platform candidates', () => {
       await downloadArchive(`${server.url}exact`, exact, undefined, maxBytes);
       expect(readFileSync(exact).byteLength).toBe(maxBytes);
       const oversized = join(dir, 'oversized.tar.gz');
-      await expect(
-        downloadArchive(
-          `${server.url}oversize`,
-          oversized,
-          undefined,
-          maxBytes,
-        ),
-      ).rejects.toThrow(`Cached file exceeds its size limit: ${oversized}`);
+      const rejected = downloadArchive(
+        `${server.url}oversize`,
+        oversized,
+        undefined,
+        maxBytes,
+      );
+      await expect(rejected).rejects.toThrow(
+        `Cached file exceeds its size limit: ${oversized}`,
+      );
       expect(existsSync(oversized)).toBe(false);
     } finally {
       clearTimeout(deadline);
