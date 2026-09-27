@@ -1,12 +1,15 @@
 import { sanitizeTitle } from '../../tools/grep/path-utils';
+import {
+  FILE_SUMMARY_RE_SOURCE,
+  MATCH_SUMMARY_RE_SOURCE,
+  MTIME_NO_VISIBLE_RE_SOURCE,
+  NO_RESULTS_RE_SOURCE,
+} from '../../tools/grep/summary';
 
-const FILE_SUMMARY_RE = /^Found (\d+) matching file(?:s)?\.$/;
-const MATCH_SUMMARY_RE =
-  /^Found (\d+)(?: total)? match(?:es)? across (\d+) file(?:s)?\.$/;
-const NO_RESULTS_RE =
-  /^(?:No matches found\.|No files found\.|No visible (?:results|files) were collected before the search stopped\.)$/;
-const MTIME_NO_VISIBLE_RE =
-  /^(?:mtime (?:sorting|replay|discovery) could not produce visible results after discovering \d+ candidate file(?:s)?\.|Search stopped during mtime (?:sorting|replay|discovery) after discovering \d+ candidate file(?:s)? before replay produced visible results\.)$/;
+const FILE_SUMMARY_RE = new RegExp(FILE_SUMMARY_RE_SOURCE);
+const MATCH_SUMMARY_RE = new RegExp(MATCH_SUMMARY_RE_SOURCE);
+const NO_RESULTS_RE = new RegExp(NO_RESULTS_RE_SOURCE);
+const MTIME_NO_VISIBLE_RE = new RegExp(MTIME_NO_VISIBLE_RE_SOURCE);
 
 interface ToolExecuteAfterInput {
   tool: string;

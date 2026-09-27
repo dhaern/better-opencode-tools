@@ -1,4 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { formatGrepResult } from '../../tools/grep/format';
+import { normalizeGrepInput } from '../../tools/grep/normalize';
+import { createEmptyResult } from '../../tools/grep/result-utils';
+import type {
+  GrepSearchResult,
+  NormalizedGrepInput,
+} from '../../tools/grep/types';
 import { createGrepRenderMetadataHook, parseGrepSummary } from './index';
 
 describe('grep render metadata hook', () => {
@@ -85,6 +92,74 @@ describe('grep render metadata hook', () => {
       truncated: false,
       matches: 0,
       files: 0,
+    });
+  });
+
+  describe('formatter to hook parse-back contract', () => {
+    const inputFor = (outputMode: 'content' | 'count' | 'files_with_matches') =>
+      normalizeGrepInput(
+        { pattern: 'alpha', path: '.', output_mode: outputMode },
+        { directory: process.cwd(), worktree: process.cwd() },
+      );
+
+    const resultFor = (
+      input: NormalizedGrepInput,
+      overrides: Partial<GrepSearchResult>,
+    ): GrepSearchResult => ({ ...createEmptyResult(input), ...overrides });
+
+    const roundTrip = (
+      outputMode: 'content' | 'count' | 'files_with_matches',
+      overrides: Partial<GrepSearchResult>,
+    ) => {
+      const input = inputFor(outputMode);
+      return parseGrepSummary(
+        formatGrepResult(input, resultFor(input, overrides)),
+      );
+    };
+
+    test.each([
+      ['files_with_matches', 1, 1, 'file'],
+      ['files_with_matches', 5, 5, 'file'],
+      ['count', 7, 3, 'occurrence'],
+      ['count', 1, 1, 'occurrence'],
+      ['content', 7, 3, 'match'],
+      ['content', 1, 1, 'match'],
+    ] as const)('parses back %s output with %d matches across %d files', (outputMode, totalMatches, totalFiles, matchKind) => {
+      expect(
+        roundTrip(outputMode, { totalMatches, totalFiles, matchKind }),
+      ).toEqual({ matches: totalMatches, files: totalFiles });
+    });
+
+    test.each([
+      'content',
+      'count',
+      'files_with_matches',
+    ] as const)('parses back empty %s output as zero results', (outputMode) => {
+      expect(roundTrip(outputMode, {})).toEqual({ matches: 0, files: 0 });
+    });
+
+    test('parses back timed-out and mtime partial outputs as zero results', () => {
+      expect(roundTrip('content', { timedOut: true })).toEqual({
+        matches: 0,
+        files: 0,
+      });
+      expect(
+        roundTrip('content', {
+          partialPhase: 'replay',
+          discoveredFiles: 2,
+          timedOut: true,
+        }),
+      ).toEqual({ matches: 0, files: 0 });
+    });
+
+    test('failed searches have no parseable summary', () => {
+      const input = inputFor('content');
+      const output = formatGrepResult(
+        input,
+        resultFor(input, { error: 'boom' }),
+      );
+      expect(output.startsWith('grep search failed.')).toBe(true);
+      expect(parseGrepSummary(output)).toBeNull();
     });
   });
 

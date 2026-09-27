@@ -1,11 +1,14 @@
 import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { extractZip, getZipExtractionSupportError } from '../../utils';
 import {
   crossSpawn,
   waitForProcessOutputWithAbortGrace,
 } from '../../utils/compat';
+import {
+  extractZip,
+  getZipExtractionSupportError,
+} from '../../utils/zip-extractor';
 import {
   createAbortError,
   hasExecutable,

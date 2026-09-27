@@ -459,6 +459,7 @@ describe('tools/grep/tool', () => {
     expect(metadataInput.metadata.error_stage).toBe('normalize');
     expect(metadataInput.metadata.pattern).toBe('createTool');
     expect(metadataInput.metadata.path).toBe('missing-path');
+    expect(metadataInput.metadata).toMatchSnapshot();
   });
 
   test('does not let metadata failure break a successful grep result', async () => {

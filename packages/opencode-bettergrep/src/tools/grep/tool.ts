@@ -9,7 +9,11 @@ import {
 } from '../../utils/opencode-effects';
 import { GREP_DESCRIPTION, GREP_TOOL_ID } from './constants';
 import { formatGrepResult } from './format';
-import { normalizeGrepInput } from './normalize';
+import {
+  DEFAULT_OUTPUT_MODE,
+  DEFAULT_SORT_BY,
+  normalizeGrepInput,
+} from './normalize';
 import { sanitizeTitle } from './path-utils';
 import {
   askExternalDirectoryPermissions,
@@ -57,7 +61,8 @@ function buildBaseMetadata(
     include: normalized?.include ?? args.include,
     globs: normalized?.globs ?? args.globs ?? [],
     exclude_globs: normalized?.excludeGlobs ?? args.exclude_globs ?? [],
-    output_mode: normalized?.outputMode ?? args.output_mode ?? 'content',
+    output_mode:
+      normalized?.outputMode ?? args.output_mode ?? DEFAULT_OUTPUT_MODE,
     case_sensitive: normalized?.caseSensitive ?? args.case_sensitive !== false,
     smart_case: normalized?.smartCase ?? args.smart_case === true,
     word_regexp: normalized?.wordRegexp ?? args.word_regexp === true,
@@ -89,7 +94,7 @@ function buildBaseMetadata(
     exclude_file_types:
       normalized?.excludeFileTypes ?? args.exclude_file_types ?? [],
     max_filesize: normalized?.maxFilesize ?? args.max_filesize,
-    sort_by: normalized?.sortBy ?? args.sort_by ?? 'none',
+    sort_by: normalized?.sortBy ?? args.sort_by ?? DEFAULT_SORT_BY,
     sort_order: normalized?.sortOrder ?? args.sort_order,
   };
 }

@@ -1,5 +1,4 @@
 import { statSync } from 'node:fs';
-import { log } from '../../utils';
 import {
   defaultFindExecutable,
   defaultIsSupportedGrep,
@@ -235,7 +234,8 @@ function createSharedAutoInstall(
       }
 
       const fallback = await resolveAsync(deps, controller.signal);
-      const logger = deps.logger ?? log;
+      // The file logger is gone; deps.logger stays as an optional no-op seam.
+      const logger = deps.logger ?? (() => undefined);
 
       if (fallback.backend === 'grep') {
         logger('ripgrep auto-install failed; falling back to GNU grep.', {

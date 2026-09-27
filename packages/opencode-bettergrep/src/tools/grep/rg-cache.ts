@@ -76,6 +76,24 @@ function computeSha256(filePath: string): string {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
+function assertBinarySha256(actual: string, expected: string): void {
+  if (actual !== expected) {
+    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
+  }
+}
+
+function assertValidationOutput(output: string, exitCode: number | null): void {
+  if (exitCode !== 0) {
+    throw new Error(
+      `Installed ripgrep binary failed validation with exit ${String(exitCode)}.`,
+    );
+  }
+
+  if (!output.toLowerCase().includes('ripgrep')) {
+    throw new Error('Installed binary did not identify itself as ripgrep.');
+  }
+}
+
 export async function computeSha256Async(
   filePath: string,
   signal?: AbortSignal,
@@ -105,10 +123,7 @@ function validateCachedBinary(binaryPath: string): void {
   const metadata = readInstalledMetadata();
   const binarySha256 = computeSha256(binaryPath);
 
-  if (binarySha256 !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
+  assertBinarySha256(binarySha256, metadata.binarySha256);
   validateInstalledBinary(binaryPath);
 }
 
@@ -129,17 +144,8 @@ function validateInstalledBinary(
 
   throwIfAborted(signal);
 
-  if (result.status !== 0) {
-    throw new Error(
-      `Installed ripgrep binary failed validation with exit ${String(result.status)}.`,
-    );
-  }
-
-  const output =
-    `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`.toLowerCase();
-  if (!output.includes('ripgrep')) {
-    throw new Error('Installed binary did not identify itself as ripgrep.');
-  }
+  const output = `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`;
+  assertValidationOutput(output, result.status);
 }
 
 export async function validateInstalledBinaryAsync(
@@ -147,16 +153,8 @@ export async function validateInstalledBinaryAsync(
   signal?: AbortSignal,
 ): Promise<void> {
   const result = await probeCommand([binaryPath, '--version'], signal);
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Installed ripgrep binary failed validation with exit ${String(result.exitCode)}.`,
-    );
-  }
-
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (!output.includes('ripgrep')) {
-    throw new Error('Installed binary did not identify itself as ripgrep.');
-  }
+  const output = `${result.stdout}\n${result.stderr}`;
+  assertValidationOutput(output, result.exitCode);
 }
 
 export async function validateCachedBinaryAsync(
@@ -166,10 +164,7 @@ export async function validateCachedBinaryAsync(
   const metadata = await readInstalledMetadataAsync(signal);
   const binarySha256 = await computeSha256Async(binaryPath, signal);
 
-  if (binarySha256 !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
+  assertBinarySha256(binarySha256, metadata.binarySha256);
   await validateInstalledBinaryAsync(binaryPath, signal);
 }
 

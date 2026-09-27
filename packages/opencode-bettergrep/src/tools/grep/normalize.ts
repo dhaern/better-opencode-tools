@@ -11,6 +11,10 @@ import {
 } from './constants';
 import type { GrepToolInput, NormalizedGrepInput } from './types';
 
+// Defaults shared with the tool metadata fallbacks so both sides move together.
+export const DEFAULT_OUTPUT_MODE = 'content';
+export const DEFAULT_SORT_BY = 'none';
+
 function clampInteger(
   value: number | undefined,
   fallback: number,
@@ -163,10 +167,7 @@ export function normalizeGrepInput(
     rawTargets.length > 0
       ? requestedTargets.join(', ')
       : primaryTarget.requestedPath;
-  const resolvedPath =
-    rawTargets.length > 0
-      ? primaryTarget.resolvedPath
-      : primaryTarget.resolvedPath;
+  const resolvedPath = primaryTarget.resolvedPath;
   const searchPath = primaryTarget.searchPath;
   const include = cleanOptionalString(args.include);
   const globs = cleanStringArray(args.globs);
@@ -211,7 +212,7 @@ export function normalizeGrepInput(
     include,
     globs,
     excludeGlobs,
-    outputMode: args.output_mode ?? 'content',
+    outputMode: args.output_mode ?? DEFAULT_OUTPUT_MODE,
     caseSensitive,
     smartCase,
     wordRegexp: args.word_regexp === true,
@@ -242,7 +243,7 @@ export function normalizeGrepInput(
     fileTypes,
     excludeFileTypes,
     maxFilesize: cleanOptionalString(args.max_filesize),
-    sortBy: args.sort_by ?? 'none',
+    sortBy: args.sort_by ?? DEFAULT_SORT_BY,
     sortOrder: args.sort_order ?? (args.sort_by === 'mtime' ? 'desc' : 'asc'),
     cwd,
     worktree,
