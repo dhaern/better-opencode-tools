@@ -42,12 +42,15 @@ interface MemoizedCli {
   stamp: string;
 }
 let cliMemo = new WeakMap<GrepResolverDependencies, MemoizedCli>();
+export const AUTO_INSTALL_RETRY_AFTER_MS = 10 * 60_000;
+export const AUTO_INSTALL_TIMEOUT_MS = 30_000;
+let failedInstallRetryAfter = new WeakMap<GrepResolverDependencies, number>();
 
 function statStamp(binaryPath: string): string | undefined {
   try {
     const stat = statSync(binaryPath);
     return stat.isFile()
-      ? `${stat.ino}:${stat.size}:${stat.mtimeMs}`
+      ? `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.mode}`
       : undefined;
   } catch {
     return undefined;
@@ -73,6 +76,7 @@ function rememberCli(
 
 export function invalidateGrepCliResolverCache(): void {
   cliMemo = new WeakMap();
+  failedInstallRetryAfter = new WeakMap();
 }
 
 interface SharedAutoInstallState {
@@ -215,6 +219,11 @@ function createSharedAutoInstall(
   const installManagedRipgrep =
     deps.installLatestStableRipgrep ?? installLatestStableRipgrep;
   const controller = new AbortController();
+  const installController = new AbortController();
+  const abortInstall = () => installController.abort();
+  controller.signal.addEventListener('abort', abortInstall, { once: true });
+  let installTimer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const state: SharedAutoInstallState = {
     controller,
     waiters: 0,
@@ -224,12 +233,30 @@ function createSharedAutoInstall(
 
   state.promise = (async () => {
     try {
-      const installedPath = await installManagedRipgrep(controller.signal);
+      const deadline = new Promise<never>((_, reject) => {
+        installTimer = setTimeout(() => {
+          timedOut = true;
+          installController.abort();
+          reject(
+            new Error(
+              `ripgrep auto-install timed out after ${AUTO_INSTALL_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, AUTO_INSTALL_TIMEOUT_MS);
+      });
+      const installedPath = await raceWithAbort(
+        Promise.race([
+          installManagedRipgrep(installController.signal),
+          deadline,
+        ]),
+        controller.signal,
+      );
       // A previously memoized GNU fallback must not shadow a new managed rg.
       cliMemo.delete(deps);
+      failedInstallRetryAfter.delete(deps);
       return rememberCli(deps, resolvedCli(installedPath, 'managed-rg'));
     } catch (error) {
-      if (isAbortLikeError(error) || controller.signal.aborted) {
+      if (controller.signal.aborted || (!timedOut && isAbortLikeError(error))) {
         throw createSearchAbortError();
       }
 
@@ -238,6 +265,10 @@ function createSharedAutoInstall(
       const logger = deps.logger ?? (() => undefined);
 
       if (fallback.backend === 'grep') {
+        failedInstallRetryAfter.set(
+          deps,
+          Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
+        );
         logger('ripgrep auto-install failed; falling back to GNU grep.', {
           error: error instanceof Error ? error.message : String(error),
           grep_path: fallback.path,
@@ -250,6 +281,8 @@ function createSharedAutoInstall(
       });
       throw new Error(buildUnavailableBackendMessage(error));
     } finally {
+      clearTimeout(installTimer);
+      controller.signal.removeEventListener('abort', abortInstall);
       state.settled = true;
 
       if (autoInstallState === state) {
@@ -270,6 +303,14 @@ export async function resolveGrepCliWithAutoInstall(
 ): Promise<ResolvedGrepCli> {
   const current = await resolveAsync(deps, signal);
   if (current.backend === 'rg' && current.source !== 'missing-rg') {
+    failedInstallRetryAfter.delete(deps);
+    return current;
+  }
+
+  if (
+    current.backend === 'grep' &&
+    (failedInstallRetryAfter.get(deps) ?? 0) > Date.now()
+  ) {
     return current;
   }
 

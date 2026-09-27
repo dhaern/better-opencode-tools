@@ -112,7 +112,18 @@ export async function consumeBufferedBytes(
   while (true) {
     const { done, value } = await reader.read();
     buffer.append(value);
-    if (onBuffer(buffer, done) === false) {
+    let keepReading: boolean | undefined;
+    try {
+      keepReading = onBuffer(buffer, done);
+    } catch (error) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Cancellation is best-effort; preserve the consumer's original error.
+      }
+      throw error;
+    }
+    if (keepReading === false) {
       await reader.cancel();
       return;
     }

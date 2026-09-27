@@ -1,5 +1,9 @@
 /// <reference types="bun-types" />
 import { describe, expect, jest, test } from 'bun:test';
+import { Readable } from 'node:stream';
+import { executeMode } from './direct';
+import { consumeRgJsonStream } from './json-stream';
+import { normalizeGrepInput } from './normalize';
 import {
   attachTerminationHandlers,
   createFriendlySpawnError,
@@ -206,18 +210,99 @@ describe('tools/grep/runtime process termination', () => {
   });
 
   test('handles a rejected process promise without creating an unhandled rejection', async () => {
+    const failure = Object.assign(new Error('spawn failed'), {
+      code: 'EMFILE',
+    });
     const proc = {
       proc: {
         exitCode: null,
         signalCode: null,
       },
-      exited: Promise.reject(new Error('spawn failed')),
+      exited: Promise.reject(failure),
       kill: () => true,
     } as any;
 
     const result = await waitForExitAndStderr(proc, Promise.resolve(''));
-    expect(result.error).toBe('spawn failed');
+    expect(result.error).toBe(failure);
     killProcess(proc);
     await Promise.resolve();
+  });
+
+  test('classifies asynchronous ENOENT and EMFILE exits in direct execution', async () => {
+    const input = normalizeGrepInput({ pattern: 'needle', path: '.' }, {
+      directory: process.cwd(),
+      worktree: process.cwd(),
+    } as never);
+    const cli = {
+      path: '/definitely-not-installed/rg',
+      backend: 'rg' as const,
+      source: 'system-rg' as const,
+    };
+    const options = {
+      init: () => ({}),
+      consumeStdout: async () => {},
+      buildResult: (result: any) => result,
+      isStopped: () => false,
+    };
+    const missing = await executeMode(
+      input,
+      new AbortController().signal,
+      cli,
+      options,
+    );
+    expect(missing.error).toBe(
+      'rg is not available. Install ripgrep or allow the managed ripgrep installer to run.',
+    );
+
+    const failure = Object.assign(new Error('too many files'), {
+      code: 'EMFILE',
+    });
+    const proc = {
+      proc: { stdout: null, stderr: null, exitCode: null, signalCode: null },
+      exited: Promise.reject(failure),
+      kill: () => true,
+    };
+    await expect(
+      executeMode(input, new AbortController().signal, cli, {
+        ...options,
+        spawn: () => proc as never,
+      }),
+    ).rejects.toThrow('too many files');
+  });
+
+  test('an infinite malformed stdout pipe ends without timing out after cancellation', async () => {
+    let sent = false;
+    const stdout = new Readable({
+      read() {
+        if (!sent) {
+          sent = true;
+          this.push('not JSON\n');
+        }
+      },
+    });
+    const input = normalizeGrepInput({ pattern: 'needle', path: '.' }, {
+      directory: process.cwd(),
+      worktree: process.cwd(),
+    } as never);
+    const result = await executeMode(
+      input,
+      new AbortController().signal,
+      { path: 'rg', backend: 'rg', source: 'system-rg' },
+      {
+        spawn: () =>
+          ({
+            proc: { stdout, stderr: null, exitCode: 0, signalCode: null },
+            exited: Promise.resolve(0),
+            kill: () => true,
+          }) as never,
+        init: () => ({}),
+        consumeStdout: (stream) => consumeRgJsonStream(stream, () => true),
+        buildResult: (base) => base,
+        isStopped: () => false,
+      },
+    );
+    expect(result.error).toContain('invalid JSON');
+    expect(result.timedOut).toBe(false);
+    expect(stdout.destroyed).toBe(true);
   });
 });

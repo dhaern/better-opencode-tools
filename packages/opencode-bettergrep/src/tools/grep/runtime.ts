@@ -317,7 +317,7 @@ export function isTransientStderr(stderr: string): boolean {
 export async function waitForExitAndStderr(
   proc: GrepProcess,
   stderrPromise: Promise<string>,
-): Promise<{ exitCode: number; stderr: string; error?: string }> {
+): Promise<{ exitCode: number; stderr: string; error?: unknown }> {
   const [exitResult, stderr] = await Promise.allSettled([
     proc.exited,
     stderrPromise,
@@ -327,9 +327,7 @@ export async function waitForExitAndStderr(
   return {
     exitCode,
     stderr: stderr.status === 'fulfilled' ? stderr.value : '',
-    ...(exitResult.status === 'rejected'
-      ? { error: toErrorMessage(exitResult.reason) }
-      : {}),
+    ...(exitResult.status === 'rejected' ? { error: exitResult.reason } : {}),
   };
 }
 

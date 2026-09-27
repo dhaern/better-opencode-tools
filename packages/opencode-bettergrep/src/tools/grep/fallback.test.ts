@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { executeContentLikeMode } from './direct';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
 import { parseContentLine } from './fallback-content';
@@ -147,6 +148,50 @@ describe('tools/grep/fallback', () => {
       text: 'foo',
       isMatch: true,
     });
+  });
+
+  test('parses Unicode line separators and interior CR with GNU grep/rg parity', async () => {
+    const repo = temps.createRepo();
+    const file = path.join(repo, 'src', 'separators.txt');
+    writeFileSync(file, 'needle\u2028a\nneedle\u2029b\nneedle\rmid\n');
+    expect(
+      parseContentLine(
+        Buffer.from('file'),
+        Buffer.from('1:needle\u2028a'),
+        false,
+      )?.text,
+    ).toBe('needle\u2028a');
+    expect(
+      parseContentLine(
+        Buffer.from('file'),
+        Buffer.from('2:needle\u2029b'),
+        false,
+      )?.text,
+    ).toBe('needle\u2029b');
+    expect(
+      parseContentLine(Buffer.from('file'), Buffer.from('3:needle\rmid'), false)
+        ?.text,
+    ).toBe('needle\nmid');
+    const input = normalizeGrepInput(
+      { pattern: 'needle', path: file, fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const signal = new AbortController().signal;
+    const fallback = await executeGrepFallback(input, signal, {
+      path: 'grep',
+      backend: 'grep',
+      source: 'system-gnu-grep',
+    });
+    const direct = await executeContentLikeMode(input, signal, {
+      path: 'rg',
+      backend: 'rg',
+      source: 'system-rg',
+    });
+    expect(fallback.totalMatches).toBe(3);
+    expect(fallback.warnings.join(' ')).not.toContain('skipped');
+    expect(fallback.files[0]?.matches.map((match) => match.lineText)).toEqual(
+      direct.files[0]?.matches.map((match) => match.lineText),
+    );
   });
 
   test('GNU grep content search preserves CRLF matches without unparsable warnings', async () => {

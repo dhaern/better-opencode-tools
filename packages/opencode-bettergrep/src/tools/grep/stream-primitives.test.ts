@@ -1,5 +1,6 @@
 /// <reference types="bun-types" />
 import { expect, test } from 'bun:test';
+import { Readable } from 'node:stream';
 import {
   throwIfAborted as assertNotAborted,
   createAbortError,
@@ -100,6 +101,44 @@ test('early stop cancels stream exactly once for all framed consumers', async ()
     );
     expect(cancellations).toBe(1);
   }
+});
+
+test('invalid JSON rejects and destroys a Node pipe that never ends', async () => {
+  let sent = false;
+  const stream = new Readable({
+    read() {
+      if (!sent) {
+        sent = true;
+        this.push('not JSON\n');
+      }
+    },
+  });
+  await expect(consumeRgJsonStream(stream, () => true)).rejects.toThrow(
+    'invalid JSON',
+  );
+  expect(stream.destroyed).toBe(true);
+});
+
+test('a throwing event handler cancels a web pipe once without replacing its error', async () => {
+  const original = new Error('handler failed');
+  let cancellations = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        new TextEncoder().encode('{"type":"match","data":{}}\n'),
+      );
+    },
+    cancel() {
+      cancellations += 1;
+      throw new Error('cancel failed');
+    },
+  });
+  await expect(
+    consumeRgJsonStream(stream, () => {
+      throw original;
+    }),
+  ).rejects.toBe(original);
+  expect(cancellations).toBe(1);
 });
 
 test('stderr retains collected text on stream read failure and preserves truncation suffix', async () => {

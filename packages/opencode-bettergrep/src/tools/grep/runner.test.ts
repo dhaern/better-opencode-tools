@@ -1,7 +1,14 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
+import which from 'which';
 import { executeFilesMode } from './direct';
 import { normalizeGrepInput } from './normalize';
 import { runRipgrep } from './runner';
@@ -43,6 +50,40 @@ describe('tools/grep/runner', () => {
       expect(first.error).toContain('ENOENT');
       expect(second.error).toContain('ENOENT');
       expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(2);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test('re-probes an mtime CLI after its executable permission is removed', async () => {
+    const repo = temps.createRepo();
+    const dir = temps.createDir('bettergrep-chmod');
+    const binary = path.join(dir, 'rg');
+    writeFileSync(
+      binary,
+      `#!/bin/sh\nexec ${JSON.stringify(which.sync('rg', { nothrow: false }))} "$@"\n`,
+      { mode: 0o755 },
+    );
+    symlinkSync(which.sync('grep', { nothrow: false }), path.join(dir, 'grep'));
+    const input = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        path: repo,
+        sort_by: 'mtime',
+        fixed_strings: true,
+      },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = dir;
+      const first = await runRipgrep(input, new AbortController().signal);
+      expect(first.totalMatches).toBeGreaterThan(0);
+      expect(first.error).toBeUndefined();
+      chmodSync(binary, 0o644);
+      const second = await runRipgrep(input, new AbortController().signal);
+      expect(second.backend).toBe('grep');
+      expect(second.totalMatches).toBeGreaterThan(0);
     } finally {
       process.env.PATH = previousPath;
     }

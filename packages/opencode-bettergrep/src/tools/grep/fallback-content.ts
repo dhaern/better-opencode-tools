@@ -41,7 +41,7 @@ export function parseContentLine(
   const line = stripSingleLineEnding(
     tryDecodeUtf8(lineBytes) ?? formatNonUtf8TextDisplay(lineBytes),
   );
-  const match = line.match(/^(\d+)([:-])(.*)$/);
+  const match = line.match(/^(\d+)([:-])(.*)$/s);
   if (!match || (!withContext && match[2] !== ':')) return null;
   return {
     filePath,

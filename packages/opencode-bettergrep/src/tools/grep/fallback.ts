@@ -97,7 +97,7 @@ export async function executeGrepFallback(
         }
       }
       if ((exitError || stdoutError) && !result.timedOut && !result.cancelled) {
-        result.error = exitError ?? toErrorMessage(stdoutError);
+        result.error = toErrorMessage(exitError ?? stdoutError);
         return result;
       }
       if (

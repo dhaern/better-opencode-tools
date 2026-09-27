@@ -55,6 +55,7 @@ export async function executeMode<TState>(
     env?: NodeJS.ProcessEnv;
     retries?: 0;
     warnings?: string[];
+    spawn?: typeof spawnRipgrep;
     init: () => TState;
     consumeStdout: (
       stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
@@ -69,7 +70,7 @@ export async function executeMode<TState>(
     finalizeResult?: (
       result: GrepSearchResult,
       stdoutError: unknown,
-      exitError: string | undefined,
+      exitError: unknown,
     ) => GrepSearchResult;
   },
 ): Promise<GrepSearchResult> {
@@ -89,23 +90,7 @@ export async function executeMode<TState>(
     };
   }
 
-  let proc: GrepProcess;
-  try {
-    proc = spawnRipgrep(command, input.cwd, options.env);
-  } catch (error) {
-    const friendlyMessage = createFriendlySpawnError(error, cli);
-    if (friendlyMessage) return { ...baseResult, error: friendlyMessage };
-    if (isTransientFailure(error)) {
-      throw new RetryableRipgrepError(toErrorMessage(error));
-    }
-    return {
-      ...baseResult,
-      error:
-        error instanceof Error
-          ? error.message
-          : `Failed to spawn ${cli.backend}`,
-    };
-  }
+  const proc = (options.spawn ?? spawnRipgrep)(command, input.cwd, options.env);
 
   const state = options.init();
   const termination = attachTerminationHandlers(proc, input.timeoutMs, signal);
@@ -157,7 +142,15 @@ export async function executeMode<TState>(
     applySuccessfulStderr(result, result.stderr, exitCode);
 
     if (exitError && !options.isStopped(state, termination.state)) {
-      result.error = exitError;
+      const friendlyMessage = createFriendlySpawnError(exitError, cli);
+      if (friendlyMessage) {
+        result.error = friendlyMessage;
+        return result;
+      }
+      if (options.retries !== 0 && isTransientFailure(exitError)) {
+        throw new RetryableRipgrepError(toErrorMessage(exitError));
+      }
+      result.error = toErrorMessage(exitError);
       return result;
     }
 

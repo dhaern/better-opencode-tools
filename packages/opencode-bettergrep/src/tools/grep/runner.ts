@@ -116,8 +116,9 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
     ...(error ? { error } : {}),
   });
 
+  let finalResult: GrepSearchResult;
   try {
-    return await RUNNER_SEMAPHORE.use(async () => {
+    finalResult = await RUNNER_SEMAPHORE.use(async () => {
       let attempt = 0;
       let cli: ResolvedGrepCli;
 
@@ -142,7 +143,6 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
           timeoutMs: Math.max(1, remainingTimeout(deadline)),
         };
         const result = await executeOnce(grepInput, globalAbort.signal, cli);
-        invalidateIfSpawnFailed(result);
         result.retryCount = attempt;
         return result;
       }
@@ -167,7 +167,6 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
             globalAbort.signal,
             cli,
           );
-          invalidateIfSpawnFailed(result);
           result.retryCount = attempt;
           return result;
         } catch (error) {
@@ -200,15 +199,17 @@ export const runRipgrep: GrepRunner = async (input, signal) => {
     }, globalAbort.signal);
   } catch (error) {
     if (error instanceof AbortWaitError || globalAbort.signal.aborted) {
-      return createAbortedResult(0);
+      finalResult = createAbortedResult(0);
+    } else {
+      finalResult = {
+        ...createEmptyResult(input, command),
+        ...buildFailureMeta(input, previewCli),
+        error: toErrorMessage(error),
+      };
     }
-
-    return {
-      ...createEmptyResult(input, command),
-      ...buildFailureMeta(input, previewCli),
-      error: toErrorMessage(error),
-    };
   } finally {
     globalAbort.cleanup();
   }
+  invalidateIfSpawnFailed(finalResult);
+  return finalResult;
 };

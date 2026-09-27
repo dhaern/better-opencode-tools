@@ -3,7 +3,13 @@ import { describe, expect, jest, mock, test } from 'bun:test';
 import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { probeExecutable } from './cli-probe';
-import { resolveGrepCli, resolveGrepCliWithAutoInstall } from './resolver';
+import {
+  AUTO_INSTALL_RETRY_AFTER_MS,
+  AUTO_INSTALL_TIMEOUT_MS,
+  invalidateGrepCliResolverCache,
+  resolveGrepCli,
+  resolveGrepCliWithAutoInstall,
+} from './resolver';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
@@ -272,6 +278,96 @@ describe('tools/grep/resolver', () => {
       source: 'system-gnu-grep',
     });
     expect(logger.mock.calls).toHaveLength(1);
+  });
+
+  test('failed install with GNU grep retries only after the negative-cache TTL', async () => {
+    jest.useFakeTimers();
+    try {
+      const install = mock(async () => {
+        throw new Error('offline');
+      });
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'grep' ? '/usr/bin/grep' : null,
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        installLatestStableRipgrep: install,
+      };
+      for (let index = 0; index < 3; index++) {
+        expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe(
+          'grep',
+        );
+      }
+      expect(install).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(AUTO_INSTALL_RETRY_AFTER_MS + 1);
+      expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+      expect(install).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('explicit invalidation permits an immediate retry of a failed install', async () => {
+    const install = mock(async () => {
+      throw new Error('offline');
+    });
+    const deps = {
+      findExecutable: (name: string) =>
+        name === 'grep' ? '/usr/bin/grep' : null,
+      getInstalledRipgrepPath: () => null,
+      isSupportedGrep: () => true,
+      installLatestStableRipgrep: install,
+    };
+    await resolveGrepCliWithAutoInstall(deps);
+    invalidateGrepCliResolverCache();
+    await resolveGrepCliWithAutoInstall(deps);
+    expect(install).toHaveBeenCalledTimes(2);
+  });
+
+  test('hung installer has its own deadline and falls back to GNU grep', async () => {
+    jest.useFakeTimers();
+    try {
+      let started!: () => void;
+      const startedPromise = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let installSignal: AbortSignal | undefined;
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'grep' ? '/usr/bin/grep' : null,
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        installLatestStableRipgrep: (signal?: AbortSignal) => {
+          installSignal = signal;
+          started();
+          return new Promise<string>(() => {});
+        },
+      };
+      const pending = resolveGrepCliWithAutoInstall(deps);
+      await startedPromise;
+      jest.advanceTimersByTime(AUTO_INSTALL_TIMEOUT_MS);
+      expect((await pending).backend).toBe('grep');
+      expect(installSignal?.aborted).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('without GNU grep a failed install is retried on every call', async () => {
+    const install = mock(async () => {
+      throw new Error('offline');
+    });
+    const deps = {
+      findExecutable: () => null,
+      getInstalledRipgrepPath: () => null,
+      installLatestStableRipgrep: install,
+    };
+    for (let index = 0; index < 2; index++) {
+      await expect(resolveGrepCliWithAutoInstall(deps)).rejects.toThrow(
+        'offline',
+      );
+    }
+    expect(install).toHaveBeenCalledTimes(2);
   });
 
   test('resolveGrepCliWithAutoInstall does not cache aborts as permanent install failures', async () => {
