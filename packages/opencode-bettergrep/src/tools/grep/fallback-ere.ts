@@ -152,11 +152,6 @@ function parseEreRepetition(
   return { end: start + match[0].length };
 }
 
-/**
- * Translates only a deliberately whitelisted ripgrep regex grammar to ERE.
- * Locale-bound classes, Unicode boundary escapes, multiline input, and
- * constructs without a verified GNU grep equivalent are rejected.
- */
 const CONTROL_ESCAPES: Record<string, string> = {
   t: '\t',
   r: '\r',
@@ -181,6 +176,11 @@ const LITERAL_ESCAPES = new Set([
   '-',
 ]);
 
+/**
+ * Translates only a deliberately whitelisted ripgrep regex grammar to ERE.
+ * Locale-bound classes, Unicode boundary escapes, multiline input, and
+ * constructs without a verified GNU grep equivalent are rejected.
+ */
 export function translatePatternToEre(pattern: string): {
   ere?: string;
   error?: string;
