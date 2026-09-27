@@ -82,18 +82,8 @@ function parseCountRecordBytes(
   }
 
   const count = Number.parseInt(countText, 10);
-  if (!Number.isFinite(count)) {
-    return undefined;
-  }
-
+  if (count === 0) return undefined;
   return buildFileMatch(filePath, input, count);
-}
-
-function buildFileMatchFromBytes(
-  filePath: Uint8Array,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-): GrepFileMatch | undefined {
-  return buildFileMatch(filePath, input, 1);
 }
 
 function simpleIsStopped(
@@ -103,11 +93,15 @@ function simpleIsStopped(
   return termination.timedOut || termination.cancelled || state.limitReached;
 }
 
-async function executeMode<TState>(
+export async function executeMode<TState>(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
   options: {
+    command?: string[];
+    env?: NodeJS.ProcessEnv;
+    retries?: 0;
+    warnings?: string[];
     init: () => TState;
     consumeStdout: (
       stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
@@ -122,12 +116,18 @@ async function executeMode<TState>(
       stderr: string,
     ) => GrepSearchResult;
     isStopped: (state: TState, termination: TerminationState) => boolean;
+    finalizeResult?: (
+      result: GrepSearchResult,
+      stdoutError: unknown,
+      exitError: string | undefined,
+    ) => GrepSearchResult;
   },
 ): Promise<GrepSearchResult> {
-  const command = buildRgCommand(input, cli.path);
+  const command = options.command ?? buildRgCommand(input, cli.path);
   const baseResult: GrepSearchResult = {
     ...createEmptyResult(input, command),
-    backend: 'rg',
+    backend: cli.backend,
+    warnings: options.warnings ?? [],
   };
 
   if (signal.aborted) {
@@ -141,20 +141,13 @@ async function executeMode<TState>(
 
   let proc: GrepProcess;
   try {
-    proc = spawnRipgrep(command, input.cwd);
+    proc = spawnRipgrep(command, input.cwd, options.env);
   } catch (error) {
     const friendlyMessage = createFriendlySpawnError(error, cli);
-    if (friendlyMessage) {
-      return {
-        ...baseResult,
-        error: friendlyMessage,
-      };
-    }
-
+    if (friendlyMessage) return { ...baseResult, error: friendlyMessage };
     if (isTransientFailure(error)) {
       throw new RetryableRipgrepError(toErrorMessage(error));
     }
-
     return {
       ...baseResult,
       error:
@@ -176,14 +169,12 @@ async function executeMode<TState>(
     // before stdout finishes, and the rejection must have a handler attached.
     const exitPromise = waitForExitAndStderr(proc, stderrPromise);
 
-    let stdoutError: unknown;
-    try {
-      await stdoutPromise;
-    } catch (error) {
-      stdoutError = error;
-    }
-
-    const { exitCode, stderr, error: exitError } = await exitPromise;
+    const captureError = (error: unknown) => error;
+    const [stdoutError, { exitCode, stderr, error: exitError }] =
+      await Promise.all([
+        stdoutPromise.then(() => undefined, captureError),
+        exitPromise,
+      ]);
     const result = options.buildResult(
       baseResult,
       state,
@@ -192,8 +183,11 @@ async function executeMode<TState>(
       stderr.trim(),
     );
 
+    if (options.finalizeResult)
+      return options.finalizeResult(result, stdoutError, exitError);
+
     if (stdoutError && !options.isStopped(state, termination.state)) {
-      if (isTransientFailure(stdoutError)) {
+      if (options.retries !== 0 && isTransientFailure(stdoutError)) {
         throw new RetryableRipgrepError(toErrorMessage(stdoutError));
       }
 
@@ -228,7 +222,7 @@ async function executeMode<TState>(
       return nonFatal;
     }
 
-    if (isTransientStderr(result.stderr)) {
+    if (options.retries !== 0 && isTransientStderr(result.stderr)) {
       throw new RetryableRipgrepError(result.stderr);
     }
 
@@ -312,10 +306,6 @@ export async function executeCountMode(
           return true;
         }
 
-        if (file.matchCount === 0) {
-          return true;
-        }
-
         state.files.push(file);
         state.totalMatches += file.matchCount;
 
@@ -358,7 +348,7 @@ export async function executeFilesMode(
     }),
     consumeStdout: async (stdout, proc, state) =>
       consumeNullItemsBytes(stdout, (filePath) => {
-        const file = buildFileMatchFromBytes(filePath, input);
+        const file = buildFileMatch(filePath, input, 1);
         if (!file) {
           return true;
         }

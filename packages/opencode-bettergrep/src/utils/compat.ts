@@ -19,6 +19,7 @@ export interface CrossSpawnResult {
 const MAX_COLLECTED_OUTPUT_CHARS = 1_000_000;
 const TERMINATE_GRACE_MS = 500;
 export const TERMINATE_HARD_WAIT_MS = 1_500;
+const TERMINATIONS = new WeakMap<CrossSpawnResult, Promise<void>>();
 
 export function withTimeout<T>(
   promise: Promise<T>,
@@ -27,17 +28,24 @@ export function withTimeout<T>(
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve('timeout'), ms);
     timer.unref?.();
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve('timeout');
-      },
-    );
+    const finish = (value: T | 'timeout') => {
+      clearTimeout(timer);
+      resolve(value);
+    };
+    void promise.then(finish, () => finish('timeout'));
   });
+}
+
+export function hasProcessExited(proc: CrossSpawnResult): boolean {
+  return proc.exitCode !== null || proc.proc.signalCode != null;
+}
+
+function sendSignal(proc: CrossSpawnResult, signal?: NodeJS.Signals): void {
+  try {
+    proc.kill(signal);
+  } catch {
+    /* process already exited */
+  }
 }
 
 /**
@@ -45,26 +53,21 @@ export function withTimeout<T>(
  * grace period, with a hard bound on how long we wait overall. Probes must
  * never hang on a child that ignores SIGTERM.
  */
-export async function terminateProcess(proc: CrossSpawnResult): Promise<void> {
-  if (proc.exitCode !== null) return;
+export function terminateProcess(proc: CrossSpawnResult): Promise<void> {
+  const existing = TERMINATIONS.get(proc);
+  if (existing) return existing;
+  if (hasProcessExited(proc)) return Promise.resolve();
 
-  try {
-    proc.kill();
-  } catch {
-    // Process may have already exited.
-  }
-
-  if ((await withTimeout(proc.exited, TERMINATE_GRACE_MS)) !== 'timeout') {
-    return;
-  }
-
-  try {
-    proc.kill('SIGKILL');
-  } catch {
-    // Process may have already exited.
-  }
-
-  await withTimeout(proc.exited, TERMINATE_HARD_WAIT_MS);
+  const pending = (async () => {
+    sendSignal(proc);
+    if ((await withTimeout(proc.exited, TERMINATE_GRACE_MS)) !== 'timeout')
+      return;
+    if (hasProcessExited(proc)) return;
+    sendSignal(proc, 'SIGKILL');
+    await withTimeout(proc.exited, TERMINATE_HARD_WAIT_MS);
+  })();
+  TERMINATIONS.set(proc, pending);
+  return pending;
 }
 
 /**

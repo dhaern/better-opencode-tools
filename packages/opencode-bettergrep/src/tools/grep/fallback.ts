@@ -1,4 +1,5 @@
 import { ensureGnuGrep } from './cli-probe';
+import { executeMode } from './direct';
 import { buildGrepCommand } from './fallback-command';
 import { consumeContentOutput } from './fallback-content';
 import {
@@ -7,7 +8,6 @@ import {
   finalizeFiles,
   sortFiles,
 } from './fallback-results';
-import { readTextStream } from './json-stream';
 import type { ResolvedGrepCli } from './resolver';
 import {
   applySuccessfulStderr,
@@ -15,15 +15,7 @@ import {
   getMatchKind,
   hasVisibleResults,
 } from './result-utils';
-import {
-  attachTerminationHandlers,
-  createFriendlySpawnError,
-  type GrepProcess,
-  getAbortKind,
-  spawnRipgrep,
-  toErrorMessage,
-  waitForExitAndStderr,
-} from './runtime';
+import { getAbortKind, toErrorMessage } from './runtime';
 import type {
   GrepFileMatch,
   GrepSearchResult,
@@ -35,183 +27,111 @@ export async function executeGrepFallback(
   signal: AbortSignal,
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
-  const {
-    command,
-    warnings: commandWarnings,
-    patternError,
-  } = buildGrepCommand(input, cli.path);
-  const baseResult = createEmptyResult(input, command);
-
-  if (signal.aborted) {
+  const { command, warnings, patternError } = buildGrepCommand(input, cli.path);
+  const base = {
+    ...createEmptyResult(input, command),
+    backend: 'grep' as const,
+    warnings: [...warnings],
+  };
+  if (signal.aborted)
     return {
-      ...baseResult,
-      backend: 'grep',
+      ...base,
       truncated: true,
       timedOut: getAbortKind(signal) === 'timeout',
       cancelled: getAbortKind(signal) !== 'timeout',
-      warnings: [...commandWarnings],
     };
-  }
-
-  if (patternError) {
-    return {
-      ...baseResult,
-      backend: 'grep',
-      error: patternError,
-      warnings: [...commandWarnings],
-    };
-  }
-
+  if (patternError) return { ...base, error: patternError };
   const grepError = await ensureGnuGrep(cli.path, signal, input.timeoutMs);
-  if (grepError) {
-    return {
-      ...baseResult,
-      backend: 'grep',
-      error: grepError,
-      warnings: [...commandWarnings],
-    };
-  }
+  if (grepError) return { ...base, error: grepError };
 
-  let proc: GrepProcess;
-  try {
-    proc = spawnRipgrep(command, input.cwd, {
-      ...process.env,
-      LC_ALL: 'C.UTF-8',
-    });
-  } catch (error) {
-    const friendlyMessage = createFriendlySpawnError(error, cli);
-    return {
-      ...baseResult,
-      backend: 'grep',
-      error: friendlyMessage || toErrorMessage(error),
-      warnings: [...commandWarnings],
-    };
-  }
-
-  const termination = attachTerminationHandlers(proc, input.timeoutMs, signal);
-
-  try {
-    const stdoutStream = proc.proc.stdout ?? undefined;
-    const stderrStream = proc.proc.stderr ?? undefined;
-    const stderrPromise = readTextStream(stderrStream);
-    const stdoutPromise =
-      input.outputMode === 'content'
-        ? consumeContentOutput(stdoutStream, proc, input)
+  return executeMode(input, signal, cli, {
+    command,
+    warnings,
+    retries: 0,
+    env: { ...process.env, LC_ALL: 'C.UTF-8' },
+    init: () => ({
+      parsed: {
+        files: [] as GrepFileMatch[],
+        skippedLines: 0,
+        limitReached: false,
+      },
+    }),
+    consumeStdout: async (stdout, proc, state) => {
+      state.parsed = await (input.outputMode === 'content'
+        ? consumeContentOutput(stdout, proc, input)
         : input.outputMode === 'count'
-          ? consumeCountOutput(stdoutStream, proc, input)
-          : consumeFilesOutput(stdoutStream, proc, input);
-
-    const [stdoutResult, exitResult] = await Promise.allSettled([
-      stdoutPromise,
-      waitForExitAndStderr(proc, stderrPromise),
-    ]);
-    const exitCode =
-      exitResult.status === 'fulfilled' ? exitResult.value.exitCode : 1;
-    const processError =
-      exitResult.status === 'fulfilled'
-        ? exitResult.value.error
-        : toErrorMessage(exitResult.reason);
-    const stderr =
-      exitResult.status === 'fulfilled' ? exitResult.value.stderr.trim() : '';
-    const stdoutError =
-      stdoutResult.status === 'rejected'
-        ? toErrorMessage(stdoutResult.reason)
-        : undefined;
-    const parsed =
-      stdoutResult.status === 'fulfilled'
-        ? stdoutResult.value
-        : {
-            files: [] as GrepFileMatch[],
-            skippedLines: 0,
-            limitReached: false,
-          };
-    const sortedFiles = sortFiles(parsed.files, input);
-    const finalized = finalizeFiles(sortedFiles, input);
-    // Bounded admission reports its own limit via parsed.limitReached in
-    // sorted mode; the final slice cannot detect it (already at capacity).
-    const parserLimitReached = parsed.limitReached;
-    const warnings = [...commandWarnings];
-
-    if (parsed.skippedLines > 0) {
-      warnings.push(
-        `GNU grep fallback skipped ${String(parsed.skippedLines)} unparsable output line(s); results may be incomplete.`,
-      );
-    }
-
-    const result: GrepSearchResult = {
-      ...baseResult,
-      backend: 'grep',
-      files: finalized.files,
-      totalMatches: finalized.totalMatches,
-      totalFiles: finalized.totalFiles,
-      matchKind: getMatchKind(input.outputMode),
-      truncated:
-        parserLimitReached ||
-        finalized.limitReached ||
-        termination.state.timedOut ||
-        termination.state.cancelled ||
-        parsed.skippedLines > 0,
-      limitReached: parserLimitReached || finalized.limitReached,
-      timedOut: termination.state.timedOut,
-      cancelled: termination.state.cancelled,
-      exitCode,
-      stderr,
-      warnings,
-    };
-
-    applySuccessfulStderr(result, stderr, exitCode);
-
-    const hasBinaryMatches = /binary file.*matches/i.test(stderr);
-    if (hasBinaryMatches) {
-      // GNU grep reports binary matches on stderr without parsable records.
-      // Preserve text results, but never present the combined result as
-      // complete because the binary matches are known to be omitted.
-      result.truncated = true;
-      if (!hasVisibleResults(result)) {
-        result.error =
-          'GNU grep fallback cannot display matches inside binary files; rerun with output_mode=files_with_matches or count.';
+          ? consumeCountOutput(stdout, proc, input)
+          : consumeFilesOutput(stdout, proc, input));
+    },
+    buildResult: (baseResult, state, termination, exitCode, stderr) => {
+      const parsed = state.parsed;
+      const finalized = finalizeFiles(sortFiles(parsed.files, input), input);
+      const limitReached = parsed.limitReached || finalized.limitReached;
+      const result: GrepSearchResult = {
+        ...baseResult,
+        ...finalized,
+        matchKind: getMatchKind(input.outputMode),
+        truncated:
+          limitReached ||
+          termination.timedOut ||
+          termination.cancelled ||
+          parsed.skippedLines > 0,
+        limitReached,
+        timedOut: termination.timedOut,
+        cancelled: termination.cancelled,
+        exitCode,
+        stderr,
+        warnings: [...warnings],
+      };
+      if (parsed.skippedLines > 0)
+        result.warnings.push(
+          `GNU grep fallback skipped ${String(parsed.skippedLines)} unparsable output line(s); results may be incomplete.`,
+        );
+      return result;
+    },
+    isStopped: (state, termination) =>
+      state.parsed.limitReached ||
+      termination.timedOut ||
+      termination.cancelled,
+    finalizeResult: (result, stdoutError, exitError) => {
+      const stderr = result.stderr;
+      applySuccessfulStderr(result, stderr, result.exitCode);
+      if (/binary file.*matches/i.test(stderr)) {
+        result.truncated = true;
+        if (!hasVisibleResults(result)) {
+          result.error =
+            'GNU grep fallback cannot display matches inside binary files; rerun with output_mode=files_with_matches or count.';
+          return result;
+        }
+      }
+      if ((exitError || stdoutError) && !result.timedOut && !result.cancelled) {
+        result.error = exitError ?? toErrorMessage(stdoutError);
         return result;
       }
-    }
-
-    if (
-      (processError || stdoutError) &&
-      !result.timedOut &&
-      !result.cancelled
-    ) {
-      result.error = processError ?? stdoutError;
+      if (
+        result.warnings.some((warning) =>
+          warning.startsWith('GNU grep fallback skipped'),
+        ) &&
+        !hasVisibleResults(result) &&
+        result.exitCode === 0 &&
+        !result.timedOut &&
+        !result.cancelled
+      ) {
+        result.error = 'GNU grep fallback produced unparsable output.';
+        return result;
+      }
+      if (
+        result.timedOut ||
+        result.cancelled ||
+        result.limitReached ||
+        result.exitCode === 0
+      )
+        return result;
+      if (result.exitCode === 1 && !hasVisibleResults(result) && !result.stderr)
+        return result;
+      result.error =
+        result.stderr || `grep exited with code ${String(result.exitCode)}`;
       return result;
-    }
-
-    if (
-      parsed.skippedLines > 0 &&
-      !hasVisibleResults(result) &&
-      exitCode === 0 &&
-      !result.timedOut &&
-      !result.cancelled
-    ) {
-      result.error = 'GNU grep fallback produced unparsable output.';
-      return result;
-    }
-
-    if (termination.state.timedOut || termination.state.cancelled) {
-      return result;
-    }
-
-    if (result.limitReached) {
-      return result;
-    }
-
-    if (
-      exitCode === 0 ||
-      (exitCode === 1 && !hasVisibleResults(result) && stderr.length === 0)
-    ) {
-      return result;
-    }
-
-    result.error = result.stderr || `grep exited with code ${String(exitCode)}`;
-    return result;
-  } finally {
-    termination.cleanup();
-  }
+    },
+  });
 }

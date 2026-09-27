@@ -1,6 +1,10 @@
-import type { ChildProcess } from 'node:child_process';
 import { AbortWaitError, createSearchAbortError } from '../../utils/abort';
-import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
+import {
+  type CrossSpawnResult,
+  crossSpawn,
+  hasProcessExited,
+  terminateProcess,
+} from '../../utils/compat';
 import {
   DEFAULT_GREP_MAX_CONCURRENCY,
   DEFAULT_GREP_RETRY_DELAY_MS,
@@ -13,17 +17,7 @@ export { AbortWaitError, createSearchAbortError } from '../../utils/abort';
 
 export class RetryableRipgrepError extends Error {}
 
-export type GrepProcess = CrossSpawnResult & {
-  proc: ChildProcess;
-};
-
-const KILL_GRACE_MS = 500;
-const KILL_TIMERS = new WeakMap<GrepProcess, ReturnType<typeof setTimeout>>();
-
-function hasExited(proc: GrepProcess): boolean {
-  return proc.proc.exitCode !== null || proc.proc.signalCode !== null;
-}
-
+export type GrepProcess = CrossSpawnResult;
 const ABORT_KIND = new WeakMap<AbortSignal, 'timeout' | 'cancel'>();
 
 export function setAbortKind(
@@ -210,52 +204,9 @@ export function createGlobalAbortState(
   };
 }
 
-function clearKillTimer(proc: GrepProcess): void {
-  const timer = KILL_TIMERS.get(proc);
-  if (!timer) {
-    return;
-  }
-
-  clearTimeout(timer);
-  KILL_TIMERS.delete(proc);
-}
-
-function sendSignal(proc: GrepProcess, signal?: NodeJS.Signals | number): void {
-  try {
-    proc.kill(signal);
-  } catch {
-    // Process may have already exited.
-  }
-}
-
 export function killProcess(proc: GrepProcess): void {
-  if (hasExited(proc)) {
-    clearKillTimer(proc);
-    return;
-  }
-
-  if (process.platform === 'win32') {
-    sendSignal(proc);
-    return;
-  }
-
-  sendSignal(proc, 'SIGTERM');
-  if (hasExited(proc) || KILL_TIMERS.has(proc)) {
-    return;
-  }
-
-  const timer = setTimeout(() => {
-    KILL_TIMERS.delete(proc);
-    if (!hasExited(proc)) {
-      sendSignal(proc, 'SIGKILL');
-    }
-  }, KILL_GRACE_MS);
-  timer.unref?.();
-  KILL_TIMERS.set(proc, timer);
-  void proc.exited.then(
-    () => clearKillTimer(proc),
-    () => clearKillTimer(proc),
-  );
+  if (hasProcessExited(proc)) return;
+  void terminateProcess(proc);
 }
 
 export function spawnRipgrep(
@@ -263,12 +214,7 @@ export function spawnRipgrep(
   cwd: string,
   env?: NodeJS.ProcessEnv,
 ): GrepProcess {
-  return crossSpawn(command, {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env,
-  }) as GrepProcess;
+  return crossSpawn(command, { cwd, stdout: 'pipe', stderr: 'pipe', env });
 }
 
 export interface TerminationState {

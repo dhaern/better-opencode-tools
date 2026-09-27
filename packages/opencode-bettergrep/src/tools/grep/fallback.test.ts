@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
@@ -11,6 +11,132 @@ import { createRepoContext, createTempTracker } from './test-helpers';
 
 describe('tools/grep/fallback', () => {
   const temps = createTempTracker();
+
+  test.each([
+    {
+      name: 'exit1 with empty stdout means no matches',
+      exit: 1,
+      stderr: '',
+      record: false,
+      matches: 0,
+    },
+    {
+      name: 'exit2 retains a partial record and warnings',
+      exit: 2,
+      stderr: 'partial failure',
+      record: true,
+      matches: 1,
+    },
+    {
+      name: 'transient stderr never retries the fallback search',
+      exit: 2,
+      stderr: 'resource temporarily unavailable',
+      record: false,
+      matches: 0,
+    },
+  ])('$name', async ({ exit, stderr, record, matches }) => {
+    const repoDir = temps.createRepo();
+    const dir = temps.createDir('bettergrep-pipeline');
+    const marker = path.join(dir, 'searches');
+    const wrapper = path.join(dir, 'grep-wrapper.sh');
+    writeFileSync(
+      wrapper,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        "  printf 'grep (GNU grep) 3.11\\n'",
+        '  exit 0',
+        'fi',
+        `printf 'search\\n' >> "${marker}"`,
+        ...(record
+          ? ['for last do :; done', 'printf \'%s\\0002:needle\\n\' "$last"']
+          : []),
+        ...(stderr ? [`printf '${stderr}\\n' >&2`] : []),
+        `exit ${exit}`,
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      {
+        pattern: 'needle',
+        path: path.join(repoDir, 'src', 'example.ts'),
+        fixed_strings: true,
+      },
+      createRepoContext(repoDir) as any,
+    );
+    const result = await executeGrepFallback(
+      input,
+      new AbortController().signal,
+      {
+        path: wrapper,
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      },
+    );
+    expect(result.totalMatches).toBe(matches);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
+    if (exit === 1) expect(result.error).toBeUndefined();
+    if (exit === 2) expect(result.error).toContain(stderr);
+  });
+
+  test.each([
+    'cancel',
+    'timeout',
+  ] as const)('%s retains a partial GNU grep match', async (cause) => {
+    const repoDir = temps.createRepo();
+    const dir = temps.createDir('bettergrep-partial');
+    const wrapper = path.join(dir, 'grep-wrapper.sh');
+    const marker = path.join(dir, 'ready');
+    const searchFile = path.join(repoDir, 'src', 'example.ts');
+    const nodeScript = `process.stdout.write(process.argv[1] + '\\0' + '2:needle\\n', () => require('fs').writeFileSync(${JSON.stringify(marker)}, 'ready')); setInterval(() => {}, 1000)`;
+    writeFileSync(
+      wrapper,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        "  printf 'grep (GNU grep) 3.11\\n'",
+        '  exit 0',
+        'fi',
+        'for last do :; done',
+        `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(nodeScript)} "$last"`,
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      {
+        pattern: 'needle',
+        path: searchFile,
+        fixed_strings: true,
+        timeout_ms: cause === 'timeout' ? 90 : 1000,
+      },
+      createRepoContext(repoDir) as any,
+    );
+    const controller = new AbortController();
+    const pending = executeGrepFallback(input, controller.signal, {
+      path: wrapper,
+      backend: 'grep',
+      source: 'system-gnu-grep',
+    });
+    try {
+      if (cause === 'cancel') {
+        const deadline = Date.now() + 500;
+        while (!existsSync(marker) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(existsSync(marker)).toBe(true);
+        controller.abort();
+      }
+      const result = await pending;
+      expect(result.totalMatches).toBe(1);
+      expect(result.files[0]?.matches[0]?.lineText).toBe('needle');
+      expect(result.cancelled).toBe(cause === 'cancel');
+      expect(result.timedOut).toBe(cause === 'timeout');
+      expect(result.truncated).toBe(true);
+    } finally {
+      controller.abort();
+    }
+  });
 
   test('parses CRLF record before normalizing its text', () => {
     expect(
