@@ -85,6 +85,14 @@ export function createRipgrepRunner(
 ): GlobRunner {
   return async (input, signal) => {
     const state = { timedOut: false, cancelled: false, limitReached: false };
+    let command = buildRgCommand(input);
+    const interruptedResult = () =>
+      emptyResult(input, command, {
+        incomplete: true,
+        timedOut: state.timedOut,
+        cancelled: state.cancelled,
+        exitCode: state.cancelled ? 130 : 124,
+      });
     const controller = new AbortController();
     let proc: ChildProcess | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -106,14 +114,10 @@ export function createRipgrepRunner(
     };
 
     if (signal.aborted) {
-      const timedOut =
+      state.timedOut =
         signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
-      return emptyResult(input, buildRgCommand(input), {
-        incomplete: true,
-        timedOut,
-        cancelled: !timedOut,
-        exitCode: timedOut ? 124 : 130,
-      });
+      state.cancelled = !state.timedOut;
+      return interruptedResult();
     }
 
     const stop = () => {
@@ -179,12 +183,10 @@ export function createRipgrepRunner(
     }, input.timeoutMs);
     timeout.unref?.();
 
-    let command = buildRgCommand(input);
-
     try {
       const resolved = await Promise.race([
         deps
-          .resolve({}, controller.signal, {
+          .resolve(undefined, controller.signal, {
             allowAutoInstall: input.allowAutoInstall === true,
           })
           .then((cli) => ({ type: 'cli' as const, cli }))
@@ -194,12 +196,7 @@ export function createRipgrepRunner(
       ]);
 
       if (resolved === 'cancel' || resolved === 'timeout') {
-        return emptyResult(input, command, {
-          incomplete: true,
-          timedOut: state.timedOut,
-          cancelled: state.cancelled,
-          exitCode: state.cancelled ? 130 : 124,
-        });
+        return interruptedResult();
       }
 
       if (resolved.type === 'resolve-error') {
@@ -207,12 +204,7 @@ export function createRipgrepRunner(
           resolved.error instanceof AbortWaitError ||
           controller.signal.aborted
         ) {
-          return emptyResult(input, command, {
-            incomplete: true,
-            timedOut: state.timedOut,
-            cancelled: state.cancelled,
-            exitCode: state.cancelled ? 130 : 124,
-          });
+          return interruptedResult();
         }
 
         return emptyResult(input, command, {
@@ -226,15 +218,9 @@ export function createRipgrepRunner(
       command = buildRgCommand(input, cli.path);
       try {
         const [cmd, ...args] = command;
-        // The CLI promise can win the race before abort is delivered, while
-        // this continuation is still queued. Recheck at the spawn boundary.
+        // Recheck at spawn: the CLI race may settle before abort is delivered.
         if (signal.aborted || controller.signal.aborted) {
-          return emptyResult(input, command, {
-            incomplete: true,
-            timedOut: state.timedOut,
-            cancelled: state.cancelled,
-            exitCode: state.cancelled ? 130 : 124,
-          });
+          return interruptedResult();
         }
         const spawned = deps.spawn(cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -246,8 +232,7 @@ export function createRipgrepRunner(
           proc = spawned.child;
           managedStop = spawned.stop;
           managedExit = spawned.readExit;
-          // Normalize rejection before subscribing or racing: early-stop
-          // winners must not orphan a rejected completion promise.
+          // Observe cleanup rejection even if early-stop wins the race.
           managedCompleted = spawned.completed.catch((error) => ({
             ...(spawned.readExit() ?? { code: null, signal: null }),
             error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
@@ -296,8 +281,7 @@ export function createRipgrepRunner(
           code: number | null,
           closeSignal: NodeJS.Signals | null,
         ) => {
-          // The sentinel owns escalation independently of the direct child.
-          // Closing this child must never cause signalling a saved PGID.
+          // A child's close must never signal a saved PGID.
           onExit();
           if (managedCompleted) return;
           clearDone();
@@ -305,8 +289,7 @@ export function createRipgrepRunner(
         };
         const onError = (error: unknown) => {
           if (settled) return;
-          // A stream/child error must START termination, not skip it:
-          // SIGTERM now, SIGKILL after the grace period.
+          // Start TERM→KILL escalation on stream/child errors.
           stop();
           if (managedCompleted) return;
           settle({ type: 'error', error });
@@ -315,9 +298,7 @@ export function createRipgrepRunner(
         child.once('close', onClose);
         child.once('exit', onExit);
         child.on('error', onError);
-        // Stream errors (EPIPE, ECONNRESET on the pipe, ...) must funnel
-        // into the same settlement; otherwise they become unhandled
-        // 'error' events that crash the plugin process.
+        // Funnel pipe errors through settlement instead of crashing the host.
         child.stdout?.on('error', onError);
         child.stderr?.on('error', onError);
         clearReaderErrors = () => {
@@ -392,22 +373,14 @@ export function createRipgrepRunner(
         clearDone();
       }
 
-      const exitCode =
-        ended === 'timeout'
-          ? (finalExit?.code ?? managedExit?.()?.code ?? child.exitCode ?? 124)
-          : ended === 'cancel'
-            ? (finalExit?.code ??
-              managedExit?.()?.code ??
-              child.exitCode ??
-              130)
-            : ended === 'limit'
-              ? (finalExit?.code ??
-                managedExit?.()?.code ??
-                child.exitCode ??
-                0)
-              : ended.type === 'close'
-                ? (ended.code ?? 1)
-                : 1;
+      const exitCode = earlyStop
+        ? (finalExit?.code ??
+          managedExit?.()?.code ??
+          child.exitCode ??
+          (ended === 'timeout' ? 124 : ended === 'cancel' ? 130 : 0))
+        : ended.type === 'close'
+          ? (ended.code ?? 1)
+          : 1;
       const interrupted =
         state.timedOut || state.cancelled || state.limitReached;
       const exitError =

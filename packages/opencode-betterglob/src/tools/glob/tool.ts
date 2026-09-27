@@ -5,11 +5,7 @@ import {
 } from '@opencode-ai/plugin';
 import { raceSignal } from '../../utils/abort';
 import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
-import {
-  GLOB_DESCRIPTION,
-  GLOB_TOOL_ID,
-  UNSUPPORTED_FOLLOW_SYMLINKS_ERROR,
-} from './constants';
+import { GLOB_DESCRIPTION, GLOB_TOOL_ID } from './constants';
 import { formatGlobResult } from './format';
 import { normalizeGlobInputAsync, resolveGlobScope } from './normalize';
 import { type ResolvedGlobCli, resolveGlobCliAsync } from './resolver';
@@ -49,7 +45,7 @@ export function createGlobTool(
   const run = options.run ?? runRipgrep;
   const resolveCli =
     options.resolveCli ??
-    ((signal?: AbortSignal) => resolveGlobCliAsync({}, signal));
+    ((signal?: AbortSignal) => resolveGlobCliAsync(undefined, signal));
   const argsSchema = globArgsSchema as Parameters<typeof tool>[0]['args'];
 
   return tool({
@@ -61,9 +57,6 @@ export function createGlobTool(
       let stage: 'normalize' | 'permission' | 'execution' = 'normalize';
 
       try {
-        if (raw.follow_symlinks === true) {
-          throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
-        }
         const scope = resolveGlobScope(raw, ctx, pluginCtx);
         stage = 'permission';
 
@@ -95,7 +88,6 @@ export function createGlobTool(
           directory: scope.cwd,
           worktree: scope.worktreeRoot,
           searchPath: scope.resolvedPath,
-          followSymlinks: false,
         };
         try {
           await withHumanPause(clock, phaseSignal, () =>
@@ -118,7 +110,6 @@ export function createGlobTool(
                 directory: normalizedInput.cwd,
                 worktree: normalizedInput.worktree,
                 searchPath: normalizedInput.searchPath,
-                followSymlinks: false,
               }),
             );
           }

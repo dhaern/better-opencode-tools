@@ -37,8 +37,6 @@ export async function commandSucceeds(
     const proc = crossSpawn([command, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
-      detached: process.platform !== 'win32',
-      killProcessGroup: process.platform !== 'win32',
     });
     const stdoutPromise = proc.stdout();
     const stderrPromise = proc.stderr();
@@ -122,8 +120,6 @@ export async function extractZip(
       return crossSpawn(['unzip', '-o', archivePath, '-d', destDir], {
         stdout: 'ignore',
         stderr: 'pipe',
-        detached: true,
-        killProcessGroup: true,
       });
     }
 
@@ -133,8 +129,6 @@ export async function extractZip(
       return crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
         stdout: 'ignore',
         stderr: 'pipe',
-        detached: false,
-        killProcessGroup: false,
       });
     }
 
@@ -148,8 +142,6 @@ export async function extractZip(
       {
         stdout: 'ignore',
         stderr: 'pipe',
-        detached: false,
-        killProcessGroup: false,
       },
     );
   })();

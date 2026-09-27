@@ -78,13 +78,14 @@ async function withRegularFile<T>(
   }
 }
 
-export async function readRegularFile(
+async function consumeRegularFile<T>(
   file: string,
   maxBytes: number,
-  signal?: AbortSignal,
-): Promise<Buffer> {
+  signal: AbortSignal | undefined,
+  onChunk: (chunk: Buffer) => void,
+  finish: (size: number) => T,
+): Promise<T> {
   return withRegularFile(file, maxBytes, signal, async (handle, size) => {
-    const chunks: Buffer[] = [];
     let position = 0;
     while (position < size) {
       throwIfAborted(signal);
@@ -96,11 +97,26 @@ export async function readRegularFile(
           `Cached file ended before its declared size: ${file}`,
         );
       }
-      chunks.push(buffer.subarray(0, bytesRead));
+      onChunk(buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
-    return Buffer.concat(chunks, size);
+    return finish(size);
   });
+}
+
+export async function readRegularFile(
+  file: string,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  return consumeRegularFile(
+    file,
+    maxBytes,
+    signal,
+    (chunk) => chunks.push(chunk),
+    (size) => Buffer.concat(chunks, size),
+  );
 }
 
 export async function computeSha256Async(
@@ -108,24 +124,16 @@ export async function computeSha256Async(
   signal?: AbortSignal,
   maxBytes = MAX_CACHE_BINARY_BYTES,
 ): Promise<string> {
-  return withRegularFile(file, maxBytes, signal, async (handle, size) => {
-    const hash = createHash('sha256');
-    let position = 0;
-    while (position < size) {
-      throwIfAborted(signal);
-      const length = Math.min(HASH_CHUNK_BYTES, size - position);
-      const buffer = Buffer.allocUnsafe(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, position);
-      if (bytesRead === 0) {
-        throw new InvalidCachedBinaryError(
-          `Cached file ended before its declared size: ${file}`,
-        );
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-    return hash.digest('hex');
-  });
+  const hash = createHash('sha256');
+  return consumeRegularFile(
+    file,
+    maxBytes,
+    signal,
+    (chunk) => {
+      hash.update(chunk);
+    },
+    () => hash.digest('hex'),
+  );
 }
 
 export async function writeMetadataFile(

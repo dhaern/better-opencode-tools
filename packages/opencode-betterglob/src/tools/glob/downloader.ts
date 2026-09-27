@@ -73,8 +73,6 @@ async function extractTarGz(
   const proc = crossSpawn(['tar', '-xzf', archive, '-C', dir], {
     stdout: 'ignore',
     stderr: 'pipe',
-    detached: process.platform !== 'win32',
-    killProcessGroup: process.platform !== 'win32',
   });
 
   const stderrPromise = proc.stderr();

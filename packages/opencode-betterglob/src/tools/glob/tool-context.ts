@@ -61,7 +61,7 @@ export function baseMetadata(
       args.sort_order ??
       (sortBy === 'mtime' ? 'desc' : 'asc'),
     hidden: input?.hidden ?? args.hidden !== false,
-    follow_symlinks: input?.followSymlinks ?? args.follow_symlinks === true,
+    follow_symlinks: false,
     timeout_ms: input?.timeoutMs ?? args.timeout_ms ?? DEFAULT_GLOB_TIMEOUT_MS,
   };
 }
@@ -88,31 +88,33 @@ export function resultMetadata(
   };
 }
 
+type AskContext = {
+  ask: (payload: {
+    permission: string;
+    patterns: string[];
+    always: string[];
+    metadata: Record<string, unknown>;
+  }) => Promise<unknown> | unknown;
+};
+
+export function permissionPath(
+  file: string,
+  platform = process.platform,
+): string {
+  return platform === 'win32' ? file.replaceAll('\\', '/') : file;
+}
+
 export async function askExternalDirectory(
-  ctx: {
-    ask: (payload: {
-      permission: string;
-      patterns: string[];
-      always: string[];
-      metadata: Record<string, unknown>;
-    }) => Promise<unknown> | unknown;
-  },
+  ctx: AskContext,
   input: {
     directory: string;
     worktree: string;
     searchPath: string;
-    followSymlinks: boolean;
   },
 ): Promise<void> {
-  if (!input.followSymlinks && isInsideAllowedBoundary(input)) {
-    return;
-  }
+  if (isInsideAllowedBoundary(input)) return;
 
-  const normalizedPath =
-    process.platform === 'win32'
-      ? input.searchPath.replaceAll('\\', '/')
-      : input.searchPath;
-  const glob = `${normalizedPath}/*`;
+  const glob = `${permissionPath(input.searchPath)}/*`;
   await runOpenCodeSideEffect(
     ctx.ask({
       permission: 'external_directory',
@@ -121,24 +123,15 @@ export async function askExternalDirectory(
       metadata: {
         filepath: input.searchPath,
         parentDir: input.searchPath,
-        follow_symlinks: input.followSymlinks,
-        may_traverse_outside_worktree: input.followSymlinks,
+        follow_symlinks: false,
+        may_traverse_outside_worktree: false,
       },
     }),
   );
 }
 
-export async function askRipgrepAutoInstall(ctx: {
-  ask: (payload: {
-    permission: string;
-    patterns: string[];
-    always: string[];
-    metadata: Record<string, unknown>;
-  }) => Promise<unknown> | unknown;
-}): Promise<void> {
-  const cacheDir = getRipgrepCacheDir();
-  const dir =
-    process.platform === 'win32' ? cacheDir.replaceAll('\\', '/') : cacheDir;
+export async function askRipgrepAutoInstall(ctx: AskContext): Promise<void> {
+  const dir = permissionPath(getRipgrepCacheDir());
   await runOpenCodeSideEffect(
     ctx.ask({
       permission: 'install_ripgrep',

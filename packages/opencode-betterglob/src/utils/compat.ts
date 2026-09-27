@@ -1,5 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import which from 'which';
 import {
   ABORT_KILL_GRACE_MS,
   capText,
@@ -15,6 +17,16 @@ import {
 } from './process-supervisor';
 
 export { waitForProcessOutputWithAbortGrace } from './process-output';
+
+/** Follow symlinks so replacing the target invalidates every positive memo. */
+export async function fileStamp(file: string): Promise<string | undefined> {
+  try {
+    const info = await stat(file);
+    return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
 
 export function isMissingExecutableError(error: unknown): boolean {
   return (
@@ -88,7 +100,6 @@ export function crossSpawn(
     stdin?: 'pipe' | 'inherit' | 'ignore';
     cwd?: string;
     env?: Record<string, string | undefined>;
-    detached?: boolean;
     killProcessGroup?: boolean;
     killGraceMs?: number;
     cleanupTimeoutMs?: number;
@@ -110,7 +121,6 @@ export function crossSpawn(
       ],
       cwd: options?.cwd,
       env: options?.env as NodeJS.ProcessEnv,
-      detached: options?.detached,
     });
 
   const stdoutCollector = collectStream(proc.stdout, 'stdout');
@@ -206,16 +216,24 @@ export function crossSpawn(
   };
 }
 
-/** Probe the auxiliary runtime before any rg lookup, probe or installation.
- * Direct spawn is intentional: validating Node must not itself require the
- * supervisor. No synchronous PATH/filesystem operations or persistent cache.
- */
+const runtimeProbes = new Set<string>();
+
+/** Probe Node directly before rg lookup; memoize only stamped positives. */
 export async function ensureSupervisorRuntime(
   signal?: AbortSignal,
   executable = 'node',
 ): Promise<void> {
   if (process.platform === 'win32' || !process.versions.bun) return;
   signal?.throwIfAborted();
+  const found = await which(executable, { nothrow: true }).catch(
+    () => undefined,
+  );
+  const stamp = found && (await fileStamp(found));
+  const key = stamp
+    ? `${process.env.PATH ?? ''}:${executable}:${found}:${stamp}`
+    : undefined;
+  signal?.throwIfAborted();
+  if (key && runtimeProbes.has(key)) return;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), DEFAULT_CLEANUP_TIMEOUT_MS);
   const probeSignal = signal
@@ -245,6 +263,7 @@ export async function ensureSupervisorRuntime(
       result.stdout !== 'betterglob-node-supervisor'
     )
       throw new SupervisorRuntimeError();
+    if (key) runtimeProbes.add(key);
   } catch (error) {
     if (isSupervisorError(error)) throw error;
     signal?.throwIfAborted();

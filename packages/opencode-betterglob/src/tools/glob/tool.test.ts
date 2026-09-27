@@ -7,6 +7,7 @@ import { Effect } from 'effect';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
 import { createExecutionContext, createTempTracker } from './test-helpers';
 import { createGlobTool } from './tool';
+import { permissionPath } from './tool-context';
 import type { GlobRunner, GlobSearchResult } from './types';
 
 describe('tools/glob/tool', () => {
@@ -194,11 +195,17 @@ describe('tools/glob/tool', () => {
     if (!externalCall) throw new Error('external_directory ask was not called');
     const external = externalCall[0];
     const pattern = `${outside.replace(/\\/g, '/')}/*`;
-    expect(external.permission).toBe('external_directory');
-    expect(external.patterns).toEqual([pattern]);
-    expect(external.always).toEqual([pattern]);
-    expect(external.metadata.filepath).toBe(outside);
-    expect(external.metadata.parentDir).toBe(outside);
+    expect(external).toEqual({
+      permission: 'external_directory',
+      patterns: [pattern],
+      always: [pattern],
+      metadata: {
+        filepath: outside,
+        parentDir: outside,
+        follow_symlinks: false,
+        may_traverse_outside_worktree: false,
+      },
+    });
   });
 
   test('rejects unsupported symlink traversal before filesystem permissions', async () => {
@@ -216,6 +223,7 @@ describe('tools/glob/tool', () => {
       tool.execute({ pattern: '*.ts', follow_symlinks: true }, ctx as any),
     ).rejects.toThrow(/follow_symlinks:true is unsupported/);
     expect(run).not.toHaveBeenCalled();
+    expect(ctx.ask).not.toHaveBeenCalled();
     expect(
       ctx.ask.mock.calls.some(
         (call) =>
@@ -582,5 +590,10 @@ describe('tools/glob/tool', () => {
       metadata: expect.objectContaining({ count: 1 }),
     });
     expect(calls).toBe(1);
+  });
+
+  test('normalizes Windows permission separators without altering POSIX paths', () => {
+    expect(permissionPath('C:\\src\\cache', 'win32')).toBe('C:/src/cache');
+    expect(permissionPath('C:\\src\\cache', 'linux')).toBe('C:\\src\\cache');
   });
 });

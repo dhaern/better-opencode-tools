@@ -60,8 +60,6 @@ async function detectLinuxLibcAsync(
     const proc = crossSpawn(['ldd', '--version'], {
       stdout: 'pipe',
       stderr: 'pipe',
-      detached: process.platform !== 'win32',
-      killProcessGroup: process.platform !== 'win32',
     });
     const stdoutPromise = proc.stdout();
     const stderrPromise = proc.stderr();
@@ -85,61 +83,36 @@ async function detectLinuxLibcAsync(
   }
 }
 
-function getPlatformCandidates(): PlatformCandidate[] {
-  if (process.platform === 'darwin') {
-    if (process.arch === 'arm64') {
-      return [{ target: 'aarch64-apple-darwin', extension: 'tar.gz' }];
-    }
-    if (process.arch === 'x64') {
-      return [{ target: 'x86_64-apple-darwin', extension: 'tar.gz' }];
-    }
-    return [];
-  }
-
-  if (process.platform === 'win32') {
-    if (process.arch === 'arm64') {
-      return [{ target: 'aarch64-pc-windows-msvc', extension: 'zip' }];
-    }
-    if (process.arch === 'x64') {
-      return [{ target: 'x86_64-pc-windows-msvc', extension: 'zip' }];
-    }
-    return [];
-  }
-
-  return [];
+export function platformCandidates(
+  platform: NodeJS.Platform,
+  arch: string,
+  libc: 'gnu' | 'musl' = 'gnu',
+): PlatformCandidate[] {
+  const cpu =
+    arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : undefined;
+  if (!cpu) return [];
+  if (platform === 'darwin')
+    return [{ target: `${cpu}-apple-darwin`, extension: 'tar.gz' }];
+  if (platform === 'win32')
+    return [{ target: `${cpu}-pc-windows-msvc`, extension: 'zip' }];
+  if (platform !== 'linux') return [];
+  const alternate = libc === 'gnu' ? 'musl' : 'gnu';
+  return [libc, alternate].map((variant) => ({
+    target: `${cpu}-unknown-linux-${variant}`,
+    extension: 'tar.gz' as const,
+  }));
 }
 
-async function getPlatformCandidatesAsync(
+export async function getPlatformCandidatesAsync(
   signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  detectLibc = detectLinuxLibcAsync,
 ): Promise<PlatformCandidate[]> {
-  if (process.platform !== 'linux') return getPlatformCandidates();
-
-  const libc = await detectLinuxLibcAsync(signal);
-  if (process.arch === 'arm64') {
-    return libc === 'musl'
-      ? [
-          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-        ]
-      : [
-          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-        ];
+  if (platform !== 'linux' || (arch !== 'arm64' && arch !== 'x64')) {
+    return platformCandidates(platform, arch);
   }
-
-  if (process.arch === 'x64') {
-    return libc === 'musl'
-      ? [
-          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-        ]
-      : [
-          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-        ];
-  }
-
-  return [];
+  return platformCandidates(platform, arch, await detectLibc(signal));
 }
 
 export async function fetchLatestRelease(

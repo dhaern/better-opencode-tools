@@ -1,15 +1,11 @@
 import which from 'which';
 import { AbortWaitError, raceSignal } from '../../utils/abort';
-import {
-  crossSpawn,
-  ensureSupervisorRuntime,
-  waitForProcessOutputWithAbortGrace,
-} from '../../utils/compat';
+import { ensureSupervisorRuntime, fileStamp } from '../../utils/compat';
 import { logAsync } from '../../utils/logger';
 import { isSupervisorError } from '../../utils/process-supervisor';
 import { RG_BINARY } from './constants';
 import { installLatestStableRipgrep } from './downloader';
-import { getInstalledRipgrepPathAsync } from './rg-cache';
+import { getInstalledRipgrepPathAsync, probeRipgrepVersion } from './rg-cache';
 
 export interface ResolvedGlobCli {
   path: string;
@@ -47,6 +43,8 @@ interface SharedAutoInstallState {
 
 let state: SharedAutoInstallState | null = null;
 const PROBE_TIMEOUT_MS = 5_000;
+const DEFAULT_DEPS: GlobResolverDependencies = {};
+const systemMemo = new WeakMap<GlobResolverDependencies, Set<string>>();
 
 function isMissingExecutable(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -78,38 +76,19 @@ async function defaultValidateExecutableAsync(
     : timeout.signal;
 
   try {
-    const proc = crossSpawn([file, '--version'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      detached: process.platform !== 'win32',
-      killProcessGroup: process.platform !== 'win32',
-    });
-    const stdoutPromise = proc.stdout();
-    const stderrPromise = proc.stderr();
-    const result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
-      probeSignal,
-      stdoutPromise,
-      { killGraceMs: 250, postCloseDrainMs: 250 },
-    );
+    const result = await probeRipgrepVersion(file, probeSignal);
 
     if (signal?.aborted) {
       throw new AbortWaitError();
     }
-    if (result.aborted || timeout.signal.aborted) {
-      throw new Error('ripgrep executable validation timed out.');
-    }
-    if (result.exitCode !== 0) return false;
-
-    return `${result.stdout}\n${result.stderr}`
-      .toLowerCase()
-      .includes('ripgrep');
+    if (result.aborted || timeout.signal.aborted) return false;
+    return result.valid;
   } catch (error) {
     if (isSupervisorError(error)) throw error;
     if (signal?.aborted) {
       throw new AbortWaitError();
     }
+    if (timeout.signal.aborted) return false;
     if (isMissingExecutable(error)) return false;
     throw error;
   } finally {
@@ -118,7 +97,7 @@ async function defaultValidateExecutableAsync(
 }
 
 export async function resolveGlobCliAsync(
-  deps: GlobResolverDependencies = {},
+  deps: GlobResolverDependencies = DEFAULT_DEPS,
   signal?: AbortSignal,
 ): Promise<ResolvedGlobCli> {
   if (signal?.aborted) {
@@ -135,8 +114,21 @@ export async function resolveGlobCliAsync(
     deps.validateExecutableAsync ?? defaultValidateExecutableAsync;
   const system = await race(find(RG_BINARY, signal), signal);
 
-  if (system && (await race(validate(system, signal), signal))) {
-    return { path: system, backend: 'rg', source: 'system-rg' };
+  if (system) {
+    const stamp = deps === DEFAULT_DEPS ? await fileStamp(system) : undefined;
+    const key = stamp && `${system}:${stamp}`;
+    const memo = systemMemo.get(deps) ?? new Set<string>();
+    if (key && memo.has(key)) {
+      if (signal?.aborted) throw new AbortWaitError();
+      return { path: system, backend: 'rg', source: 'system-rg' };
+    }
+    if (await race(validate(system, signal), signal)) {
+      if (key && stamp === (await fileStamp(system))) {
+        memo.add(key);
+        systemMemo.set(deps, memo);
+      }
+      return { path: system, backend: 'rg', source: 'system-rg' };
+    }
   }
 
   const installed = deps.getInstalledRipgrepPathAsync
@@ -243,7 +235,7 @@ function create(deps: GlobResolverDependencies): SharedAutoInstallState {
 }
 
 export async function resolveGlobCliWithAutoInstall(
-  deps: GlobResolverDependencies = {},
+  deps: GlobResolverDependencies = DEFAULT_DEPS,
   signal?: AbortSignal,
   options: { allowAutoInstall?: boolean } = {},
 ): Promise<ResolvedGlobCli> {

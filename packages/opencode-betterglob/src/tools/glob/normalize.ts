@@ -105,6 +105,9 @@ export function resolveGlobScope(
   context: Pick<ToolContext, 'directory' | 'worktree'>,
   pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
 ): ResolvedGlobScope {
+  if (args.follow_symlinks === true) {
+    throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
+  }
   if (typeof args.pattern !== 'string' || args.pattern.length === 0) {
     throw new Error('pattern must be a non-empty string');
   }
@@ -147,10 +150,6 @@ export async function normalizeGlobInputAsync(
   context: Pick<ToolContext, 'directory' | 'worktree'>,
   pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
 ): Promise<NormalizedGlobInput> {
-  if (args.follow_symlinks === true) {
-    throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
-  }
-
   const scope = resolveGlobScope(args, context, pluginCtx);
   let info: Awaited<ReturnType<typeof statAsyncFs>>;
   try {
