@@ -102,6 +102,42 @@ describe('tools/grep/fallback', () => {
     expect(result.warnings.join(' ')).toContain('GNU grep fallback');
   });
 
+  test('GNU grep exit 0 with only unparsable output reports the skipped line', async () => {
+    const repo = temps.createRepo();
+    const dir = temps.createDir('bettergrep-unparsable');
+    const binary = path.join(dir, 'grep');
+    writeFileSync(
+      binary,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        "  printf 'grep (GNU grep) 3.11\\n'",
+        '  exit 0',
+        'fi',
+        'for last do :; done',
+        'printf \'%s\\000not-a-record\\n\' "$last"',
+        'exit 0',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'needle', path: 'src', fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const result = await executeGrepFallback(
+      input,
+      new AbortController().signal,
+      {
+        path: binary,
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      },
+    );
+    expect(result.error).toBe('GNU grep fallback produced unparsable output.');
+    expect(result.warnings.join(' ')).toContain('skipped 1');
+    expect(result.totalMatches).toBe(0);
+  });
+
   test.each([
     'cancel',
     'timeout',
