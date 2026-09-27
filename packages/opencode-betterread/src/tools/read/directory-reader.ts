@@ -7,6 +7,8 @@ import { fitsOutputBudget, getDirectoryLimit } from './limits';
 import type { DirectoryReadResult } from './types';
 
 const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;
+// Bound concurrent symlink stats so wide windows do not flood the thread pool.
+const STAT_BATCH_SIZE = 256;
 
 type ScannedDirectoryEntry = {
   name: string;
@@ -82,13 +84,10 @@ async function scanDirectoryEntries(
 async function formatDirectoryEntry(
   resolvedPath: string,
   entry: ScannedDirectoryEntry,
-  signal?: AbortSignal,
 ): Promise<string> {
-  signal?.throwIfAborted();
   if (entry.dirent.isDirectory()) return `${entry.name}/`;
   if (entry.dirent.isSymbolicLink()) {
     try {
-      signal?.throwIfAborted();
       if ((await stat(path.join(resolvedPath, entry.name))).isDirectory()) {
         return `${entry.name}/`;
       }
@@ -164,9 +163,15 @@ export async function readDirectory(
     startIndex + directoryLimit,
   );
   const visible: string[] = [];
-  for (const entry of visibleDirents) {
+  for (let index = 0; index < visibleDirents.length; index += STAT_BATCH_SIZE) {
     signal?.throwIfAborted();
-    visible.push(await formatDirectoryEntry(resolvedPath, entry, signal));
+    visible.push(
+      ...(await Promise.all(
+        visibleDirents
+          .slice(index, index + STAT_BATCH_SIZE)
+          .map((entry) => formatDirectoryEntry(resolvedPath, entry)),
+      )),
+    );
   }
   signal?.throwIfAborted();
   const normalizedPath = path.normalize(options.displayPath ?? resolvedPath);
