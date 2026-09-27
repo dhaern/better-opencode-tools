@@ -218,8 +218,22 @@ export async function executeRead(input: {
     }
 
     const text = notebook
-      ? await readNotebook(readPath, args.offset, args.limit, signal, handle)
-      : await readTextFile(readPath, args.offset, args.limit, signal, handle);
+      ? await readNotebook(
+          readPath,
+          args.offset,
+          args.limit,
+          signal,
+          handle,
+          handleStat.size,
+        )
+      : await readTextFile(
+          readPath,
+          args.offset,
+          args.limit,
+          signal,
+          handle,
+          handleStat.size,
+        );
     text.path = resolvedPath;
     if (
       text.totalLines !== undefined &&

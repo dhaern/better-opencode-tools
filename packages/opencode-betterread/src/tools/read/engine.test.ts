@@ -61,6 +61,21 @@ describe('executeRead', () => {
     );
   });
 
+  test('rejects an over-cap size hint without reading', async () => {
+    let reads = 0;
+    const handle = {
+      read: async () => {
+        reads += 1;
+        return { buffer: Buffer.alloc(0), bytesRead: 0 };
+      },
+    } as any;
+
+    await expect(readBoundedBytes(handle, 10, undefined, 11)).rejects.toThrow(
+      'Embedded attachment exceeds the 10 byte limit',
+    );
+    expect(reads).toBe(0);
+  });
+
   test('reads an attachment of known size with one data read', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'large.png');

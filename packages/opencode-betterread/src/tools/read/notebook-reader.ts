@@ -51,18 +51,19 @@ export async function readNotebook(
   limit: number,
   signal?: AbortSignal,
   handle?: FileHandle,
+  size?: number,
 ): Promise<NotebookReadResult> {
   signal?.throwIfAborted();
   const file = handle ?? (await open(resolvedPath, 'r'));
   try {
-    const { size } = await file.stat();
-    if (shouldParseNotebook(size)) {
+    const fileSize = size ?? (await file.stat()).size;
+    if (shouldParseNotebook(fileSize)) {
       try {
         const raw = await readBoundedBytes(
           file,
           MAX_PARSED_NOTEBOOK_BYTES,
           signal,
-          size,
+          fileSize,
         );
         const lines = notebookLines(raw.toString('utf8'));
         const selection = selectBudgetedLines(lines, offset, limit);
@@ -90,6 +91,7 @@ export async function readNotebook(
         limit,
         signal,
         file,
+        fileSize,
       )),
       kind: 'notebook',
       mode: 'raw-fallback',

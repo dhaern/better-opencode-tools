@@ -118,9 +118,14 @@ export async function readBoundedBytes(
   handle: FileHandle,
   cap: number,
   signal?: AbortSignal,
-  sizeHint = 64 * 1024,
+  sizeHint?: number,
 ): Promise<Buffer> {
-  let buffer = Buffer.allocUnsafe(Math.min(cap, sizeHint) + 1);
+  // A known fstat size above the cap cannot fit: fail before any read. An
+  // unknown size keeps the 64 KiB starting buffer and discovers the length.
+  if (sizeHint !== undefined && sizeHint > cap) {
+    throw new Error(`Embedded attachment exceeds the ${cap} byte limit`);
+  }
+  let buffer = Buffer.allocUnsafe(Math.min(cap, sizeHint ?? 64 * 1024) + 1);
   let total = 0;
   for (;;) {
     signal?.throwIfAborted();

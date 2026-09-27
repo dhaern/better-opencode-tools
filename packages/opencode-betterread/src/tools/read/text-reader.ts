@@ -138,14 +138,15 @@ async function readText(
   streaming: boolean,
   signal?: AbortSignal,
   handle?: FileHandle,
+  size?: number,
 ): Promise<TextReadResult> {
   signal?.throwIfAborted();
   const file = handle ?? (await open(resolvedPath, 'r'));
   try {
-    const { size } = await file.stat();
-    const countAll = !streaming && size <= FAST_PATH_MAX_BYTES;
+    const fileSize = size ?? (await file.stat()).size;
+    const countAll = !streaming && fileSize <= FAST_PATH_MAX_BYTES;
     return {
-      ...(await scanText(file, offset, limit, countAll, size, signal)),
+      ...(await scanText(file, offset, limit, countAll, fileSize, signal)),
       path: resolvedPath,
     };
   } finally {
@@ -159,8 +160,9 @@ export function readTextFile(
   limit: number,
   signal?: AbortSignal,
   handle?: FileHandle,
+  size?: number,
 ): Promise<TextReadResult> {
-  return readText(resolvedPath, offset, limit, false, signal, handle);
+  return readText(resolvedPath, offset, limit, false, signal, handle, size);
 }
 
 // Streaming semantics regardless of size: stops at the window and reports an
@@ -171,6 +173,7 @@ export function readTextFileStreaming(
   limit: number,
   signal?: AbortSignal,
   handle?: FileHandle,
+  size?: number,
 ): Promise<TextReadResult> {
-  return readText(resolvedPath, offset, limit, true, signal, handle);
+  return readText(resolvedPath, offset, limit, true, signal, handle, size);
 }
