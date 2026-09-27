@@ -5,9 +5,16 @@ import { READ_TOOL_ID } from './constants';
 
 // OpenCode ≤1.15 returns permission asks as Effects, newer hosts as Promises;
 // both must settle (and fail closed) before the tool continues.
-export async function runOpenCodeSideEffect(value: unknown): Promise<void> {
-  const { Effect: runtime } = await import('effect');
-  if (runtime.isEffect(value)) {
+export async function runOpenCodeSideEffect(
+  value: unknown,
+  loadEffect: () => Promise<typeof import('effect')> = () => import('effect'),
+): Promise<void> {
+  if (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    '~effect/Effect' in value
+  ) {
+    const { Effect: runtime } = await loadEffect();
     await runtime.runPromise(value as Effect.Effect<unknown>);
   } else {
     await value;
