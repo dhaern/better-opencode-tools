@@ -222,6 +222,7 @@ test('mtime sort warns on deleted files and orders them last', async () => {
     file: 'gone.txt',
     absolutePath: '/no/such/dir/gone.txt',
     pathKey: 'utf8:/no/such/dir/gone.txt',
+    replayPath: '/no/such/dir/gone.txt',
   });
   const sorted = await sortFilesByMtime(
     [missing],
@@ -231,6 +232,7 @@ test('mtime sort warns on deleted files and orders them last', async () => {
   );
 
   expect(sorted.files).toEqual([missing]);
+  expect(sorted.timedOut).toBe(false);
   expect(
     sorted.warnings.some((warning) => warning.includes('Could not stat')),
   ).toBe(true);
