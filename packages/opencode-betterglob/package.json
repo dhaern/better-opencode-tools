@@ -1,6 +1,6 @@
 {
   "name": "opencode-betterglob",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Standalone OpenCode plugin that provides an rg-backed glob tool with native-compatible output.",
   "repository": {
     "type": "git",
@@ -24,7 +24,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.9.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "license": "MIT",
   "keywords": [
