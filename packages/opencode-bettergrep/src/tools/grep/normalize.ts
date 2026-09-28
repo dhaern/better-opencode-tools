@@ -11,6 +11,10 @@ import {
 } from './constants';
 import type { GrepToolInput, NormalizedGrepInput } from './types';
 
+// Defaults shared with the tool metadata fallbacks so both sides move together.
+export const DEFAULT_OUTPUT_MODE = 'content';
+export const DEFAULT_SORT_BY = 'none';
+
 function clampInteger(
   value: number | undefined,
   fallback: number,
@@ -59,6 +63,8 @@ function uniqueStrings(values: Iterable<string | undefined>): string[] {
   return normalized;
 }
 
+const realpath = realpathSync.native ?? realpathSync;
+
 function normalizeSearchTarget(
   target: string,
   base: string,
@@ -71,16 +77,12 @@ function normalizeSearchTarget(
   const resolvedPath = path.isAbsolute(target)
     ? target
     : path.resolve(base, target);
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Search path does not exist: ${target}`);
-  }
-
   let searchPath: string;
   try {
-    searchPath = realpathSync.native
-      ? realpathSync.native(resolvedPath)
-      : realpathSync(resolvedPath);
+    searchPath = realpath(resolvedPath);
   } catch (error) {
+    if (!existsSync(resolvedPath))
+      throw new Error(`Search path does not exist: ${target}`);
     throw new Error(
       `Failed to resolve search path: ${target} (${error instanceof Error ? error.message : String(error)})`,
     );
@@ -127,15 +129,10 @@ export function normalizeGrepInput(
     : path.resolve(cwd, rawWorktree);
   let worktree: string;
   try {
-    worktree = existsSync(absoluteRawWorktree)
-      ? realpathSync.native
-        ? realpathSync.native(absoluteRawWorktree)
-        : realpathSync(absoluteRawWorktree)
-      : absoluteRawWorktree;
+    worktree = realpath(absoluteRawWorktree);
   } catch {
     worktree = absoluteRawWorktree;
   }
-  const base = cwd;
   const rawTargets = cleanStringArray(args.paths);
   if (
     rawTargets.length === 0 &&
@@ -152,7 +149,7 @@ export function normalizeGrepInput(
   const normalizedTargets: Array<ReturnType<typeof normalizeSearchTarget>> = [];
   const normalizedPaths = new Set<string>();
   for (const target of requestedTargets) {
-    const normalized = normalizeSearchTarget(target, base);
+    const normalized = normalizeSearchTarget(target, cwd);
     if (normalizedPaths.has(normalized.searchPath)) continue;
     normalizedPaths.add(normalized.searchPath);
     normalizedTargets.push(normalized);
@@ -163,10 +160,7 @@ export function normalizeGrepInput(
     rawTargets.length > 0
       ? requestedTargets.join(', ')
       : primaryTarget.requestedPath;
-  const resolvedPath =
-    rawTargets.length > 0
-      ? primaryTarget.resolvedPath
-      : primaryTarget.resolvedPath;
+  const resolvedPath = primaryTarget.resolvedPath;
   const searchPath = primaryTarget.searchPath;
   const include = cleanOptionalString(args.include);
   const globs = cleanStringArray(args.globs);
@@ -211,7 +205,7 @@ export function normalizeGrepInput(
     include,
     globs,
     excludeGlobs,
-    outputMode: args.output_mode ?? 'content',
+    outputMode: args.output_mode ?? DEFAULT_OUTPUT_MODE,
     caseSensitive,
     smartCase,
     wordRegexp: args.word_regexp === true,
@@ -242,7 +236,7 @@ export function normalizeGrepInput(
     fileTypes,
     excludeFileTypes,
     maxFilesize: cleanOptionalString(args.max_filesize),
-    sortBy: args.sort_by ?? 'none',
+    sortBy: args.sort_by ?? DEFAULT_SORT_BY,
     sortOrder: args.sort_order ?? (args.sort_by === 'mtime' ? 'desc' : 'asc'),
     cwd,
     worktree,

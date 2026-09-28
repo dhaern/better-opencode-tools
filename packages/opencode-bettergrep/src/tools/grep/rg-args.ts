@@ -62,6 +62,10 @@ export function buildRgArgs(input: NormalizedGrepInput): string[] {
     args.push(input.sortOrder === 'desc' ? '--sortr' : '--sort', 'path');
   }
 
+  if (input.sequentialReplay) {
+    args.push('-j1');
+  }
+
   if (input.smartCase) {
     args.push('--smart-case');
   } else if (!input.caseSensitive) {

@@ -1,20 +1,16 @@
+import { stat } from 'node:fs/promises';
 import { MAX_MTIME_DISCOVERY_FILES } from './constants';
-import {
-  executeContentLikeMode,
-  executeCountMode,
-  executeFilesMode,
-} from './direct';
-import { sortFilesByMtime } from './mtime-sort';
+import { executeDirectMode, executeFileListMode } from './direct';
+import { comparePathBytes, finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
 import {
   countOccurrences,
   countVisibleMatches,
   createEmptyResult,
   finalizeMtimeContentResult,
-  finalizeMtimeSimpleResult,
 } from './result-utils';
 import { buildRgCommand } from './rg-args';
-import { getAbortKind, remainingTimeout } from './runtime';
+import { isTimedOutAbort, remainingTimeout, toErrorMessage } from './runtime';
 import type {
   GrepFileMatch,
   GrepSearchResult,
@@ -53,6 +49,9 @@ function withSearchTargets(
     sortBy: 'none',
     sortOrder: 'asc',
     searchTargets,
+    // Replay batches run single-threaded so results follow argv order;
+    // per-batch post-reorder below is belt and braces.
+    sequentialReplay: true,
   };
 }
 
@@ -68,29 +67,30 @@ function reorderFilesByReplayOrder(
   files: GrepFileMatch[],
   orderedTargets: string[],
 ): GrepFileMatch[] {
-  const order = new Map<string, number>();
-  orderedTargets.forEach((target, index) => {
-    order.set(target, index);
-  });
+  const order = new Map(orderedTargets.map((target, index) => [target, index]));
+  return files.sort(
+    (left, right) =>
+      (order.get(left.replayPath ?? left.absolutePath) ?? Infinity) -
+      (order.get(right.replayPath ?? right.absolutePath) ?? Infinity),
+  );
+}
 
-  return [...files].sort((left, right) => {
-    const leftOrder =
-      order.get(left.replayPath ?? left.absolutePath) ??
-      Number.MAX_SAFE_INTEGER;
-    const rightOrder =
-      order.get(right.replayPath ?? right.absolutePath) ??
-      Number.MAX_SAFE_INTEGER;
-    return leftOrder - rightOrder;
-  });
+function abortedKind(
+  signal: AbortSignal,
+): 'timedOut' | 'cancelled' | undefined {
+  return signal.aborted
+    ? isTimedOutAbort(signal)
+      ? 'timedOut'
+      : 'cancelled'
+    : undefined;
 }
 
 async function discoverMatchingFiles(
-  input: NormalizedGrepInput,
+  discoveryInput: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
-  const discoveryInput = buildDiscoveryInput(input);
-  const result = await executeFilesMode(discoveryInput, signal, cli);
+  const result = await executeFileListMode(discoveryInput, signal, cli);
 
   if (result.limitReached) {
     result.truncated = true;
@@ -118,8 +118,8 @@ export async function executeMtimeMode(
   cli: ResolvedGrepCli,
 ): Promise<GrepSearchResult> {
   const deadline = Date.now() + input.timeoutMs;
-  const discovery = await discoverMatchingFiles(input, signal, cli);
   const discoveryInput = buildDiscoveryInput(input);
+  const discovery = await discoverMatchingFiles(discoveryInput, signal, cli);
   const baseMtimeResult: GrepSearchResult = {
     ...createEmptyResult(input),
     backend: 'rg',
@@ -141,12 +141,7 @@ export async function executeMtimeMode(
       sortOrder: 'asc',
       timeoutMs,
     };
-    const fallback =
-      input.outputMode === 'files_with_matches'
-        ? await executeFilesMode(fallbackInput, signal, cli)
-        : input.outputMode === 'count'
-          ? await executeCountMode(fallbackInput, signal, cli)
-          : await executeContentLikeMode(fallbackInput, signal, cli);
+    const fallback = await executeDirectMode(fallbackInput, signal, cli);
 
     return {
       ...fallback,
@@ -172,13 +167,11 @@ export async function executeMtimeMode(
   const fullStrategyMeta = {
     ...strategyMeta,
     sortedFiles: sortedFiles.length,
-    replayTargetCount: sortedFiles.filter((file) => file.replayPath).length,
+    replayTargetCount: sortedFiles.length,
   };
 
   if (input.outputMode === 'files_with_matches') {
-    return finalizeMtimeSimpleResult(
-      input,
-      sortedFiles,
+    return finishFileListMode(
       {
         ...baseMtimeResult,
         ...fullStrategyMeta,
@@ -190,7 +183,6 @@ export async function executeMtimeMode(
         timedOut: discovery.timedOut || sortedDiscovery.timedOut,
         cancelled: discovery.cancelled || sortedDiscovery.cancelled,
         stderr: discovery.stderr,
-        warnings: [...discovery.warnings, ...sortedDiscovery.warnings],
         retryCount: discovery.retryCount,
         exitCode: discovery.exitCode,
         summary: undefined,
@@ -201,7 +193,10 @@ export async function executeMtimeMode(
               ? 'mtime-sort'
               : undefined,
       },
+      sortedFiles,
+      input,
       discovery.files.length > input.maxResults,
+      { warnings: [...discovery.warnings, ...sortedDiscovery.warnings] },
     );
   }
 
@@ -234,113 +229,93 @@ export async function executeMtimeMode(
     };
   }
 
-  const collected: GrepFileMatch[] = [];
-  let timedOut = false;
-  let cancelled = false;
-  let limitReached = false;
-  let partialReplayFailure = false;
-  let stderr = discovery.stderr;
-  const warnings: string[] = [
-    ...discovery.warnings,
-    ...sortedDiscovery.warnings,
-  ];
-  let retryCount = discovery.retryCount;
-  let exitCode = discovery.exitCode;
-  let replayBatchCount = 0;
-  let replayedFiles = 0;
-  const replayableFiles = sortedFiles.filter((file) => {
-    if (file.replayPath) {
-      return true;
-    }
-    partialReplayFailure = true;
-    warnings.push(
-      `Skipped ${file.file} during mtime replay: non-UTF8 paths are not replayable safely.`,
-    );
-    return false;
-  });
-
-  const replayBatchSize = input.outputMode === 'content' ? 1 : 64;
-
-  for (const batch of chunkArray(replayableFiles, replayBatchSize)) {
-    if (signal.aborted) {
-      if (getAbortKind(signal) === 'timeout') {
-        timedOut = true;
-      } else {
-        cancelled = true;
-      }
-      break;
-    }
-
-    const timeoutMs = remainingTimeout(deadline);
-    if (timeoutMs <= 1) {
-      timedOut = true;
-      break;
-    }
-
-    const orderedTargets = batch
-      .map((file) => file.replayPath)
-      .filter((value): value is string => Boolean(value));
-    if (orderedTargets.length === 0) {
-      continue;
-    }
-
+  const state = {
+    collected: [] as GrepFileMatch[],
+    timedOut: false,
+    cancelled: false,
+    limitReached: false,
+    partialReplayFailure: false,
+    stderr: discovery.stderr,
+    warnings: [...discovery.warnings, ...sortedDiscovery.warnings],
+    retryCount: discovery.retryCount,
+    exitCode: discovery.exitCode,
+    replayBatchCount: 0,
+    replayedFiles: 0,
+  };
+  const runReplayAttempt = async (
+    targets: string[],
+    retrying = false,
+  ): Promise<boolean> => {
     const scopedInput = withSearchTargets(
       input,
-      orderedTargets,
-      timeoutMs,
+      targets,
+      remainingTimeout(deadline),
       input.outputMode === 'count'
         ? Number.MAX_SAFE_INTEGER
-        : Math.max(1, input.maxResults - countVisibleMatches(collected)),
+        : Math.max(1, input.maxResults - countVisibleMatches(state.collected)),
     );
-    replayBatchCount += 1;
-    const partial =
-      input.outputMode === 'count'
-        ? await executeCountMode(scopedInput, signal, cli)
-        : await executeContentLikeMode(scopedInput, signal, cli);
-
-    retryCount += partial.retryCount;
-    exitCode = Math.max(exitCode, partial.exitCode);
-    if (partial.stderr) {
-      stderr = partial.stderr;
-    }
-    warnings.push(...partial.warnings);
+    state.replayBatchCount += 1;
+    const partial = await executeDirectMode(scopedInput, signal, cli);
+    // Discard a speculative failed batch's metadata if retries recover it.
+    if (partial.error && !retrying) return false;
+    state.retryCount += partial.retryCount;
+    state.exitCode = Math.max(state.exitCode, partial.exitCode);
+    if (partial.stderr) state.stderr = partial.stderr;
+    state.warnings.push(...partial.warnings);
     if (partial.error) {
-      partialReplayFailure = true;
-      warnings.push(
-        `Skipped mtime replay batch ${replayBatchCount}: ${partial.error}`,
+      state.partialReplayFailure = true;
+      state.warnings.push(
+        `Skipped mtime replay batch ${state.replayBatchCount}: ${partial.error}`,
       );
-      continue;
+      return false;
+    }
+    state.timedOut ||= partial.timedOut;
+    state.cancelled ||= partial.cancelled;
+    state.limitReached ||= partial.limitReached;
+    const reordered = reorderFilesByReplayOrder(partial.files, targets);
+    state.collected.push(...reordered);
+    state.replayedFiles += reordered.length;
+    return true;
+  };
+  const noteAborted = (): boolean => {
+    const kind = abortedKind(signal);
+    if (kind) state[kind] = true;
+    return kind !== undefined;
+  };
+
+  for (const batch of chunkArray(sortedFiles, 64)) {
+    if (noteAborted()) {
+      break;
     }
 
-    timedOut = timedOut || partial.timedOut;
-    cancelled = cancelled || partial.cancelled;
-    limitReached = limitReached || partial.limitReached;
-    const reordered = reorderFilesByReplayOrder(partial.files, orderedTargets);
+    if (remainingTimeout(deadline) <= 1) {
+      state.timedOut = true;
+      break;
+    }
 
-    if (input.outputMode === 'count') {
-      collected.push(...reordered);
-      replayedFiles += reordered.length;
+    const orderedTargets = batch.map((file) => file.replayPath as string);
 
-      if (collected.length >= input.maxResults) {
-        limitReached = true;
+    const batchOk = await runReplayAttempt(orderedTargets);
+    if (!batchOk) {
+      // A failed batch is retried file by file; attempts keep the global
+      // numbering so batch warnings and replay_batch_count stay ordered.
+      for (const file of batch) {
+        if (noteAborted()) {
+          break;
+        }
+        await runReplayAttempt([file.replayPath as string], true);
       }
-
-      if (limitReached || timedOut || cancelled) {
-        break;
-      }
-
-      continue;
     }
 
-    collected.push(...reordered);
-    replayedFiles += reordered.length;
-
-    const visibleMatches = countVisibleMatches(collected);
-    if (visibleMatches >= input.maxResults) {
-      limitReached = true;
+    if (
+      input.outputMode === 'count'
+        ? state.collected.length >= input.maxResults
+        : countVisibleMatches(state.collected) >= input.maxResults
+    ) {
+      state.limitReached = true;
     }
 
-    if (limitReached || timedOut || cancelled) {
+    if (state.limitReached || state.timedOut || state.cancelled) {
       break;
     }
   }
@@ -349,48 +324,200 @@ export async function executeMtimeMode(
   const partialBase: GrepSearchResult = {
     ...base,
     ...fullStrategyMeta,
-    files: collected,
+    files: state.collected,
     totalMatches:
       input.outputMode === 'count'
-        ? countOccurrences(collected)
-        : countVisibleMatches(collected),
-    totalFiles: collected.length,
+        ? countOccurrences(state.collected)
+        : countVisibleMatches(state.collected),
+    totalFiles: state.collected.length,
     truncated:
       discovery.truncated ||
       sortedDiscovery.timedOut ||
       sortedDiscovery.cancelled ||
       sortedDiscovery.hadMore ||
-      timedOut ||
-      cancelled ||
-      limitReached ||
-      partialReplayFailure,
-    limitReached,
-    timedOut,
-    cancelled,
-    stderr,
-    warnings,
-    retryCount,
-    exitCode,
+      state.timedOut ||
+      state.cancelled ||
+      state.limitReached ||
+      state.partialReplayFailure,
+    limitReached: state.limitReached,
+    timedOut: state.timedOut,
+    cancelled: state.cancelled,
+    stderr: state.stderr,
+    warnings: state.warnings,
+    retryCount: state.retryCount,
+    exitCode: state.exitCode,
     summary: undefined,
-    replayBatchCount,
-    replayedFiles,
+    replayBatchCount: state.replayBatchCount,
+    replayedFiles: state.replayedFiles,
     partialPhase:
-      timedOut || cancelled || partialReplayFailure ? 'replay' : undefined,
+      state.timedOut || state.cancelled || state.partialReplayFailure
+        ? 'replay'
+        : undefined,
   };
 
   if (input.outputMode === 'count') {
-    return finalizeMtimeSimpleResult(
-      input,
-      collected,
+    return finishFileListMode(
       partialBase,
-      limitReached || collected.length > input.maxResults,
+      state.collected,
+      input,
+      state.limitReached || state.collected.length > input.maxResults,
+      { warnings: state.warnings },
     );
   }
 
   return finalizeMtimeContentResult(
     input,
-    collected,
+    state.collected,
     partialBase,
-    limitReached,
+    state.limitReached,
   );
+}
+
+type StatOutcome =
+  | { status: 'ok'; mtimeMs: number }
+  | { status: 'error'; error: string }
+  | { status: 'timed_out' }
+  | { status: 'cancelled' };
+
+type StatFile = (filePath: string) => Promise<{ mtimeMs: number }>;
+
+async function statWithTimeout(
+  filePath: string,
+  stopped: Promise<StatOutcome>,
+  statFile: StatFile,
+): Promise<StatOutcome> {
+  try {
+    return await Promise.race([
+      statFile(filePath).then(
+        ({ mtimeMs }): StatOutcome => ({ status: 'ok', mtimeMs }),
+        (error): StatOutcome => ({
+          status: 'error',
+          error: toErrorMessage(error),
+        }),
+      ),
+      stopped,
+    ]);
+  } catch (error) {
+    return { status: 'error', error: toErrorMessage(error) };
+  }
+}
+
+export async function sortFilesByMtime(
+  files: GrepFileMatch[],
+  input: Pick<NormalizedGrepInput, 'sortOrder'>,
+  signal: AbortSignal,
+  deadline: number,
+  statFile: StatFile = stat,
+): Promise<{
+  files: GrepFileMatch[];
+  timedOut: boolean;
+  cancelled: boolean;
+  hadMore: boolean;
+  warnings: string[];
+}> {
+  const entries: Array<{
+    file: GrepFileMatch;
+    mtimeMs: number;
+    statFailed: boolean;
+  }> = [];
+  const warnings: string[] = [];
+  let timedOut = false;
+  let cancelled = false;
+  let stop!: (outcome: StatOutcome) => void;
+  const stopped = new Promise<StatOutcome>((resolve) => {
+    stop = resolve;
+  });
+  const onAbort = () =>
+    stop({ status: isTimedOutAbort(signal) ? 'timed_out' : 'cancelled' });
+  const timer = setTimeout(
+    () => stop({ status: 'timed_out' }),
+    remainingTimeout(deadline),
+  );
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  const noteAborted = (): boolean => {
+    const kind = abortedKind(signal);
+    if (kind === 'timedOut') timedOut = true;
+    if (kind === 'cancelled') cancelled = true;
+    return kind !== undefined;
+  };
+
+  // Dynamic dispatch lets healthy workers stat all remaining files even if
+  // another worker is stuck; the final sort restores deterministic order.
+  let nextIndex = 0;
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(16, files.length) }, async () => {
+        while (nextIndex < files.length) {
+          if (noteAborted()) {
+            return;
+          }
+
+          if (Date.now() >= deadline) {
+            timedOut = true;
+            return;
+          }
+
+          const file = files[nextIndex++];
+          if (!file) return;
+          const statResult = await statWithTimeout(
+            file.replayPath as string,
+            stopped,
+            statFile,
+          );
+          if (statResult.status === 'timed_out') {
+            timedOut = true;
+            return;
+          }
+
+          if (statResult.status === 'cancelled') {
+            cancelled = true;
+            return;
+          }
+
+          if (statResult.status === 'error') {
+            warnings.push(
+              `Could not stat ${file.file} for mtime ordering: ${statResult.error}`,
+            );
+            entries.push({
+              file,
+              mtimeMs: Number.NEGATIVE_INFINITY,
+              statFailed: true,
+            });
+            continue;
+          }
+
+          entries.push({
+            file,
+            mtimeMs: statResult.mtimeMs,
+            statFailed: false,
+          });
+        }
+      }),
+    );
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  }
+
+  entries.sort((left, right) => {
+    if (left.statFailed !== right.statFailed) {
+      return left.statFailed ? 1 : -1;
+    }
+
+    const delta = left.statFailed ? 0 : left.mtimeMs - right.mtimeMs;
+    if (delta !== 0) {
+      return input.sortOrder === 'desc' ? -delta : delta;
+    }
+
+    return comparePathBytes(left.file, right.file);
+  });
+
+  return {
+    files: entries.map((entry) => entry.file),
+    timedOut,
+    cancelled,
+    hadMore: entries.length < files.length,
+    warnings,
+  };
 }

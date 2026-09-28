@@ -152,6 +152,30 @@ function parseEreRepetition(
   return { end: start + match[0].length };
 }
 
+const CONTROL_ESCAPES: Record<string, string> = {
+  t: '\t',
+  r: '\r',
+  f: '\f',
+  v: '\v',
+};
+const LITERAL_ESCAPES = new Set([
+  '.',
+  '^',
+  '$',
+  '*',
+  '+',
+  '?',
+  '(',
+  ')',
+  '[',
+  ']',
+  '{',
+  '}',
+  '|',
+  '\\',
+  '-',
+]);
+
 /**
  * Translates only a deliberately whitelisted ripgrep regex grammar to ERE.
  * Locale-bound classes, Unicode boundary escapes, multiline input, and
@@ -167,29 +191,11 @@ export function translatePatternToEre(pattern: string): {
   let expectAtom = true;
   let canQuantify = false;
   let atAlternativeStart = true;
-  const controlEscapes: Record<string, string> = {
-    t: '\t',
-    r: '\r',
-    f: '\f',
-    v: '\v',
+  const acceptAtom = () => {
+    expectAtom = false;
+    canQuantify = true;
+    atAlternativeStart = false;
   };
-  const literalEscapes = new Set([
-    '.',
-    '^',
-    '$',
-    '*',
-    '+',
-    '?',
-    '(',
-    ')',
-    '[',
-    ']',
-    '{',
-    '}',
-    '|',
-    '\\',
-    '-',
-  ]);
 
   while (index < pattern.length) {
     const char = pattern[index];
@@ -222,9 +228,9 @@ export function translatePatternToEre(pattern: string): {
         };
       }
 
-      if (next in controlEscapes) {
-        out += controlEscapes[next];
-      } else if (literalEscapes.has(next)) {
+      if (next in CONTROL_ESCAPES) {
+        out += CONTROL_ESCAPES[next];
+      } else if (LITERAL_ESCAPES.has(next)) {
         out += `\\${next}`;
       } else {
         return {
@@ -232,9 +238,7 @@ export function translatePatternToEre(pattern: string): {
         };
       }
       index += 2;
-      expectAtom = false;
-      canQuantify = true;
-      atAlternativeStart = false;
+      acceptAtom();
       continue;
     }
 
@@ -243,9 +247,7 @@ export function translatePatternToEre(pattern: string): {
       if (parsed.error) return { error: parsed.error };
       out += pattern.slice(index, parsed.end);
       index = parsed.end;
-      expectAtom = false;
-      canQuantify = true;
-      atAlternativeStart = false;
+      acceptAtom();
       continue;
     }
 
@@ -269,9 +271,7 @@ export function translatePatternToEre(pattern: string): {
       groupDepth -= 1;
       out += char;
       index += 1;
-      expectAtom = false;
-      canQuantify = true;
-      atAlternativeStart = false;
+      acceptAtom();
       continue;
     }
 
@@ -356,9 +356,7 @@ export function translatePatternToEre(pattern: string): {
 
     out += char;
     index += 1;
-    expectAtom = false;
-    canQuantify = true;
-    atAlternativeStart = false;
+    acceptAtom();
   }
 
   if (groupDepth !== 0 || expectAtom) {
