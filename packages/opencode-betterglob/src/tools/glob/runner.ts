@@ -17,11 +17,12 @@ import {
   watchStderr,
 } from './runner-output';
 import {
+  adaptSpawnedSearch,
   adaptSupervisedSearch,
   DEFAULT_CLEANUP_WAIT_MS,
   type ManagedSearch,
-  type SearchExit,
   waitForManagedCleanup,
+  watchSearchCompletion,
 } from './supervised-search';
 import type { GlobRunner } from './types';
 
@@ -45,30 +46,10 @@ export interface RunnerDeps {
   cleanupWaitMs?: number;
 }
 
-type Done =
-  | {
-      type: 'close';
-      code: number | null;
-      signal: NodeJS.Signals | null;
-      error?: string;
-    }
-  | {
-      type: 'error';
-      error: unknown;
-    };
-
 const isTimeoutReason = (signal: AbortSignal) =>
   signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
 const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
 const SEARCH_KILL_GRACE_MS = 250;
-
-function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
-  try {
-    proc?.kill(signal);
-  } catch {
-    // Process may have exited.
-  }
-}
 
 export function createDefaultRunnerDeps(): RunnerDeps {
   return {
@@ -105,24 +86,15 @@ export function createRipgrepRunner(
         exitCode: state.cancelled ? 130 : 124,
       });
     const controller = new AbortController();
-    let proc: ChildProcess | undefined;
+    let search: ReturnType<typeof adaptSpawnedSearch> | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
     let removeAbort = () => undefined;
     let stopStdout: () => void = () => undefined;
     let stopStderr: () => void = () => undefined;
     let clearDone: () => void = () => undefined;
     let clearReaderErrors: () => void = () => undefined;
-    let managedStop: (() => void) | undefined;
-    let managedExit: (() => SearchExit | undefined) | undefined;
-    let managedCompleted: Promise<SearchExit> | undefined;
-    let childExited = false;
     let stopping = false;
     let stopRequestedAt: number | undefined;
-    const clearKill = () => {
-      clearTimeout(killTimer);
-      killTimer = undefined;
-    };
 
     if (signal.aborted) {
       state.timedOut = isTimeoutReason(signal);
@@ -131,31 +103,10 @@ export function createRipgrepRunner(
     }
 
     const stop = () => {
-      if (!proc || stopping) return;
+      if (!search || stopping) return;
       stopping = true;
       stopRequestedAt = performance.now();
-
-      if (managedStop) {
-        managedStop();
-        return;
-      }
-      // Raw injected ChildProcesses have no group-ownership capability.
-      // Never infer one from detached or pid, especially after exit/close.
-      if (childExited) return;
-      if (process.platform === 'win32') {
-        kill(proc);
-        return;
-      }
-
-      kill(proc, 'SIGTERM');
-      if (!killTimer) {
-        killTimer = setTimeout(() => {
-          if (!childExited) kill(proc, 'SIGKILL');
-          clearKill();
-          clearDone();
-        }, deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
-        killTimer.unref?.();
-      }
+      search.stop();
     };
 
     let finishInterrupt!: (value: 'cancel' | 'timeout') => void;
@@ -225,24 +176,15 @@ export function createRipgrepRunner(
         if (signal.aborted || controller.signal.aborted) {
           return interruptedResult();
         }
-        const spawned = deps.spawn(cmd, args, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          cwd: input.searchPath,
-          killGraceMs: deps.killGraceMs,
-          postExitDrainMs: deps.postExitDrainMs,
-        });
-        if ('child' in spawned) {
-          proc = spawned.child;
-          managedStop = spawned.stop;
-          managedExit = spawned.readExit;
-          // Observe cleanup rejection even if early-stop wins the race.
-          managedCompleted = spawned.completed.catch((error) => ({
-            ...(spawned.readExit() ?? { code: null, signal: null }),
-            error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
-          }));
-        } else {
-          proc = spawned;
-        }
+        search = adaptSpawnedSearch(
+          deps.spawn(cmd, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            cwd: input.searchPath,
+            killGraceMs: deps.killGraceMs,
+            postExitDrainMs: deps.postExitDrainMs,
+          }),
+          deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
+        );
       } catch (error) {
         return emptyResult(input, currentCommand(), {
           exitCode: 1,
@@ -250,7 +192,8 @@ export function createRipgrepRunner(
         });
       }
 
-      const child = proc;
+      const child = search.child;
+      const managedCompleted = search.completed;
 
       let finishLimit: ((value: 'limit') => void) | undefined;
       const limitResult = new Promise<'limit'>((resolve) => {
@@ -269,61 +212,18 @@ export function createRipgrepRunner(
       stopStdout = stdout.stop;
       stopStderr = stderr.stop;
 
-      const done = new Promise<Done>((resolve) => {
-        let settled = false;
-        const settle = (value: Done) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        };
-        const onExit = () => {
-          childExited = true;
-          clearKill();
-        };
-        const onClose = (
-          code: number | null,
-          closeSignal: NodeJS.Signals | null,
-        ) => {
-          // A child's close must never signal a saved PGID.
-          onExit();
-          if (managedCompleted) return;
-          clearDone();
-          settle({ type: 'close', code, signal: closeSignal });
-        };
-        const onError = (error: unknown) => {
-          if (settled) return;
-          // Start TERM→KILL escalation on stream/child errors.
-          stop();
-          if (managedCompleted) return;
-          settle({ type: 'error', error });
-        };
-
-        child.once('close', onClose);
-        child.once('exit', onExit);
-        child.on('error', onError);
-        // Funnel pipe errors through settlement instead of crashing the host.
-        child.stdout?.on('error', onError);
-        child.stderr?.on('error', onError);
-        clearReaderErrors = () => {
-          child.stdout?.removeListener('error', onError);
-          child.stderr?.removeListener('error', onError);
-        };
-        clearDone = () => {
-          child.removeListener('close', onClose);
-          child.removeListener('exit', onExit);
-          child.removeListener('error', onError);
-          clearReaderErrors();
-        };
-        void managedCompleted?.then((exit) => {
-          clearDone();
-          settle({ type: 'close', ...exit });
-        });
-      });
+      const completion = watchSearchCompletion(search, stop);
+      clearDone = completion.clear;
+      clearReaderErrors = completion.clearReaderErrors;
 
       // Also handle a synchronous abort from an injected spawn implementation.
       if (controller.signal.aborted) stop();
 
-      const ended = await Promise.race([done, interruptResult, limitResult]);
+      const ended = await Promise.race([
+        completion.done,
+        interruptResult,
+        limitResult,
+      ]);
       const earlyStop = typeof ended === 'string';
       let finalExit = !earlyStop && ended.type === 'close' ? ended : undefined;
       let cleanupError: string | undefined;
@@ -363,7 +263,7 @@ export function createRipgrepRunner(
 
       const exitCode = earlyStop
         ? (finalExit?.code ??
-          managedExit?.()?.code ??
+          search.readExit()?.code ??
           child.exitCode ??
           INTERRUPT_EXIT_CODES[ended])
         : ended.type === 'close'

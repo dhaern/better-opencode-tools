@@ -1,7 +1,5 @@
-import { performance } from 'node:perf_hooks';
 import { raceSignal } from '../../utils/abort';
-import { DEFAULT_GLOB_TIMEOUT_MS } from './constants';
-import { MAX_TIMEOUT_MS } from './normalize';
+import { normalizeTimeoutMs } from './normalize';
 import { DEFAULT_CLEANUP_WAIT_MS } from './supervised-search';
 
 export const TIMEOUT_ERROR_MESSAGE =
@@ -91,12 +89,7 @@ export async function withHumanPause<T>(
   }
 }
 
-export function timeoutBudget(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return DEFAULT_GLOB_TIMEOUT_MS;
-  }
-  return Math.max(1, Math.min(MAX_TIMEOUT_MS, Math.trunc(value)));
-}
+export const timeoutBudget = normalizeTimeoutMs;
 
 export function abortReason(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;

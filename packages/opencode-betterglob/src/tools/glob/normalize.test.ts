@@ -33,7 +33,7 @@ describe('tools/glob/normalize', () => {
     expect(normalized.sortBy).toBe('mtime');
     expect(normalized.sortOrder).toBe('desc');
     expect(normalized.hidden).toBe(true);
-    expect(normalized.followSymlinks).toBe(false);
+    expect(normalized).not.toHaveProperty('followSymlinks');
     expect(normalized.timeoutMs).toBe(DEFAULT_GLOB_TIMEOUT_MS);
     expect(buildRgArgs(normalized)).toContain('--no-mmap');
     expect(buildRgArgs(normalized)).toContain('--no-config');

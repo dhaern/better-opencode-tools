@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { POST_EXIT_DRAIN_MS } from '../../utils/process-output';
+import { destroyReader, POST_EXIT_DRAIN_MS } from '../../utils/process-output';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
@@ -22,6 +22,126 @@ export interface ManagedSearch {
   readExit: () => SearchExit | undefined;
   // Task status + bounded output drain + supervised cleanup, not raw close.
   completed: Promise<SearchExit>;
+}
+
+export type SearchDone =
+  | {
+      type: 'close';
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      error?: string;
+    }
+  | { type: 'error'; error: unknown };
+
+interface SearchProcess extends Omit<ManagedSearch, 'completed'> {
+  completed?: Promise<SearchExit>;
+  markExited?: () => void;
+  onKillDeadline?: () => void;
+}
+
+// The only boundary between raw injected children and supervised searches.
+// Raw children have no group ownership; signalling a saved PID is forbidden.
+export function adaptSpawnedSearch(
+  spawned: ChildProcess | ManagedSearch,
+  killGraceMs: number,
+): SearchProcess {
+  if ('child' in spawned) {
+    return {
+      ...spawned,
+      completed: spawned.completed.catch((error) => ({
+        ...(spawned.readExit() ?? { code: null, signal: null }),
+        error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
+      })),
+    };
+  }
+  let exited = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearKill = () => {
+    clearTimeout(killTimer);
+    killTimer = undefined;
+  };
+  const kill = (signal?: NodeJS.Signals) => {
+    try {
+      spawned.kill(signal);
+    } catch {
+      // Process may have exited.
+    }
+  };
+  const markExited = () => {
+    exited = true;
+    clearKill();
+    spawned.removeListener('exit', markExited);
+  };
+  spawned.once('exit', markExited);
+  const search: SearchProcess = {
+    child: spawned,
+    stop: () => {
+      if (exited) return;
+      kill(process.platform === 'win32' ? undefined : 'SIGTERM');
+      if (process.platform !== 'win32' && !killTimer) {
+        killTimer = setTimeout(() => {
+          if (!exited) kill('SIGKILL');
+          clearKill();
+          search.onKillDeadline?.();
+        }, killGraceMs);
+        killTimer.unref?.();
+      }
+    },
+    readExit: () => undefined,
+    markExited,
+  };
+  return search;
+}
+
+export function watchSearchCompletion(
+  search: SearchProcess,
+  stop: () => void,
+): {
+  done: Promise<SearchDone>;
+  clear: () => void;
+  clearReaderErrors: () => void;
+} {
+  const child = search.child;
+  let settle!: (result: SearchDone) => void;
+  const done = new Promise<SearchDone>((resolve) => {
+    settle = resolve;
+  });
+  let settled = false;
+  const finish = (result: SearchDone) => {
+    if (settled) return;
+    settled = true;
+    settle(result);
+  };
+  const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+    search.markExited?.();
+    if (search.completed) return;
+    clear();
+    finish({ type: 'close', code, signal });
+  };
+  const onError = (error: unknown) => {
+    if (settled) return;
+    stop();
+    if (!search.completed) finish({ type: 'error', error });
+  };
+  const clearReaderErrors = () => {
+    child.stdout?.removeListener('error', onError);
+    child.stderr?.removeListener('error', onError);
+  };
+  const clear = () => {
+    child.removeListener('close', onClose);
+    child.removeListener('error', onError);
+    clearReaderErrors();
+  };
+  search.onKillDeadline = clear;
+  child.once('close', onClose);
+  child.on('error', onError);
+  child.stdout?.on('error', onError);
+  child.stderr?.on('error', onError);
+  void search.completed?.then((exit) => {
+    clear();
+    finish({ type: 'close', ...exit });
+  });
+  return { done, clear, clearReaderErrors };
 }
 
 export const DEFAULT_CLEANUP_WAIT_MS =
@@ -97,11 +217,7 @@ export function adaptSupervisedSearch(
     outputsDestroyed = true;
     for (const output of [child.stdout, child.stderr]) {
       if (!output || output.closed) continue;
-      // Destruction can fail asynchronously, after the run has completed.
-      const ignoreError = () => undefined;
-      output.on('error', ignoreError);
-      output.once('close', () => output.removeListener('error', ignoreError));
-      output.destroy();
+      destroyReader(output);
     }
   };
   const startDrain = () => {

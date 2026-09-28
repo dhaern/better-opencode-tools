@@ -10,7 +10,6 @@ import {
   spawnSupervised,
 } from './process-supervisor';
 
-export const ABORT_KILL_GRACE_MS = DEFAULT_KILL_GRACE_MS;
 export const POST_EXIT_DRAIN_MS = 1_000;
 export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
 
@@ -179,7 +178,7 @@ export function waitForProcessOutputWithAbortGrace(
       terminating = true;
       if (proc.stop) {
         // The supervisor owns the grace timer even after task exit.
-        const grace = options.killGraceMs ?? ABORT_KILL_GRACE_MS;
+        const grace = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
         watchCleanup(grace);
         void proc.stop(grace).catch(cleanupFailed);
         return;
@@ -203,7 +202,7 @@ export function waitForProcessOutputWithAbortGrace(
               closeReaders();
             }
           }
-        }, options.killGraceMs ?? ABORT_KILL_GRACE_MS);
+        }, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
         killTimer.unref?.();
       }
     };

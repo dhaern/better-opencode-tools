@@ -3,7 +3,6 @@ import {
   stat as statAsyncFs,
 } from 'node:fs/promises';
 import path from 'node:path';
-import type { PluginInput, ToolContext } from '@opencode-ai/plugin';
 import {
   DEFAULT_GLOB_LIMIT,
   DEFAULT_GLOB_TIMEOUT_MS,
@@ -26,8 +25,11 @@ function integer(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.trunc(value as number));
 }
 
-function timeoutMs(value: number | undefined, fallback: number): number {
-  const normalized = integer(value, fallback);
+export function normalizeTimeoutMs(value: unknown): number {
+  const normalized = integer(
+    typeof value === 'number' ? value : undefined,
+    DEFAULT_GLOB_TIMEOUT_MS,
+  );
   if (normalized > MAX_TIMEOUT_MS) {
     throw new Error(
       `timeout_ms must not exceed ${MAX_TIMEOUT_MS} milliseconds`,
@@ -100,10 +102,15 @@ export interface ResolvedGlobScope {
   anchored: boolean;
 }
 
+interface GlobScopeContext {
+  directory?: string;
+  worktree?: string;
+}
+
 export function resolveGlobScope(
   args: GlobToolInput,
-  context: Pick<ToolContext, 'directory' | 'worktree'>,
-  pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
+  context: GlobScopeContext,
+  pluginCtx?: GlobScopeContext,
 ): ResolvedGlobScope {
   if (args.follow_symlinks === true) {
     throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
@@ -147,8 +154,8 @@ function anchorAbsoluteGlob(glob: string): string {
 /** Filesystem preparation must be raceable against the execution deadline. */
 export async function normalizeGlobInputAsync(
   args: GlobToolInput,
-  context: Pick<ToolContext, 'directory' | 'worktree'>,
-  pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
+  context: GlobScopeContext,
+  pluginCtx?: GlobScopeContext,
   resolvedScope?: ResolvedGlobScope,
 ): Promise<NormalizedGlobInput> {
   const scope = resolvedScope ?? resolveGlobScope(args, context, pluginCtx);
@@ -186,8 +193,7 @@ export async function normalizeGlobInputAsync(
     sortBy,
     sortOrder: args.sort_order ?? (sortBy === 'mtime' ? 'desc' : 'asc'),
     hidden: args.hidden !== false,
-    followSymlinks: false,
-    timeoutMs: timeoutMs(args.timeout_ms, DEFAULT_GLOB_TIMEOUT_MS),
+    timeoutMs: normalizeTimeoutMs(args.timeout_ms),
     cwd: scope.cwd,
     worktree,
   };

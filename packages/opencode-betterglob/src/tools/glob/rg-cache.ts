@@ -27,8 +27,8 @@ async function cacheStamp(
   metadata: string,
 ): Promise<string | undefined> {
   const [binaryStamp, metadataStamp] = await Promise.all([
-    fileStamp(metadata),
     fileStamp(binary),
+    fileStamp(metadata),
   ]);
   return binaryStamp && metadataStamp
     ? `${binary}:${binaryStamp}:${metadata}:${metadataStamp}`

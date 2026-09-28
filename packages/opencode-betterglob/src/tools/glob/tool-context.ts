@@ -3,7 +3,7 @@ import type { ToolContext } from '@opencode-ai/plugin';
 import {
   runBestEffortOpenCodeSideEffect,
   runOpenCodeSideEffect,
-} from '../../utils/opencode-effects';
+} from '../../utils/tool-context';
 import {
   DEFAULT_GLOB_LIMIT,
   DEFAULT_GLOB_TIMEOUT_MS,

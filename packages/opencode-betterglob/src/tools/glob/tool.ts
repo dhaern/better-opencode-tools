@@ -4,7 +4,7 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import { raceSignal } from '../../utils/abort';
-import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
+import { runOpenCodeSideEffect } from '../../utils/tool-context';
 import { GLOB_DESCRIPTION, GLOB_TOOL_ID } from './constants';
 import { formatGlobResult } from './format';
 import { normalizeGlobInputAsync, resolveGlobScope } from './normalize';
@@ -46,11 +46,9 @@ export function createGlobTool(
   const resolveCli =
     options.resolveCli ??
     ((signal?: AbortSignal) => resolveGlobCliAsync(undefined, signal));
-  const argsSchema = globArgsSchema as Parameters<typeof tool>[0]['args'];
-
   return tool({
     description: GLOB_DESCRIPTION,
-    args: argsSchema,
+    args: globArgsSchema,
     async execute(args, ctx) {
       const raw = args as unknown as GlobToolInput;
       let input: NormalizedGlobInput | undefined;
@@ -68,8 +66,6 @@ export function createGlobTool(
                 patterns: [raw.pattern],
                 always: ['*'],
                 metadata: {
-                  pattern: raw.pattern,
-                  path: raw.path,
                   ...baseMetadata(raw, input),
                 },
               }),
@@ -127,16 +123,8 @@ export function createGlobTool(
             input = { ...normalizedInput, allowAutoInstall: true };
           }
 
-          const remaining = clock.remainingMs();
-          if (remaining <= 0 || clock.controller.signal.aborted) {
-            throw new Error(TIMEOUT_ERROR_MESSAGE);
-          }
-
           stage = 'execution';
           const executionInput = input;
-          if (!executionInput) {
-            throw new Error('glob search normalization produced no input.');
-          }
           // Preparation consumed the clock's budget. Pause it before entering
           // the runner: the runner owns the search deadline, and its bounded
           // cleanup phase must not be mistaken for additional automatic work.
@@ -148,20 +136,12 @@ export function createGlobTool(
           if (executionRemaining <= 0) {
             throw new Error(TIMEOUT_ERROR_MESSAGE);
           }
-          const executionDeadline = new AbortController();
+          const executionClock = new AutoClock(executionRemaining);
+          executionClock.start();
           const executionSignal = AbortSignal.any([
             ctx.abort,
-            executionDeadline.signal,
+            executionClock.controller.signal,
           ]);
-          const executionTimer = setTimeout(
-            () => {
-              const error = new Error(TIMEOUT_ERROR_MESSAGE);
-              error.name = 'TimeoutError';
-              executionDeadline.abort(error);
-            },
-            Math.max(1, Math.floor(executionRemaining)),
-          );
-          executionTimer.unref?.();
 
           try {
             // The runner's deadline covers its async resolver and rg process;
@@ -188,7 +168,7 @@ export function createGlobTool(
             // here instead of overwriting it with an empty object.
             return { title: title(raw, executionInput), output, metadata };
           } finally {
-            clearTimeout(executionTimer);
+            executionClock.dispose();
           }
         } finally {
           clock.dispose();

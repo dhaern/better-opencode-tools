@@ -4,7 +4,7 @@ import { describe, expect, jest, mock, test } from 'bun:test';
 import { symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
-import { resolveOpenCodeEffect } from '../../utils/opencode-effects';
+import { resolveOpenCodeEffect } from '../../utils/tool-context';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
 import { getRipgrepCacheDir } from './rg-cache';
 import { createExecutionContext, createTempTracker } from './test-helpers';
