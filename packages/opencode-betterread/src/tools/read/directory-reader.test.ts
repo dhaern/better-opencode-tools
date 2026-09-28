@@ -15,7 +15,6 @@ let boundedScanEntries:
   | {
       name: string;
       dirent: typeof fileDirent;
-      dirLike: boolean;
     }[]
   | undefined;
 
@@ -25,7 +24,6 @@ function getBoundedScanEntries() {
     (_, index) => ({
       name: `entry-${String(BOUNDED_SCAN_ENTRY_COUNT - index - 1).padStart(5, '0')}.txt`,
       dirent: fileDirent,
-      dirLike: false,
     }),
   );
 
@@ -48,13 +46,20 @@ afterEach(async () => {
 
 describe('readDirectory', () => {
   test('orders names by UTF-16 code units instead of locale collation', async () => {
-    const names = ['éclair', 'zeta', 'alpha', 'Alpha', '_meta'];
+    const names = [
+      'éclair',
+      'zeta',
+      'alpha',
+      'Alpha',
+      '_meta',
+      '😀.txt',
+      '（１）.txt',
+    ];
     const result = await readDirectory('/tmp/byte-order', 1, 10, {
       scanDirectoryEntries: async () => ({
         entries: names.map((name) => ({
           name,
           dirent: fileDirent,
-          dirLike: false,
         })),
         totalEntries: names.length,
         totalEntriesKnown: true,
@@ -67,6 +72,8 @@ describe('readDirectory', () => {
       'alpha',
       'zeta',
       'éclair',
+      '😀.txt',
+      '（１）.txt',
     ]);
   });
 

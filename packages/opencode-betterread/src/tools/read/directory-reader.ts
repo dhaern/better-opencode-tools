@@ -227,7 +227,8 @@ export async function readDirectory(
     throw new Error(directoryPaginationLimitMessage(resolvedPath));
   }
 
-  // UTF-16 code-unit order, like git/LC_ALL=C except astrals vs U+E000–U+FFFF.
+  // UTF-16 code units: matches LC_ALL=C for UTF-8 except astrals vs U+E000–U+FFFF.
+  // Invalid UTF-8 filenames decode with U+FFFD.
   const sortedEntries = scan.entries.sort((left, right) =>
     left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   );
