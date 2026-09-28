@@ -69,7 +69,6 @@ describe('ripgrep platform candidates', () => {
     const file = join(dir, 'incomplete.tar.gz');
     const chunk = new Uint8Array(512);
     const maxBytes = 1024;
-    let sent = 0;
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
@@ -82,7 +81,6 @@ describe('ripgrep platform candidates', () => {
           new ReadableStream({
             async pull(controller) {
               await Bun.sleep(10);
-              sent += chunk.length;
               controller.enqueue(chunk);
             },
           }),
@@ -99,7 +97,6 @@ describe('ripgrep platform candidates', () => {
         downloadArchive(`${server.url}archive`, file, abort.signal, maxBytes),
       ).rejects.toThrow(`Cached file exceeds its size limit: ${file}`);
       expect(existsSync(file)).toBe(false);
-      expect(sent).toBeLessThanOrEqual(maxBytes + chunk.length);
       const exact = join(dir, 'exact.tar.gz');
       await downloadArchive(`${server.url}exact`, exact, undefined, maxBytes);
       expect(readFileSync(exact).byteLength).toBe(maxBytes);

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs, {
   chmodSync,
   existsSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -266,15 +267,21 @@ describe('tools/glob/downloader', () => {
       const stale = path.join(dir, `.install-${Date.now()}-abc123`);
       const fresh = path.join(dir, '.install-1000000000000-def456');
       const unrelated = path.join(dir, '.install-unrelated');
+      const staleFile = path.join(dir, '.install-1000000000000-ghi789');
+      const staleLink = path.join(dir, '.install-1000000000000-jkl012');
       for (const entry of [stale, fresh, unrelated]) {
         mkdirSync(entry);
         writeFileSync(path.join(entry, 'archive'), 'preserve or cleanup');
       }
+      writeFileSync(staleFile, 'not a directory');
+      symlinkSync(unrelated, staleLink);
       const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
       const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
       utimesSync(stale, old, old);
       utimesSync(fresh, recent, recent);
       utimesSync(unrelated, old, old);
+      utimesSync(staleFile, old, old);
+      lutimesSync(staleLink, old, old);
       input.acquireLock = async (file, options) => {
         const release = await lock(file, options);
         expect(existsSync(stale)).toBe(true);
@@ -286,6 +293,8 @@ describe('tools/glob/downloader', () => {
       expect(existsSync(stale)).toBe(false);
       expect(existsSync(fresh)).toBe(true);
       expect(existsSync(unrelated)).toBe(true);
+      expect(existsSync(staleFile)).toBe(true);
+      expect(existsSync(staleLink)).toBe(true);
     },
   );
 

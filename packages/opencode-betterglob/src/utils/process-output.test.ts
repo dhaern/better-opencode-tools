@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, jest, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, jest, spyOn, test } from 'bun:test';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -15,8 +15,50 @@ import {
   CleanupUnconfirmedError,
   type SupervisedProcess,
   SupervisorRuntimeError,
-  spawnSupervised,
+  spawnSupervised as spawnOwner,
 } from './process-supervisor';
+
+function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Test promise did not settle within ${ms} ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+const trackedOwners: SupervisedProcess[] = [];
+function spawnSupervised(
+  ...args: Parameters<typeof spawnOwner>
+): SupervisedProcess {
+  const owner = spawnOwner(...args);
+  trackedOwners.push(owner);
+  return owner;
+}
+
+afterEach(async () => {
+  for (const owner of trackedOwners.splice(0)) {
+    const proc = owner.proc;
+    if (
+      proc.pid === undefined ||
+      proc.exitCode !== null ||
+      proc.signalCode !== null
+    )
+      continue;
+    const exited = new Promise<void>((resolve) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) resolve();
+      else proc.once('exit', () => resolve());
+    });
+    // Test-only recovery of a SIGSTOPped transport, never a saved PGID.
+    proc.kill('SIGCONT');
+    void owner.stop(0).catch(() => undefined);
+    await within(exited);
+  }
+});
 
 function fakeProcess() {
   const child = new EventEmitter() as unknown as ChildProcess;
@@ -194,9 +236,12 @@ describe('utils/process-output collection lifecycle', () => {
 const node = process.versions.bun ? 'node' : process.execPath;
 
 function ownerHandle(owner: SupervisedProcess): ProcessHandle {
+  const exited = owner.exited.then(({ code }) => code);
+  // The parent's watchdog may reject before the test awaits this projection.
+  void exited.catch(() => undefined);
   return {
     proc: owner.proc,
-    exited: owner.exited.then(({ code }) => code),
+    exited,
     closed: owner.closed,
     stop: owner.stop,
     release: owner.release,
@@ -301,7 +346,9 @@ describe.skipIf(process.platform === 'win32')(
         },
       );
       if (operation === 'stop') controller.abort();
-      await expect(pending).rejects.toBeInstanceOf(CleanupUnconfirmedError);
+      await expect(within(pending)).rejects.toBeInstanceOf(
+        CleanupUnconfirmedError,
+      );
       expect(requested).toBe(true);
       expect(stdout.destroyed).toBe(true);
       expect(stderr.destroyed).toBe(true);
@@ -325,7 +372,9 @@ describe.skipIf(process.platform === 'win32')(
           { killGraceMs: 0, cleanupTimeoutMs: 20 },
         );
         abort.abort();
-        await expect(wait).rejects.toBeInstanceOf(CleanupUnconfirmedError);
+        await expect(within(wait)).rejects.toBeInstanceOf(
+          CleanupUnconfirmedError,
+        );
         expect(released).toBe(false);
       }
     });
@@ -346,9 +395,9 @@ describe.skipIf(process.platform === 'win32')(
       try {
         await ready(child.proc);
         expect(child.proc.kill('SIGSTOP')).toBe(true);
-        await expect(child.stop?.(0)).rejects.toBeInstanceOf(
-          CleanupUnconfirmedError,
-        );
+        await expect(
+          within(child.stop?.(0) as Promise<void>),
+        ).rejects.toBeInstanceOf(CleanupUnconfirmedError);
         expect(child.proc.stdout?.destroyed).toBe(true);
         expect(child.proc.stderr?.destroyed).toBe(true);
         // Timeout is not a claim that the stopped supervisor was killed.
@@ -360,7 +409,7 @@ describe.skipIf(process.platform === 'win32')(
         // Test-only resumption of our unreaped ChildProcess allows its queued
         // stop/disconnect cleanup to run; production never sends this signal.
         child.proc.kill('SIGCONT');
-        await transportExited;
+        await within(transportExited);
       }
     });
 

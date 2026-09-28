@@ -1,10 +1,9 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeGlobInputAsync } from './normalize';
-import { createRipgrepRunner } from './runner';
+import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobToolInput } from './types';
 
@@ -16,10 +15,10 @@ describe('tools/glob/runner', () => {
   const rgPath = process.env.BETTERGLOB_TEST_RG;
   if (!rgPath) throw new Error('Set BETTERGLOB_TEST_RG to run host tests');
   const runSystemRg = createRipgrepRunner({
+    ...createDefaultRunnerDeps(),
     resolve: async () => {
       return { path: rgPath, backend: 'rg', source: 'system-rg' };
     },
-    spawn: nodeSpawn,
   });
 
   async function createNormalized(
@@ -107,6 +106,19 @@ describe('tools/glob/runner', () => {
     expect(result.files).toEqual([]);
     expect(result.count).toBe(0);
     expect(result.truncated).toBe(false);
+  });
+
+  test('real rg truncates at limit one through the default supervisor', async () => {
+    const { repoDir, normalized } = await createNormalized({
+      pattern: '*.ts',
+      path: 'src',
+      limit: 1,
+    });
+    const result = await runSystemRg(normalized, new AbortController().signal);
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]?.startsWith(path.join(repoDir, 'src'))).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete).toBe(false);
   });
 
   test('matches common brace and bracket extension globs', async () => {
