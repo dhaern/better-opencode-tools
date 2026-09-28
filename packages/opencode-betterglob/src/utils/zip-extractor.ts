@@ -7,18 +7,11 @@ const WINDOWS_BUILD_WITH_TAR = 17134;
 
 function getWindowsBuildNumber(): number | null {
   if (process.platform !== 'win32') return null;
-
-  const parts = release().split('.');
-  if (parts.length >= 3) {
-    const build = Number.parseInt(parts[2] ?? '', 10);
-    if (!Number.isNaN(build)) return build;
-  }
-  return null;
+  const build = Number.parseInt(release().split('.')[2] ?? '', 10);
+  return Number.isNaN(build) ? null : build;
 }
 
-function escapePowerShellPath(file: string): string {
-  return file.replace(/'/g, "''");
-}
+const escapePowerShellPath = (file: string) => file.replace(/'/g, "''");
 
 type WindowsZipExtractor = 'tar' | 'pwsh' | 'powershell';
 
@@ -67,33 +60,18 @@ export async function getZipExtractionSupportErrorAsync(
   if (signal?.aborted) throw createAbortError();
   if (process.platform === 'win32') {
     const extractor = await getWindowsZipExtractorAsync(signal);
-
-    if (
-      extractor === 'tar' &&
-      !(await commandSucceeds('tar', ['--version'], signal))
-    ) {
-      return 'ripgrep auto-install requires tar on this Windows host to extract zip archives.';
-    }
-
-    if (
-      extractor === 'pwsh' &&
-      !(await commandSucceeds('pwsh', ['-v'], signal))
-    ) {
-      return 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.';
-    }
-
-    if (
-      extractor === 'powershell' &&
-      !(await commandSucceeds(
-        'powershell',
-        ['-Command', '$PSVersionTable.PSVersion.ToString()'],
-        signal,
-      ))
-    ) {
-      return 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
-    }
-
-    return undefined;
+    const args =
+      extractor === 'tar'
+        ? ['--version']
+        : extractor === 'pwsh'
+          ? ['-v']
+          : ['-Command', '$PSVersionTable.PSVersion.ToString()'];
+    if (await commandSucceeds(extractor, args, signal)) return undefined;
+    return extractor === 'tar'
+      ? 'ripgrep auto-install requires tar on this Windows host to extract zip archives.'
+      : extractor === 'pwsh'
+        ? 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.'
+        : 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
   }
 
   return (await commandSucceeds('unzip', ['-v'], signal))

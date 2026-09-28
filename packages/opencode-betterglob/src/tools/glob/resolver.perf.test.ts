@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -104,6 +105,68 @@ describe.skipIf(process.platform === 'win32' || !process.versions.bun)(
       expect(statSync(binary).isFile()).toBe(true);
       expect((await resolveGlobCliAsync()).source).toBe('system-rg');
       expect(probes(counter)).toBe(6);
+    });
+
+    test('follows a system symlink as its target switches A to B and back', async () => {
+      const dir = temp();
+      symlinkSync(await which('node'), path.join(dir, 'node'));
+      const a = path.join(dir, 'rg-a');
+      const b = path.join(dir, 'rg-b');
+      const aProbes = path.join(dir, 'a-probes');
+      const bProbes = path.join(dir, 'b-probes');
+      writeFileSync(a, script(aProbes), { mode: 0o755 });
+      writeFileSync(b, script(bProbes), { mode: 0o755 });
+      const target = path.join(dir, 'target');
+      symlinkSync(a, target);
+      symlinkSync(target, path.join(dir, 'rg'));
+      process.env.PATH = dir;
+
+      expect((await resolveGlobCliAsync()).source).toBe('system-rg');
+      expect(probes(aProbes)).toBe(1);
+      unlinkSync(target);
+      symlinkSync(b, target);
+      expect((await resolveGlobCliAsync()).source).toBe('system-rg');
+      expect(probes(bProbes)).toBe(1);
+      unlinkSync(target);
+      symlinkSync(a, target);
+      expect((await resolveGlobCliAsync()).source).toBe('system-rg');
+      expect(probes(aProbes)).toBe(1);
+      expect(probes(bProbes)).toBe(1);
+    });
+
+    test('does not memoize a system stamp changed during validation', async () => {
+      const dir = temp();
+      const node = await which('node');
+      if (!node) throw new Error('node is required for the isolated probe');
+      symlinkSync(node, path.join(dir, 'node'));
+      const a = path.join(dir, 'rg-a');
+      const b = path.join(dir, 'rg-b');
+      const target = path.join(dir, 'target');
+      const binary = path.join(dir, 'rg');
+      const counter = path.join(dir, 'a-probes');
+      writeFileSync(counter, '0');
+      writeFileSync(
+        a,
+        `#!/usr/bin/env node\nconst fs=require('node:fs'); const c=${JSON.stringify(counter)}; fs.writeFileSync(c,String(Number(fs.readFileSync(c,'utf8'))+1)); fs.unlinkSync(${JSON.stringify(target)}); fs.symlinkSync(${JSON.stringify(b)},${JSON.stringify(target)}); console.log('ripgrep 14.1.1');\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        b,
+        "#!/usr/bin/env node\nconsole.log('ripgrep 14.1.1');\n",
+        {
+          mode: 0o755,
+        },
+      );
+      symlinkSync(a, target);
+      symlinkSync(target, binary);
+      process.env.PATH = dir;
+
+      expect((await resolveGlobCliAsync()).source).toBe('system-rg');
+      expect(readFileSync(counter, 'utf8')).toBe('1');
+      unlinkSync(target);
+      symlinkSync(a, target);
+      expect((await resolveGlobCliAsync()).source).toBe('system-rg');
+      expect(readFileSync(counter, 'utf8')).toBe('2');
     });
 
     test('managed positive stamp covers both binary and metadata, but never caches invalidity', async () => {

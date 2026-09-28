@@ -75,7 +75,7 @@ export function createRipgrepRunner(
         incomplete: true,
         timedOut: state.timedOut,
         cancelled: state.cancelled,
-        exitCode: state.cancelled ? 130 : 124,
+        exitCode: INTERRUPT_EXIT_CODES[state.cancelled ? 'cancel' : 'timeout'],
       });
     const controller = new AbortController();
     let search: ManagedSearch | undefined;
@@ -234,7 +234,7 @@ export function createRipgrepRunner(
         if (cleanup) finalExit = cleanup;
         else {
           cleanupError =
-            'Supervisor cleanup unconfirmed: cleanup wait deadline exceeded';
+            'Search cleanup unconfirmed: cleanup wait deadline exceeded';
         }
       }
       const incomplete = state.timedOut || state.cancelled;

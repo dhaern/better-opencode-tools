@@ -529,7 +529,6 @@ export function adaptSupervisedSearch(
     const onError = (error: unknown) => {
       failure ??= error;
       drainError ??= `Output reader failed: ${toErrorMessage(error)}`;
-      stop();
       destroyOutputs();
     };
     output.once('end', drained);

@@ -50,6 +50,19 @@ async function reaped(pid: number): Promise<boolean> {
 }
 
 const trackedOwners: SupervisedProcess[] = [];
+const inheritedPipeMarkers = new Set<string>();
+afterEach(() => {
+  for (const marker of inheritedPipeMarkers) {
+    try {
+      const pid = Number.parseInt(readFileSync(marker, 'utf8'), 10);
+      if (pid > 0) process.kill(pid, 'SIGKILL');
+    } catch {
+      // The child may not have reached the marker or may already have exited.
+    }
+    rmSync(path.dirname(marker), { recursive: true, force: true });
+  }
+  inheritedPipeMarkers.clear();
+});
 function spawnSupervised(
   ...args: Parameters<typeof spawnOwner>
 ): SupervisedProcess {
@@ -253,6 +266,26 @@ describe.skipIf(process.platform === 'win32')(
         }
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    test('direct output drain closes stdout inherited by a grandchild', async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), 'betterglob-inherited-'));
+      const marker = path.join(dir, 'grandchild-pid');
+      inheritedPipeMarkers.add(marker);
+      const script = `const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', process.stdout, 'ignore'] }); require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(child.pid)); process.stdout.write('ready\\n'); process.exit(0);`;
+      const pending = runProcess([node, '-e', script], {
+        killProcessGroup: false,
+        killGraceMs: 0,
+        cleanupTimeoutMs: 150,
+        postCloseDrainMs: 100,
+      });
+      await expect(within(pending, 1_000)).resolves.toMatchObject({
+        exitCode: 0,
+        stdout: expect.stringContaining('ready'),
+      });
+      expect(Number.parseInt(readFileSync(marker, 'utf8'), 10)).toBeGreaterThan(
+        0,
+      );
     });
 
     test('standalone stop has a parent watchdog when the real supervisor is SIGSTOPped', async () => {

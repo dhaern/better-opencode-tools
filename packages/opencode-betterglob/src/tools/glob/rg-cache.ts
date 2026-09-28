@@ -130,8 +130,7 @@ export async function validateCachedBinaryAsync(
   }
 
   await validateInstalledBinaryAsync(binary, signal);
-  if (stamp && stamp === (await cacheStamp(binary, metadataPath)))
-    validatedStamps.add(`managed:${stamp}`);
+  if (stamp) validatedStamps.add(`managed:${stamp}`);
 }
 
 export async function probeRipgrepVersion(

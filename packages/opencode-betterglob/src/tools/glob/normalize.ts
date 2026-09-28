@@ -96,6 +96,7 @@ export function containsPath(root: string, target: string): boolean {
 export interface ResolvedGlobScope {
   cwd: string;
   worktreeRoot: string;
+  timeoutMs: number;
   requestedPath: string;
   resolvedPath: string;
   relativePattern: string;
@@ -136,6 +137,7 @@ export function resolveGlobScope(
   return {
     cwd,
     worktreeRoot,
+    timeoutMs: normalizeTimeoutMs(args.timeout_ms),
     requestedPath,
     resolvedPath,
     relativePattern: normalizeRelativePattern(split.glob),
@@ -193,7 +195,7 @@ export async function normalizeGlobInputAsync(
     sortBy,
     sortOrder: args.sort_order ?? (sortBy === 'mtime' ? 'desc' : 'asc'),
     hidden: args.hidden !== false,
-    timeoutMs: normalizeTimeoutMs(args.timeout_ms),
+    timeoutMs: scope.timeoutMs,
     cwd: scope.cwd,
     worktree,
   };

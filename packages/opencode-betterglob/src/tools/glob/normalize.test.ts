@@ -1,9 +1,13 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
-import { containsPath, normalizeGlobInputAsync } from './normalize';
+import {
+  containsPath,
+  normalizeGlobInputAsync,
+  resolveGlobScope,
+} from './normalize';
 import { buildRgArgs } from './rg-args';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
@@ -48,6 +52,20 @@ describe('tools/glob/normalize', () => {
 
     expect(normalized.searchPath).toBe(path.join(repoDir, 'src'));
     expect(normalized.relativePattern).toBe('*.ts');
+  });
+
+  test('honors the preflight scope if the execution cwd changes', async () => {
+    const first = temps.createRepo();
+    const second = temps.createRepo();
+    const args = { pattern: '*.ts', path: 'src' };
+    const scope = resolveGlobScope(args, createRepoContext(first));
+    const normalized = await normalizeGlobInputAsync(
+      args,
+      createRepoContext(second),
+      undefined,
+      scope,
+    );
+    expect(normalized.searchPath).toBe(path.join(realpathSync(first), 'src'));
   });
 
   test('normalizes leading dot-slash relative patterns', async () => {

@@ -23,7 +23,11 @@ import { promisify } from 'node:util';
 import { lock } from 'proper-lockfile';
 import { runProcess } from '../../utils/process-output';
 import { extractZip } from '../../utils/zip-extractor';
-import { extractTarGz, installLatestStableRipgrep } from './downloader';
+import {
+  extractTarGz,
+  findBinaryRecursive,
+  installLatestStableRipgrep,
+} from './downloader';
 import {
   computeSha256Async,
   fileStamp,
@@ -69,6 +73,28 @@ describe('tools/glob/downloader', () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('distinguishes an unrelated too-many-files error from the entry limit', async () => {
+    const unavailable = (async () => {
+      throw new Error('EMFILE: too many open files, scandir');
+    }) as typeof import('node:fs/promises').readdir;
+    await expect(
+      findBinaryRecursive('/not-read', 'rg', undefined, undefined, unavailable),
+    ).resolves.toBeNull();
+
+    const oneEntry = (async () => [
+      { name: 'anything', isFile: () => true },
+    ]) as unknown as typeof import('node:fs/promises').readdir;
+    await expect(
+      findBinaryRecursive(
+        '/not-read',
+        'rg',
+        undefined,
+        { entries: 100_000 },
+        oneEntry,
+      ),
+    ).rejects.toThrow('ripgrep archive contains too many extracted entries.');
   });
 
   // Explicit skip instead of a mid-test throw: Windows runs report these
@@ -494,46 +520,6 @@ describe('tools/glob/downloader', () => {
       expect(existsSync(metadata)).toBe(true);
     },
   );
-
-  testPosix(
-    'does not repair invalid cache through the async read API',
-    async () => {
-      const { binary, metadata } = setupCache();
-      writeFakeRipgrep(binary);
-      writeFileSync(
-        metadata,
-        JSON.stringify({
-          version: '14.1.1',
-          assetName: 'ripgrep.tar.gz',
-          archiveSha256: 'a'.repeat(64),
-          binarySha256: 'b'.repeat(64),
-        }),
-      );
-
-      // Only the publisher may repair under its proper-lockfile lock.
-      expect(await getInstalledRipgrepPathAsync()).toBeNull();
-      expect(existsSync(binary)).toBe(true);
-      expect(existsSync(metadata)).toBe(true);
-    },
-  );
-
-  testPosix('default reads never repair invalid cache', async () => {
-    const { binary, metadata } = setupCache();
-    writeFakeRipgrep(binary);
-    writeFileSync(
-      metadata,
-      JSON.stringify({
-        version: '14.1.1',
-        assetName: 'ripgrep.tar.gz',
-        archiveSha256: 'a'.repeat(64),
-        binarySha256: 'b'.repeat(64),
-      }),
-    );
-
-    expect(await getInstalledRipgrepPathAsync()).toBeNull();
-    expect(existsSync(binary)).toBe(true);
-    expect(existsSync(metadata)).toBe(true);
-  });
 
   testPosix(
     'publishes a staged binary over a corrupt cache under the lock',

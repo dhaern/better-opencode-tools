@@ -73,34 +73,43 @@ export async function downloadArchive(
   }
 }
 
-async function findBinaryRecursive(
+export async function findBinaryRecursive(
   dir: string,
   binary: string,
   signal?: AbortSignal,
   state: { entries: number } = { entries: 0 },
+  listEntries: typeof readdir = readdir,
 ): Promise<string | null> {
   throwIfAborted(signal);
   try {
-    const entries = await readdir(dir, { withFileTypes: true });
+    const entries = await listEntries(dir, { withFileTypes: true });
 
     for (const entry of entries) {
       throwIfAborted(signal);
       state.entries += 1;
       if (state.entries > MAX_EXTRACTED_ENTRIES) {
-        throw new Error('ripgrep archive contains too many extracted entries.');
+        throw new ExtractedEntryLimitError(
+          'ripgrep archive contains too many extracted entries.',
+        );
       }
       const file = join(dir, entry.name);
 
       if (entry.isFile() && entry.name === binary) return file;
 
       if (entry.isDirectory()) {
-        const nested = await findBinaryRecursive(file, binary, signal, state);
+        const nested = await findBinaryRecursive(
+          file,
+          binary,
+          signal,
+          state,
+          listEntries,
+        );
         if (nested) return nested;
       }
     }
   } catch (error) {
     if (signal?.aborted) throw createAbortError();
-    if (error instanceof Error && error.message.includes('too many')) {
+    if (error instanceof ExtractedEntryLimitError) {
       throw error;
     }
     return null;
@@ -108,6 +117,8 @@ async function findBinaryRecursive(
 
   return null;
 }
+
+class ExtractedEntryLimitError extends Error {}
 
 export async function extractTarGz(
   archive: string,

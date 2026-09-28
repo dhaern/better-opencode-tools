@@ -7,6 +7,23 @@ import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { createRepoContext, createTempTracker } from './test-helpers';
 import type { GlobToolInput } from './types';
 
+async function within<T>(
+  pending: Promise<T>,
+  ms = 2500,
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe('tools/glob/runner', () => {
   const temps = createTempTracker();
 
@@ -87,7 +104,11 @@ describe('tools/glob/runner', () => {
       { pattern: '*.ts', path: 'src', limit: 2, ...input },
       repoDir,
     );
-    const result = await runSystemRg(normalized, new AbortController().signal);
+    const result = await within(
+      runSystemRg(normalized, new AbortController().signal),
+    );
+    expect(result).toBeDefined();
+    if (!result) return;
 
     expect(result.files.map((file) => path.basename(file))).toEqual(
       expected.slice(0, 2),
@@ -114,7 +135,11 @@ describe('tools/glob/runner', () => {
       path: 'src',
       limit: 1,
     });
-    const result = await runSystemRg(normalized, new AbortController().signal);
+    const result = await within(
+      runSystemRg(normalized, new AbortController().signal),
+    );
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.files).toHaveLength(1);
     expect(result.files[0]?.startsWith(path.join(repoDir, 'src'))).toBe(true);
     expect(result.truncated).toBe(true);

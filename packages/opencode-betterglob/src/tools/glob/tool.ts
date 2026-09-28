@@ -19,14 +19,13 @@ import {
   failureMetadata,
   resultMetadata,
   title,
-} from './tool-context';
+} from './tool-adapter';
 import {
   AutoClock,
   abortReason,
   RUNNER_ABORT_GRACE_MS,
   raceAbort,
   TIMEOUT_ERROR_MESSAGE,
-  timeoutBudget,
   withHumanPause,
 } from './tool-deadline';
 import type { GlobRunner, GlobToolInput, NormalizedGlobInput } from './types';
@@ -50,6 +49,8 @@ export function createGlobTool(
     description: GLOB_DESCRIPTION,
     args: globArgsSchema,
     async execute(args, ctx) {
+      // Keep the plugin schema boundary explicit; inferring it via satisfies
+      // exposes non-portable plugin types (TS2742) in declaration output.
       const raw = args as unknown as GlobToolInput;
       let input: NormalizedGlobInput | undefined;
       let stage: 'normalize' | 'permission' | 'execution' = 'normalize';
@@ -73,7 +74,7 @@ export function createGlobTool(
           ctx.abort,
         );
 
-        const clock = new AutoClock(timeoutBudget(raw.timeout_ms));
+        const clock = new AutoClock(scope.timeoutMs);
         clock.start();
         const phaseSignal = AbortSignal.any([
           ctx.abort,
@@ -123,7 +124,6 @@ export function createGlobTool(
             input = { ...normalizedInput, allowAutoInstall: true };
           }
 
-          stage = 'execution';
           const executionInput = input;
           // Preparation consumed the clock's budget. Pause it before entering
           // the runner: the runner owns the search deadline, and its bounded
@@ -144,6 +144,7 @@ export function createGlobTool(
           ]);
 
           try {
+            stage = 'execution';
             // The runner's deadline covers its async resolver and rg process;
             // cap it by the remaining automatic budget. runWithDeadline then
             // waits long enough to receive the runner's bounded cleanup result.

@@ -174,18 +174,8 @@ function wait(
 function create(deps: GlobResolverDependencies): SharedAutoInstallState {
   const install = deps.installLatestStableRipgrep ?? installLatestStableRipgrep;
   const controller = new AbortController();
-  const current: SharedAutoInstallState = {
-    controller,
-    waiters: 0,
-    settled: false,
-    promise: Promise.resolve({
-      path: RG_BINARY,
-      backend: 'rg' as const,
-      source: 'missing-rg' as const,
-    }),
-  };
-
-  current.promise = (async () => {
+  let current!: SharedAutoInstallState;
+  const promise = Promise.resolve().then(async () => {
     try {
       return {
         path: await install(controller.signal),
@@ -194,22 +184,18 @@ function create(deps: GlobResolverDependencies): SharedAutoInstallState {
       };
     } catch (error) {
       if (isSupervisorError(error)) throw error;
-      if (isAbortLike(error) || controller.signal.aborted) {
+      if (isAbortLike(error) || controller.signal.aborted)
         throw new AbortWaitError();
-      }
 
       const logger = deps.logger ?? logAsync;
       try {
-        await race(
-          Promise.resolve(
-            logger(
-              'ripgrep auto-install failed and no fallback is allowed.',
-              { error: error instanceof Error ? error.message : String(error) },
-              controller.signal,
-            ),
-          ),
+        const detail = error instanceof Error ? error.message : String(error);
+        const logged = logger(
+          'ripgrep auto-install failed and no fallback is allowed.',
+          { error: detail },
           controller.signal,
         );
+        await race(Promise.resolve(logged), controller.signal);
       } catch {
         // Logging must not mask the installation failure; late failures are
         // observed by race even when the last waiter has cancelled.
@@ -221,8 +207,8 @@ function create(deps: GlobResolverDependencies): SharedAutoInstallState {
       current.settled = true;
       if (state === current) state = null;
     }
-  })();
-
+  });
+  current = { controller, waiters: 0, settled: false, promise };
   return current;
 }
 

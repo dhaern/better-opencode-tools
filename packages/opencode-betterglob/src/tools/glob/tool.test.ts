@@ -1,24 +1,43 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, jest, mock, test } from 'bun:test';
+import { afterEach, describe, expect, jest, mock, test } from 'bun:test';
 import { symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
 import { resolveOpenCodeEffect } from '../../utils/tool-context';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
+import { MAX_TIMEOUT_MS } from './normalize';
 import { getRipgrepCacheDir } from './rg-cache';
 import { createExecutionContext, createTempTracker } from './test-helpers';
 import { createGlobTool } from './tool';
-import { permissionPath } from './tool-context';
+import { permissionPath } from './tool-adapter';
 import type { GlobRunner, GlobSearchResult } from './types';
 
 describe('tools/glob/tool', () => {
+  afterEach(() => jest.useRealTimers());
   const temps = createTempTracker();
   const resolveSystem = () => ({
     path: 'rg',
     backend: 'rg' as const,
     source: 'system-rg' as const,
   });
+
+  async function within<T>(
+    pending: Promise<T>,
+    ms = 2_500,
+  ): Promise<T | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), ms);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   function getAskInput(
     ctx: ReturnType<typeof createExecutionContext>,
@@ -136,6 +155,24 @@ describe('tools/glob/tool', () => {
     expect(metadata.title).toBe('*.ts');
     expect(metadata.metadata.error_stage).toBe('normalize');
     expect(metadata.metadata.count).toBe(0);
+  });
+
+  test('rejects an excessive deadline before requesting permission', async () => {
+    const repoDir = temps.createRepo();
+    const glob = createGlobTool({
+      directory: repoDir,
+      worktree: repoDir,
+      client: {},
+    } as any);
+    const ctx = createExecutionContext(repoDir);
+    await expect(
+      glob.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: MAX_TIMEOUT_MS + 1 },
+        ctx as any,
+      ),
+    ).rejects.toThrow(/timeout_ms must not exceed/);
+    expect(ctx.ask).not.toHaveBeenCalled();
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('normalize');
   });
 
   test('does not let metadata failure break successful glob output', async () => {
@@ -387,9 +424,11 @@ describe('tools/glob/tool', () => {
     const ctx = createExecutionContext(repoDir);
 
     await expect(
-      tool.execute(
-        { pattern: '*.ts', path: 'src', timeout_ms: 10 },
-        ctx as any,
+      within(
+        tool.execute(
+          { pattern: '*.ts', path: 'src', timeout_ms: 10 },
+          ctx as any,
+        ),
       ),
     ).rejects.toThrow(/deadline|aborted/i);
     expect(run).not.toHaveBeenCalled();
@@ -425,11 +464,15 @@ describe('tools/glob/tool', () => {
     );
     const ctx = createExecutionContext(repoDir);
 
-    const result = await tool.execute(
-      { pattern: '*.ts', path: 'src', timeout_ms: 50 },
-      ctx as any,
+    const result = await within(
+      tool.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: 50 },
+        ctx as any,
+      ),
     );
 
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(receivedSignal?.aborted).toBe(true);
     expect(result).toEqual({
       title: '*.ts',
@@ -481,31 +524,29 @@ describe('tools/glob/tool', () => {
     );
     const ctx = createExecutionContext(repoDir);
     jest.useFakeTimers();
-    try {
-      const pending = tool.execute(
-        { pattern: '*.ts', path: 'src', timeout_ms: 20 },
-        ctx as any,
-      );
-      await started.promise;
-      jest.advanceTimersByTime(20);
-      await Promise.resolve();
-      jest.advanceTimersByTime(1100);
-      const result = await pending;
-
-      expect(receivedSignal?.aborted).toBe(true);
-      expect(result).toEqual({
-        title: '*.ts',
-        output: expect.stringContaining(path.join(repoDir, 'src', 'a.ts')),
-        metadata: expect.objectContaining({
-          timed_out: true,
-          incomplete: true,
-          count: 1,
-          error: undefined,
-        }),
-      });
-    } finally {
-      jest.useRealTimers();
-    }
+    const pending = tool.execute(
+      { pattern: '*.ts', path: 'src', timeout_ms: 20 },
+      ctx as any,
+    );
+    await started.promise;
+    jest.advanceTimersByTime(20);
+    await Promise.resolve();
+    jest.advanceTimersByTime(1100);
+    jest.useRealTimers();
+    const result = await within(pending);
+    expect(result).toBeDefined();
+    if (!result) return;
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(result).toEqual({
+      title: '*.ts',
+      output: expect.stringContaining(path.join(repoDir, 'src', 'a.ts')),
+      metadata: expect.objectContaining({
+        timed_out: true,
+        incomplete: true,
+        count: 1,
+        error: undefined,
+      }),
+    });
   });
 
   test('asks permission before auto-installing ripgrep when missing', async () => {

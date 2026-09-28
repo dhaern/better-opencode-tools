@@ -23,10 +23,6 @@ export function raceSignal<T>(
     options.reason?.(signal as AbortSignal) ??
     signal?.reason ??
     createAbortError();
-  if (signal?.aborted) {
-    if (typeof operation === 'object') void operation.catch(() => undefined);
-    return Promise.reject(reason());
-  }
   const promise = Promise.resolve().then(() => {
     if (signal?.aborted) {
       if (typeof operation === 'object') void operation.catch(() => undefined);

@@ -1,5 +1,5 @@
-import { O_NONBLOCK, O_RDONLY } from 'node:constants';
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { type FileHandle, open, rm, stat } from 'node:fs/promises';
 import { throwIfAborted } from '../../utils/abort';
 import { isMissingExecutableError } from '../../utils/process-output';
@@ -35,7 +35,9 @@ async function withRegularFile<T>(
   finish: (size: number) => T,
 ): Promise<T> {
   throwIfAborted(signal);
-  const flags = process.platform === 'win32' ? O_RDONLY : O_RDONLY | O_NONBLOCK;
+  const flags =
+    constants.O_RDONLY |
+    (process.platform === 'win32' ? 0 : constants.O_NONBLOCK);
   let handle: FileHandle;
   try {
     handle = await open(file, flags);

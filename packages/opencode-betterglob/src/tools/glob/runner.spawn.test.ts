@@ -241,7 +241,9 @@ describe('tools/glob/runner spawn failures', () => {
     );
     await nextTurn();
     controller.abort();
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.cancelled).toBe(true);
     expect(result.exitCode).toBe(130);
   });
@@ -269,7 +271,12 @@ describe('tools/glob/runner spawn failures', () => {
         dir,
       );
       const started = performance.now();
-      const result = await run(input, new AbortController().signal);
+      const result = await within(
+        run(input, new AbortController().signal),
+        2500,
+      );
+      expect(result).toBeDefined();
+      if (!result) return;
 
       expect(result.files).toEqual([`${dir}/src/a.ts`]);
       expect(result.truncated).toBe(true);
@@ -301,7 +308,12 @@ describe('tools/glob/runner spawn failures', () => {
         dir,
       );
       const started = performance.now();
-      const result = await run(input, new AbortController().signal);
+      const result = await within(
+        run(input, new AbortController().signal),
+        2500,
+      );
+      expect(result).toBeDefined();
+      if (!result) return;
 
       expect(result.timedOut).toBe(true);
       expect(result.incomplete).toBe(true);
@@ -370,7 +382,9 @@ describe('tools/glob/runner spawn failures', () => {
         ? { error: 'cleanup unconfirmed: watchdog' }
         : {}),
     });
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.files).toEqual(
       ending === 'limit'
         ? [`${repoDir}/src/a.ts`]
@@ -426,11 +440,14 @@ describe('tools/glob/runner spawn failures', () => {
           ? new DOMException('deadline', 'TimeoutError')
           : new Error('cancelled'),
       );
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
     expect(result.exitCode).toBe(0);
     expect(result.incomplete).toBe(true);
     expect(result.error).toContain('cleanup wait deadline exceeded');
+    expect(result.error).not.toContain('Supervisor');
     expect(result.cancelled).toBe(ending === 'abort');
     expect(result.timedOut).toBe(ending === 'timeout');
     expect(child.listenerCount('error')).toBe(0);
@@ -493,7 +510,9 @@ describe('tools/glob/runner spawn failures', () => {
       fixture.child.stdout?.emit('data', 'b.ts\0unfinished');
       fixture.child.stderr?.emit('data', 'retained diagnostic');
     });
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.files).toEqual([
       `${repoDir}/src/a.ts`,
       `${repoDir}/src/b.ts`,
@@ -534,7 +553,9 @@ describe('tools/glob/runner spawn failures', () => {
         new Error('cleanup unconfirmed: unexpected supervisor death'),
       );
     });
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
     expect(result.exitCode).toBe(code);
     expect(result.error).toContain('cleanup unconfirmed');
@@ -568,7 +589,9 @@ describe('tools/glob/runner spawn failures', () => {
     fixture.cleanup.reject(
       new Error('cleanup unconfirmed: no protocol acknowledgement'),
     );
-    const result = await pending;
+    const result = await within(pending, 2500);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(result.exitCode).toBe(0);
     expect(result.error).toContain('no protocol acknowledgement');
     expect(result.incomplete).toBe(true);

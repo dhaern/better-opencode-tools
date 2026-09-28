@@ -76,7 +76,6 @@ export interface SupervisedProcess {
 const SUPERVISOR_SOURCE = `
 const { spawn } = require('node:child_process');
 const { closeSync } = require('node:fs');
-let task;
 let started = false;
 let taskDone = false;
 let stopping = false;
@@ -89,8 +88,7 @@ let killing = false;
 function killGroup() {
   if (killing) return;
   killing = true;
-  // Flush the cleanup marker before self-KILL; bare transport death must never
-  // be interpreted as successful cleanup by the parent.
+  // Flush cleanup before self-KILL; bare death cannot acknowledge cleanup.
   if (process.connected) {
     process.send({ type: 'cleanup' }, () => process.kill(0, 'SIGKILL'));
   } else {
@@ -125,9 +123,7 @@ function stop(grace = graceMs, force = false) {
 function release() {
   released = true;
   if (taskDone && !stopping && pendingMessages === 0) {
-    // The task may have left descendants in this group even after closing
-    // both output pipes. Kill from inside the still-live supervisor so no
-    // historical PGID can be reused by another process.
+    // Kill descendants from the live group leader, never a historical PGID.
     killGroup();
   }
 }
@@ -135,41 +131,34 @@ process.on('SIGTERM', () => { if (!stopping) stop(); });
 process.on('disconnect', () => stop());
 process.on('message', message => {
   if (!message || typeof message !== 'object') return;
-  if (message.type === 'stop') {
-    stop(message.graceMs, message.force === true);
-  } else if (message.type === 'release') {
-    release();
-  } else if (message.type === 'start' && !started && !stopping) {
-    started = true;
-    graceMs = message.graceMs;
-    try {
-      task = spawn(message.command[0], message.command.slice(1), {
-        cwd: message.cwd, env: message.env, shell: false,
-        detached: false, stdio: [0, 1, 2],
-      });
-      // Only the task/descendants retain the output writers. Keeping these
-      // open in the supervisor would make output drain depend on release.
-      closeOutput();
-      task.once('error', error => {
-        taskDone = true;
-        send({ type: 'taskError', message: error.message, code: error.code });
-        if (released) release();
-      });
-      task.once('exit', (code, signal) => {
-        taskDone = true;
-        send({ type: 'taskExit', code: code === null ? 1 : code, signal });
-        if (released) release();
-      });
-    } catch (error) {
+  if (message.type === 'stop') { stop(message.graceMs, message.force === true); return; }
+  if (message.type === 'release') { release(); return; }
+  if (message.type !== 'start' || started || stopping) return;
+  started = true;
+  graceMs = message.graceMs;
+  try {
+    const task = spawn(message.command[0], message.command.slice(1), {
+      cwd: message.cwd, env: message.env, shell: false,
+      detached: false, stdio: [0, 1, 2],
+    });
+    // Only task/descendants retain output writers; drain never awaits release.
+    closeOutput();
+    task.once('error', error => {
       taskDone = true;
-      closeOutput();
-      send({
-        type: 'taskError',
-        message: error instanceof Error ? error.message : String(error),
-        code: error?.code,
-      });
-      if (released) release();
-    }
+      send({ type: 'taskError', message: error.message, code: error.code });
+    });
+    task.once('exit', (code, signal) => {
+      taskDone = true;
+      send({ type: 'taskExit', code: code === null ? 1 : code, signal });
+    });
+  } catch (error) {
+    taskDone = true;
+    closeOutput();
+    send({
+      type: 'taskError',
+      message: error instanceof Error ? error.message : String(error),
+      code: error?.code,
+    });
   }
 });
 `;

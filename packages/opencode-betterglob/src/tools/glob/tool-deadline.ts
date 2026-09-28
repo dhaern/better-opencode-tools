@@ -3,7 +3,6 @@ import {
   cleanupBudget,
   DEFAULT_SEARCH_KILL_GRACE_MS,
 } from '../../utils/process-output';
-import { normalizeTimeoutMs } from './normalize';
 
 export const TIMEOUT_ERROR_MESSAGE =
   'glob search exceeded its automatic deadline.';
@@ -92,8 +91,6 @@ export async function withHumanPause<T>(
     if (wasRunning) clock.start();
   }
 }
-
-export const timeoutBudget = normalizeTimeoutMs;
 
 export function abortReason(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;
