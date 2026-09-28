@@ -44,147 +44,146 @@ function seedRepo(fileCount: number): string {
   return root;
 }
 
-test.each([
-  'content',
-  'count',
-] as const)('mtime %s replays 130 files in three invocations (T3)', async (outputMode) => {
-  const root = seedRepo(130);
-  const dir = temps.createDir('bettergrep-mtime-wrapper');
-  const logPath = path.join(dir, 'invocations.log');
-  const wrapperPath = path.join(dir, 'rg-wrapper.sh');
-  writeFileSync(
-    wrapperPath,
-    [
-      '#!/bin/sh',
-      `printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}`,
-      `exec ${JSON.stringify(systemRg)} "$@"`,
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
+test.each(['content', 'count'] as const)(
+  'mtime %s replays 130 files in three invocations (T3)',
+  async (outputMode) => {
+    const root = seedRepo(130);
+    const dir = temps.createDir('bettergrep-mtime-wrapper');
+    const logPath = path.join(dir, 'invocations.log');
+    const wrapperPath = path.join(dir, 'rg-wrapper.sh');
+    writeFileSync(
+      wrapperPath,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}`,
+        `exec ${JSON.stringify(systemRg)} "$@"`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
 
-  const result = await executeMtimeMode(
-    mtimeInput(root, { output_mode: outputMode }),
-    new AbortController().signal,
-    { path: wrapperPath, backend: 'rg', source: 'system-rg' },
-  );
+    const result = await executeMtimeMode(
+      mtimeInput(root, { output_mode: outputMode }),
+      new AbortController().signal,
+      { path: wrapperPath, backend: 'rg', source: 'system-rg' },
+    );
 
-  expect(result.totalFiles).toBe(130);
-  expect(result.totalMatches).toBe(130);
-  const invocations = readFileSync(logPath, 'utf8').trim().split('\n');
-  // Discovery (1) plus content replay in batches of 64: 64 + 64 + 2.
-  const replayInvocations = invocations.slice(1);
-  expect(replayInvocations.length).toBe(Math.ceil(130 / 64));
-  expect(result.replayBatchCount).toBe(3);
-  if (outputMode === 'content') {
-    expect(replayInvocations.join('\n')).toContain('-j1');
-  }
-});
+    expect(result.totalFiles).toBe(130);
+    expect(result.totalMatches).toBe(130);
+    const invocations = readFileSync(logPath, 'utf8').trim().split('\n');
+    // Discovery (1) plus content replay in batches of 64: 64 + 64 + 2.
+    const replayInvocations = invocations.slice(1);
+    expect(replayInvocations.length).toBe(Math.ceil(130 / 64));
+    expect(result.replayBatchCount).toBe(3);
+    if (outputMode === 'content') {
+      expect(replayInvocations.join('\n')).toContain('-j1');
+    }
+  },
+);
 
-test.each([
-  'asc',
-  'desc',
-] as const)('mtime ordering %s keeps replayed matches ordered', async (sortOrder) => {
-  const root = seedRepo(8);
-  const result = await executeMtimeMode(
-    mtimeInput(root, { sort_order: sortOrder }),
-    new AbortController().signal,
-    systemCli,
-  );
+test.each(['asc', 'desc'] as const)(
+  'mtime ordering %s keeps replayed matches ordered',
+  async (sortOrder) => {
+    const root = seedRepo(8);
+    const result = await executeMtimeMode(
+      mtimeInput(root, { sort_order: sortOrder }),
+      new AbortController().signal,
+      systemCli,
+    );
 
-  expect(result.totalFiles).toBe(8);
-  const names = result.files.map((file) => path.basename(file.absolutePath));
-  const ordered = [...names].sort();
-  expect(names).toEqual(sortOrder === 'asc' ? ordered : ordered.reverse());
-});
+    expect(result.totalFiles).toBe(8);
+    const names = result.files.map((file) => path.basename(file.absolutePath));
+    const ordered = [...names].sort();
+    expect(names).toEqual(sortOrder === 'asc' ? ordered : ordered.reverse());
+  },
+);
 
-test.each([
-  'content',
-  'count',
-] as const)('mtime %s completely recovered batch leaves no error metadata (T1)', async (outputMode) => {
-  const root = seedRepo(10);
-  const dir = temps.createDir('bettergrep-mtime-recovered');
-  const wrapperPath = path.join(dir, 'rg-recovered.sh');
-  writeFileSync(
-    wrapperPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '*f0009.txt*f0008.txt*) echo "boom" 1>&2; exit 2;;',
-      'esac',
-      `exec ${JSON.stringify(systemRg)} "$@"`,
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
+test.each(['content', 'count'] as const)(
+  'mtime %s completely recovered batch leaves no error metadata (T1)',
+  async (outputMode) => {
+    const root = seedRepo(10);
+    const dir = temps.createDir('bettergrep-mtime-recovered');
+    const wrapperPath = path.join(dir, 'rg-recovered.sh');
+    writeFileSync(
+      wrapperPath,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '*f0009.txt*f0008.txt*) echo "boom" 1>&2; exit 2;;',
+        'esac',
+        `exec ${JSON.stringify(systemRg)} "$@"`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
 
-  const result = await executeMtimeMode(
-    mtimeInput(root, { output_mode: outputMode }),
-    new AbortController().signal,
-    { path: wrapperPath, backend: 'rg', source: 'system-rg' },
-  );
-  expect(result.totalFiles).toBe(10);
-  expect(result.totalMatches).toBe(10);
-  expect(result.truncated).toBe(false);
-  expect(result.partialPhase).toBeUndefined();
-  expect(result.warnings).toEqual([]);
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr).toBe('');
-  expect(result.retryCount).toBe(0);
-  expect(result.replayBatchCount).toBe(11);
-});
+    const result = await executeMtimeMode(
+      mtimeInput(root, { output_mode: outputMode }),
+      new AbortController().signal,
+      { path: wrapperPath, backend: 'rg', source: 'system-rg' },
+    );
+    expect(result.totalFiles).toBe(10);
+    expect(result.totalMatches).toBe(10);
+    expect(result.truncated).toBe(false);
+    expect(result.partialPhase).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.retryCount).toBe(0);
+    expect(result.replayBatchCount).toBe(11);
+  },
+);
 
-test.each([
-  'content',
-  'count',
-] as const)('mtime %s permanently failing file reports only the failed retry (T2)', async (outputMode) => {
-  const root = seedRepo(10);
-  const dir = temps.createDir('bettergrep-mtime-unrecovered');
-  const wrapperPath = path.join(dir, 'rg-unrecovered.sh');
-  writeFileSync(
-    wrapperPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '*f0009.txt*f0008.txt*|*f0003.txt*) echo "boom" 1>&2; exit 2;;',
-      'esac',
-      `exec ${JSON.stringify(systemRg)} "$@"`,
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
+test.each(['content', 'count'] as const)(
+  'mtime %s permanently failing file reports only the failed retry (T2)',
+  async (outputMode) => {
+    const root = seedRepo(10);
+    const dir = temps.createDir('bettergrep-mtime-unrecovered');
+    const wrapperPath = path.join(dir, 'rg-unrecovered.sh');
+    writeFileSync(
+      wrapperPath,
+      [
+        '#!/bin/sh',
+        'case "$*" in',
+        '*f0009.txt*f0008.txt*|*f0003.txt*) echo "boom" 1>&2; exit 2;;',
+        'esac',
+        `exec ${JSON.stringify(systemRg)} "$@"`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
 
-  const result = await executeMtimeMode(
-    mtimeInput(root, { output_mode: outputMode }),
-    new AbortController().signal,
-    { path: wrapperPath, backend: 'rg', source: 'system-rg' },
-  );
-  expect(result.totalFiles).toBe(9);
-  expect(result.warnings).toEqual(['Skipped mtime replay batch 8: boom']);
-  expect(result.truncated).toBe(true);
-  expect(result.partialPhase).toBe('replay');
-  expect(result.replayBatchCount).toBe(11);
-  expect(result.exitCode).toBe(2);
-  expect(result.stderr).toBe('boom');
-});
+    const result = await executeMtimeMode(
+      mtimeInput(root, { output_mode: outputMode }),
+      new AbortController().signal,
+      { path: wrapperPath, backend: 'rg', source: 'system-rg' },
+    );
+    expect(result.totalFiles).toBe(9);
+    expect(result.warnings).toEqual(['Skipped mtime replay batch 8: boom']);
+    expect(result.truncated).toBe(true);
+    expect(result.partialPhase).toBe('replay');
+    expect(result.replayBatchCount).toBe(11);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toBe('boom');
+  },
+);
 
-test.each([
-  'content',
-  'count',
-  'files_with_matches',
-] as const)('mtime %s mode orders files by mtime', async (outputMode) => {
-  const root = seedRepo(6);
-  const result = await executeMtimeMode(
-    mtimeInput(root, { output_mode: outputMode }),
-    new AbortController().signal,
-    systemCli,
-  );
+test.each(['content', 'count', 'files_with_matches'] as const)(
+  'mtime %s mode orders files by mtime',
+  async (outputMode) => {
+    const root = seedRepo(6);
+    const result = await executeMtimeMode(
+      mtimeInput(root, { output_mode: outputMode }),
+      new AbortController().signal,
+      systemCli,
+    );
 
-  expect(result.totalFiles).toBe(6);
-  expect(result.files.map((file) => file.matchCount)).toEqual([
-    1, 1, 1, 1, 1, 1,
-  ]);
-});
+    expect(result.totalFiles).toBe(6);
+    expect(result.files.map((file) => file.matchCount)).toEqual([
+      1, 1, 1, 1, 1, 1,
+    ]);
+  },
+);
 
 test('mtime replay stops at a mid-replay limit', async () => {
   // 70 files span two replay batches; the limit fires in the first batch and

@@ -124,19 +124,21 @@ describe('grep render metadata hook', () => {
       ['count', 1, 1, 'occurrence'],
       ['content', 7, 3, 'match'],
       ['content', 1, 1, 'match'],
-    ] as const)('parses back %s output with %d matches across %d files', (outputMode, totalMatches, totalFiles, matchKind) => {
-      expect(
-        roundTrip(outputMode, { totalMatches, totalFiles, matchKind }),
-      ).toEqual({ matches: totalMatches, files: totalFiles });
-    });
+    ] as const)(
+      'parses back %s output with %d matches across %d files',
+      (outputMode, totalMatches, totalFiles, matchKind) => {
+        expect(
+          roundTrip(outputMode, { totalMatches, totalFiles, matchKind }),
+        ).toEqual({ matches: totalMatches, files: totalFiles });
+      },
+    );
 
-    test.each([
-      'content',
-      'count',
-      'files_with_matches',
-    ] as const)('parses back empty %s output as zero results', (outputMode) => {
-      expect(roundTrip(outputMode, {})).toEqual({ matches: 0, files: 0 });
-    });
+    test.each(['content', 'count', 'files_with_matches'] as const)(
+      'parses back empty %s output as zero results',
+      (outputMode) => {
+        expect(roundTrip(outputMode, {})).toEqual({ matches: 0, files: 0 });
+      },
+    );
 
     test('parses back timed-out and mtime partial outputs as zero results', () => {
       expect(roundTrip('content', { timedOut: true })).toEqual({

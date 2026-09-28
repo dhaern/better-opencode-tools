@@ -51,7 +51,7 @@
     "which": "^7.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.11",
+    "@biomejs/biome": "2.5.14",
     "@types/node": "^24.19.0",
     "@types/which": "^3.0.4",
     "bun-types": "1.4.2",
