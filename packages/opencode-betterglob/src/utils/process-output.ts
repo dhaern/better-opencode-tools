@@ -39,7 +39,6 @@ export function destroyReader(stream: ChildProcess['stdout']): void {
 export function watchCappedStream(
   stream: ChildProcess['stdout'],
   label: 'stdout' | 'stderr',
-  onSettled?: (text: string, error?: unknown) => void,
 ): { read: () => string; stop: () => void } {
   const chunks: Buffer[] = [];
   let retained = 0;
@@ -70,7 +69,6 @@ export function watchCappedStream(
       stream.on('error', ignore);
       stream.once('close', () => stream.removeListener('error', ignore));
     }
-    onSettled?.(read(), error);
   };
   stream?.on('data', onData);
   stream?.once('end', onEnd);
@@ -150,7 +148,7 @@ function adaptDirectSearch(
     clearTimeout(drainTimer);
     child.removeListener('error', onError);
     exit = {
-      code: code ?? 1,
+      code,
       signal,
       failure,
       error: failure === undefined ? undefined : toErrorMessage(failure),
@@ -223,7 +221,6 @@ async function collectProcess(
   signal?: AbortSignal,
 ): Promise<ProcessResult> {
   const child = search.child;
-  const text = { stdout: '', stderr: '' };
   let aborted = signal?.aborted === true;
   let stopStarted: number | undefined;
   const stopped = Promise.withResolvers<void>();
@@ -234,9 +231,7 @@ async function collectProcess(
     stopped.resolve();
   };
   const readers = (['stdout', 'stderr'] as const).map((label) =>
-    watchCappedStream(child[label], label, (value) => {
-      text[label] = value;
-    }),
+    watchCappedStream(child[label], label),
   );
   const completion = watchSearchCompletion(search, stop);
   const onAbort = () => {
@@ -270,7 +265,8 @@ async function collectProcess(
     const original = exit.failure;
     if (original !== undefined)
       throw original instanceof Error ? original : new Error(String(original));
-    return { exitCode: exit.code ?? 1, ...text, aborted };
+    const [stdout, stderr] = readers.map((reader) => reader.read());
+    return { exitCode: exit.code ?? 1, stdout, stderr, aborted };
   } finally {
     signal?.removeEventListener('abort', onAbort);
     completion.clear();
