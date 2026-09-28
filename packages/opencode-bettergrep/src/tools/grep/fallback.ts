@@ -44,8 +44,8 @@ export async function executeGrepFallback(
   return executeMode(input, signal, cli, {
     command,
     warnings,
-    // C.UTF-8 can fall back to C (including on musl); on glibc <2.39,
-    // LANGUAGE can override LC_ALL for messages, so clear it explicitly.
+    // musl has C.UTF-8 built in; where a libc lacks it, setlocale() degrades
+    // to C. glibc <2.39 still honours LANGUAGE under C.UTF-8, so blank it.
     env: { ...process.env, LC_ALL: 'C.UTF-8', LANGUAGE: '' },
     init: () => ({
       parsed: {
