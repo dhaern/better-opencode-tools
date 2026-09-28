@@ -86,7 +86,7 @@ function jpegDimensions(buffer: Buffer): Dimensions {
         width: buffer.readUInt16BE(offset + 5),
       };
     }
-    if (length < 2 || offset + length > buffer.length) break;
+    if (length < 2) break;
     offset += length;
   }
   return {};
