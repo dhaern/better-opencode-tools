@@ -19,8 +19,8 @@ export function hostOutputLimits(config?: unknown): ReadOutputLimits {
   const output = (config as { tool_output?: Record<string, unknown> } | null)
     ?.tool_output;
   const valid = (value: unknown, fallback: number) =>
-    Number.isSafeInteger(value as number) && (value as number) > 0
-      ? (value as number)
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+      ? value
       : fallback;
   return {
     maxLines: valid(output?.max_lines, 2000),
