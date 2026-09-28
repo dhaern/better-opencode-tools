@@ -75,26 +75,18 @@ function jpegDimensions(buffer: Buffer): Dimensions {
   while (offset < buffer.length) {
     if (buffer[offset++] !== 0xff) break;
     while (buffer[offset] === 0xff) offset += 1;
-    if (offset >= buffer.length) break;
     const marker = buffer[offset++];
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    if (
-      marker === 0x00 ||
-      marker === 0xd8 ||
-      marker === 0xd9 ||
-      marker === 0xda
-    )
-      break;
     if (offset + 2 > buffer.length) break;
     const length = buffer.readUInt16BE(offset);
-    if (length < 2 || offset + length > buffer.length) break;
     if (JPEG_SOF_MARKERS.has(marker)) {
-      if (length < 8) break;
+      if (length < 8 || offset + 7 > buffer.length) break;
       return {
         height: buffer.readUInt16BE(offset + 3),
         width: buffer.readUInt16BE(offset + 5),
       };
     }
+    if (length < 2 || offset + length > buffer.length) break;
     offset += length;
   }
   return {};

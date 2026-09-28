@@ -28,6 +28,23 @@ const tinyPng = Buffer.from([
   0x00, 0x00, 0x00,
 ]);
 
+function jpegWithSofAt(position: number): Buffer {
+  const jpeg = Buffer.alloc(position + 19);
+  jpeg[0] = 0xff;
+  jpeg[1] = 0xd8;
+  jpeg[2] = 0xff;
+  jpeg[3] = 0xe1;
+  jpeg.writeUInt16BE(position - 4, 4);
+  jpeg[position] = 0xff;
+  jpeg[position + 1] = 0xc0;
+  jpeg.writeUInt16BE(17, position + 2);
+  jpeg[position + 4] = 8;
+  jpeg.writeUInt16BE(2, position + 5);
+  jpeg.writeUInt16BE(3, position + 7);
+  jpeg[position + 9] = 3;
+  return jpeg;
+}
+
 async function createWorkspace(): Promise<string> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'betterread-engine-'));
   tempDirs.push(directory);
@@ -731,6 +748,22 @@ describe('executeRead', () => {
       width: 3,
       height: 2,
     });
+  });
+
+  test.each([
+    65_520, 65_526,
+  ])('reads JPEG SOF0 at byte %i near the 64 KiB probe boundary', async (position) => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'edge.jpg');
+    await writeFile(filePath, jpegWithSofAt(position));
+    const result = await executeRead({ args: { filePath }, directory });
+    expect(result.output).toContain('<dimensions>3x2</dimensions>');
+    expect(result.metadata.width).toBe(3);
+    expect(result.metadata.height).toBe(2);
+  });
+
+  test('omits dimensions if the SOF0 header falls outside the 64 KiB probe', () => {
+    expect(imageDimensions('image/jpeg', jpegWithSofAt(65_534))).toEqual({});
   });
 
   test('names symlinked image attachments after the requested file', async () => {
