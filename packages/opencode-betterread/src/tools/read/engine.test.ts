@@ -766,6 +766,38 @@ describe('executeRead', () => {
     expect(imageDimensions('image/jpeg', jpegWithSofAt(65_534))).toEqual({});
   });
 
+  test('ignores a JPEG SOF0 with an incomplete segment-length field', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00]),
+      ),
+    ).toEqual({});
+  });
+
+  test('ignores a JPEG SOF0 with incomplete height and width bytes', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([
+          0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00,
+        ]),
+      ),
+    ).toEqual({});
+  });
+
+  test('ignores a JPEG SOF0 whose declared length is too short', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([
+          0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0x08, 0x00, 0x05, 0x00, 0x07,
+          0x00,
+        ]),
+      ),
+    ).toEqual({});
+  });
+
   test('names symlinked image attachments after the requested file', async () => {
     const directory = await createWorkspace();
     const canonical = path.join(directory, 'photo.png');
