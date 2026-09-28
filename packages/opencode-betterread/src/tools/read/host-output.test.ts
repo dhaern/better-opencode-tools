@@ -121,11 +121,23 @@ describe('host-aware output budgets', () => {
     );
     const legacy = await executeRead({ args: { filePath: file }, directory });
     const { read } = await server(directory, {
-      tool_output: { max_lines: 4000, max_bytes: 512_000 },
+      tool_output: { max_lines: 4000, max_bytes: 1_000_000 },
     });
     const result = await read(file);
     expect(result.output).toBe(legacy.output);
     expect(result.metadata).toEqual(legacy.metadata);
+    const utf8 = path.join(directory, 'ample-utf8.txt');
+    writeFileSync(
+      utf8,
+      Array.from({ length: 1200 }, () => '€'.repeat(150)).join('\n'),
+    );
+    const legacyUtf8 = await executeRead({
+      args: { filePath: utf8 },
+      directory,
+    });
+    const configuredUtf8 = await read(utf8);
+    expect(configuredUtf8.output === legacyUtf8.output).toBe(true);
+    expect(configuredUtf8.metadata).toEqual(legacyUtf8.metadata);
   });
 
   test('missing and invalid config use defaults, without sharing budgets between instances', async () => {
@@ -139,7 +151,7 @@ describe('host-aware output budgets', () => {
       tool_output: { max_lines: -1, max_bytes: 'not-a-number' },
     });
     const ample = await server(directory, {
-      tool_output: { max_lines: 4000, max_bytes: 512_000 },
+      tool_output: { max_lines: 4000, max_bytes: 1_000_000 },
     });
     const absent = await server(directory);
     const [a, b, c] = await Promise.all([
