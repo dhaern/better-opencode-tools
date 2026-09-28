@@ -157,14 +157,13 @@ function budgetedDirectoryEntries(
   buildFooter: (entriesCount: number, truncatedByBytes: boolean) => string,
   outputLimits: ReadOutputLimits,
 ): { selected: string[]; truncatedByBytes: boolean; formattedOutput: string } {
-  const escapedPath = escapeStructuredTagValue(normalizedPath);
-  const frame = `<path>${escapedPath}</path>\n<type>directory</type>\n<entries>\n\n</entries>\n`;
+  const frame = `<path>${escapeStructuredTagValue(normalizedPath)}</path>\n<type>directory</type>\n<entries>\n\n</entries>\n`;
   let chars = frame.length;
   let bytes = Buffer.byteLength(frame, 'utf8');
   const maxBytes = Math.min(MAX_OUTPUT_BYTES, outputLimits.maxBytes);
   const fits = (footer: string, count: number): boolean =>
     chars + footer.length <= MAX_OUTPUT_CHARS &&
-    bytes + Buffer.byteLength(footer, 'utf8') <= maxBytes &&
+    bytes + footer.length <= maxBytes &&
     5 + Math.max(1, count) + (footer.includes('\n') ? 1 : 0) <=
       outputLimits.maxLines;
   let selectedCount = 0;

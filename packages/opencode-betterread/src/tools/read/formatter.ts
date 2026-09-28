@@ -6,8 +6,7 @@ import {
   MAX_OUTPUT_CHARS,
   OUTPUT_CAPPED_NOTE,
 } from './constants';
-import type { ReadOutputLimits } from './limits';
-import { LEGACY_OUTPUT_LIMITS } from './limits';
+import { LEGACY_OUTPUT_LIMITS, type ReadOutputLimits } from './limits';
 import type {
   DirectoryReadResult,
   ImageInfoResult,
@@ -99,22 +98,13 @@ export function renderTextResult(
   const maxBytes = Math.min(MAX_OUTPUT_BYTES, outputLimits.maxBytes);
   const noteChars = 1 + LINE_TRUNCATED_NOTE.length;
   const cappedFooterChars =
-    `(Showing lines ${result.startLine}-`.length +
-    '. Use offset='.length +
-    ' to continue.)'.length +
-    1 +
-    OUTPUT_CAPPED_NOTE.length;
+    `(Showing lines ${result.startLine}-. Use offset= to continue.)\n${OUTPUT_CAPPED_NOTE}`
+      .length;
   let endDigits = String(result.startLine).length;
   let nextDigits = String(result.startLine + 1).length;
   let endThreshold = 10 ** endDigits;
   let nextThreshold = 10 ** nextDigits;
-  const emptyFooter = formatFooter(
-    result.startLine,
-    result.startLine - 1,
-    result.totalLines,
-    true,
-  );
-  const emptyTail = `${emptyFooter}${truncatedLineShown(0) ? `\n${LINE_TRUNCATED_NOTE}` : ''}\n${OUTPUT_CAPPED_NOTE}`;
+  const emptyTail = `${formatFooter(result.startLine, result.startLine - 1, undefined, true)}${truncatedLineShown(0) ? `\n${LINE_TRUNCATED_NOTE}` : ''}\n${OUTPUT_CAPPED_NOTE}`;
   let chars = 0;
   let bytes = 0;
   const asciiContent =
@@ -122,7 +112,7 @@ export function renderTextResult(
   let selected = 0;
   let checking =
     baseChars + emptyTail.length <= MAX_OUTPUT_CHARS &&
-    baseBytes + Buffer.byteLength(emptyTail, 'utf8') <= maxBytes &&
+    baseBytes + emptyTail.length <= maxBytes &&
     6 + (truncatedLineShown(0) ? 1 : 0) <= outputLimits.maxLines;
   let fullTooLarge = false;
   for (let index = 0; index < rawLines.length; index += 1) {
@@ -162,7 +152,7 @@ export function renderTextResult(
   const fullFits =
     !fullTooLarge &&
     baseChars + chars + fullTail.length <= MAX_OUTPUT_CHARS &&
-    baseBytes + bytes + Buffer.byteLength(fullTail, 'utf8') <= maxBytes &&
+    baseBytes + bytes + fullTail.length <= maxBytes &&
     4 + rawLines.length + fullTail.split('\n').length <= outputLimits.maxLines;
   const count = fullFits ? numberedLines.length : selected;
   const visible = numberedLines.slice(0, count);

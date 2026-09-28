@@ -10,21 +10,17 @@ import {
 } from './constants';
 import type { NormalizedReadArgs, ReadArgs } from './types';
 
-export type OutputBudget = {
-  tryAdd(line: string): boolean;
-};
-
 export type ReadOutputLimits = { maxLines: number; maxBytes: number };
-export const LEGACY_OUTPUT_LIMITS: ReadOutputLimits = {
-  maxLines: Number.POSITIVE_INFINITY,
+export const LEGACY_OUTPUT_LIMITS = {
+  maxLines: Infinity,
   maxBytes: MAX_OUTPUT_BYTES,
 };
 export function hostOutputLimits(config?: unknown): ReadOutputLimits {
   const output = (config as { tool_output?: Record<string, unknown> } | null)
     ?.tool_output;
   const valid = (value: unknown, fallback: number) =>
-    typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-      ? value
+    Number.isSafeInteger(value as number) && (value as number) > 0
+      ? (value as number)
       : fallback;
   return {
     maxLines: valid(output?.max_lines, 2000),
@@ -82,9 +78,8 @@ export function splitLogicalLines(raw: string): string[] {
   return lines;
 }
 
-// Single budget accumulator: tracks joined output cost (including the
-// newline separator) and accepts a line only when chars and bytes both fit.
-export function createOutputBudget(maxBytes = MAX_OUTPUT_BYTES): OutputBudget {
+// Include the newline separator when budgeting each selected line.
+export function createOutputBudget(maxBytes = MAX_OUTPUT_BYTES) {
   let chars = 0;
   let bytes = 0;
   let count = 0;

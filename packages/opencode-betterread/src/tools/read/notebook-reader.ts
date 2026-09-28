@@ -1,9 +1,9 @@
 import type { FileHandle } from 'node:fs/promises';
 import { readBoundedBytes } from './attachments';
 import { MAX_PARSED_NOTEBOOK_BYTES } from './constants';
-import type { ReadOutputLimits } from './limits';
 import {
   LEGACY_OUTPUT_LIMITS,
+  type ReadOutputLimits,
   selectBudgetedLines,
   splitLogicalLines,
 } from './limits';

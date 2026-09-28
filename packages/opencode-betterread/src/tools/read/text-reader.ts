@@ -1,9 +1,9 @@
 import type { FileHandle } from 'node:fs/promises';
 import { MAX_LINE_LENGTH } from './constants';
-import type { ReadOutputLimits } from './limits';
 import {
   createOutputBudget,
   LEGACY_OUTPUT_LIMITS,
+  type ReadOutputLimits,
   truncateLine,
 } from './limits';
 import type { TextReadResult } from './types';
@@ -31,11 +31,8 @@ export async function readTextWindow(
   signal?: AbortSignal,
 ): Promise<Omit<TextReadResult, 'path'>> {
   signal?.throwIfAborted();
-  const {
-    size,
-    countAll = false,
-    outputLimits = LEGACY_OUTPUT_LIMITS,
-  } = options;
+  const { size, countAll = false } = options;
+  const outputLimits = options.outputLimits ?? LEGACY_OUTPUT_LIMITS;
   const selected: string[] = [];
   const budget = createOutputBudget(outputLimits.maxBytes);
   const buffer = Buffer.allocUnsafe(

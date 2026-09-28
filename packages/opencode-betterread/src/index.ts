@@ -6,18 +6,16 @@ import { createReadTool, readArgsSchema } from './tools/read/tool';
 
 const server: Plugin = async (ctx) => {
   let outputLimits = hostOutputLimits();
-  const read = createReadTool({ ...ctx, readOutputLimits: () => outputLimits });
-  const hook = createReadRenderMetadataHook();
 
   return {
     config: async (config) => {
       outputLimits = hostOutputLimits(config);
     },
     tool: {
-      read,
+      read: createReadTool({ ...ctx, readLimits: () => outputLimits }),
     },
 
-    ...hook,
+    ...createReadRenderMetadataHook(),
   };
 };
 
