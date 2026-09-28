@@ -51,7 +51,7 @@ function formatFooter(
 ): string {
   if (end < start) {
     if (total === 0 && !hasMore) return '(End of file - 0 lines)';
-    return '(No lines in selected range)';
+    return `(Line ${start} exceeds budget. Use offset=${start + 1} to continue.)`;
   }
   if (total !== undefined && !hasMore) {
     return `(End of file - showing lines ${start}-${end} of ${total})`;

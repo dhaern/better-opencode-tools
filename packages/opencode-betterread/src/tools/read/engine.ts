@@ -235,7 +235,7 @@ export async function executeRead(input: {
     const visible = { ...text, path: resolvedPath };
     if (
       visible.totalLines !== undefined &&
-      visible.endLine < visible.startLine &&
+      visible.startLine > visible.totalLines &&
       !(visible.totalLines === 0 && visible.startLine === 1)
     ) {
       throw new Error(

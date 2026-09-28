@@ -187,5 +187,7 @@ describe('host-aware output budgets', () => {
     expect(hostWouldTruncate(tight.output, 8, bytes - 1)).toBe(false);
     expect(tight.output).toContain('Use offset=');
     expect(tight.metadata.truncated_by_bytes).toBe(true);
+    const skip = await server(directory, { tool_output: { max_bytes: 250 } });
+    expect((await skip.read(file)).output).toContain('Use offset=2');
   });
 });
