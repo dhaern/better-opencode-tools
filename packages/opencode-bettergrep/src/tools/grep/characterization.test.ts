@@ -6,6 +6,7 @@ import which from 'which';
 import { GrepAggregator } from './aggregate';
 import { executeContentLikeMode, executeFileListMode } from './direct';
 import { executeGrepFallback } from './fallback';
+import { comparePathBytes } from './fallback-results';
 import { buildPrimarySummary, formatGrepResult } from './format';
 import { executeMtimeMode } from './mtime';
 import { normalizeGrepInput } from './normalize';
@@ -69,9 +70,7 @@ function stable(
       .replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
   const files =
     order === 'none'
-      ? [...result.files].sort((left, right) =>
-          left.file.localeCompare(right.file),
-        )
+      ? [...result.files].sort(comparePathBytes)
       : result.files;
   return {
     backend: result.backend,

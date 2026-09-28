@@ -98,6 +98,33 @@ test.each(['asc', 'desc'] as const)(
   },
 );
 
+const NAMES = ['ñ', 'á', 'b', 'a', 'Z', 'café', 'cafe\u0301'];
+const BYTE_ORDER = ['Z', 'a', 'b', 'cafe\u0301', 'café', 'á', 'ñ'];
+
+test.each(['asc', 'desc'] as const)(
+  'mtime %s breaks equal-timestamp ties by path bytes',
+  async (sortOrder) => {
+    for (const names of [NAMES, [...NAMES].reverse()]) {
+      const files = names.map((name) =>
+        createFileMatch({
+          file: name,
+          absolutePath: `/virtual/${name}`,
+          replayPath: `/virtual/${name}`,
+          pathKey: `utf8:/virtual/${name}`,
+        }),
+      );
+      const sorted = await sortFilesByMtime(
+        files,
+        { sortOrder },
+        new AbortController().signal,
+        Date.now() + 10_000,
+        async () => ({ mtimeMs: 1000 }),
+      );
+      expect(sorted.files.map((file) => file.file)).toEqual(BYTE_ORDER);
+    }
+  },
+);
+
 test.each(['content', 'count'] as const)(
   'mtime %s completely recovered batch leaves no error metadata (T1)',
   async (outputMode) => {

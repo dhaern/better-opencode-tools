@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { MAX_MTIME_DISCOVERY_FILES } from './constants';
 import { executeDirectMode, executeFileListMode } from './direct';
-import { finishFileListMode } from './fallback-results';
+import { comparePathBytes, finishFileListMode } from './fallback-results';
 import type { ResolvedGrepCli } from './resolver';
 import {
   countOccurrences,
@@ -510,7 +510,7 @@ export async function sortFilesByMtime(
       return input.sortOrder === 'desc' ? -delta : delta;
     }
 
-    return left.file.file.localeCompare(right.file.file);
+    return comparePathBytes(left.file, right.file);
   });
 
   return {
