@@ -227,8 +227,9 @@ export async function readDirectory(
     throw new Error(directoryPaginationLimitMessage(resolvedPath));
   }
 
+  // UTF-16 code-unit order, like git/LC_ALL=C except astrals vs U+E000–U+FFFF.
   const sortedEntries = scan.entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   );
   const visibleDirents = sortedEntries.slice(
     startIndex,

@@ -47,6 +47,29 @@ afterEach(async () => {
 });
 
 describe('readDirectory', () => {
+  test('orders names by UTF-16 code units instead of locale collation', async () => {
+    const names = ['éclair', 'zeta', 'alpha', 'Alpha', '_meta'];
+    const result = await readDirectory('/tmp/byte-order', 1, 10, {
+      scanDirectoryEntries: async () => ({
+        entries: names.map((name) => ({
+          name,
+          dirent: fileDirent,
+          dirLike: false,
+        })),
+        totalEntries: names.length,
+        totalEntriesKnown: true,
+      }),
+    });
+
+    expect(result.entries).toEqual([
+      'Alpha',
+      '_meta',
+      'alpha',
+      'zeta',
+      'éclair',
+    ]);
+  });
+
   test('keeps window order and symlink slashes across stat batches', async () => {
     const directory = await createTempDirectory();
     const outside = await createTempDirectory();

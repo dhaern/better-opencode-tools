@@ -95,8 +95,8 @@ exports[`directory trim budgets the truncation note, not the full-page footer 1`
 
 exports[`directory escaping, ASCII, multibyte and bounded scan contracts 1`] = `
 {
-  "metadataJson": "{"enhancedBy":"opencode-betterread","enhancedPath":"<root>/repo/listing","resolved_path":"<root>/repo/listing","kind":"directory","loaded":[],"preview":"a&amp;&lt; &gt;\\\\nb\\nalpha\\néclair\\nzeta","truncated":false,"offset":1,"limit":4096,"total_entries":4,"total_entries_known":true,"entry_count":4,"has_more":false,"truncated_by_bytes":false}",
-  "outputSha256": "2669b371aeeb2696ddaeb883bbb6ec4f21a55f662c860a1452e75e668ae7a426",
+  "metadataJson": "{"enhancedBy":"opencode-betterread","enhancedPath":"<root>/repo/listing","resolved_path":"<root>/repo/listing","kind":"directory","loaded":[],"preview":"a&amp;&lt; &gt;\\\\nb\\nalpha\\nzeta\\néclair","truncated":false,"offset":1,"limit":4096,"total_entries":4,"total_entries_known":true,"entry_count":4,"has_more":false,"truncated_by_bytes":false}",
+  "outputSha256": "3ffe6114fe0cb57735123b20bf80f03325ad7c07c09e2541dd8f5d16aa3015ef",
 }
 `;
 
