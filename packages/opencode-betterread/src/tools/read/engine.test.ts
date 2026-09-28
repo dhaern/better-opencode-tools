@@ -750,17 +750,18 @@ describe('executeRead', () => {
     });
   });
 
-  test.each([
-    65_520, 65_526, 65_527,
-  ])('reads JPEG SOF0 at byte %i near the 64 KiB probe boundary', async (position) => {
-    const directory = await createWorkspace();
-    const filePath = path.join(directory, 'edge.jpg');
-    await writeFile(filePath, jpegWithSofAt(position));
-    const result = await executeRead({ args: { filePath }, directory });
-    expect(result.output).toContain('<dimensions>3x2</dimensions>');
-    expect(result.metadata.width).toBe(3);
-    expect(result.metadata.height).toBe(2);
-  });
+  test.each([65_520, 65_526, 65_527])(
+    'reads JPEG SOF0 at byte %i near the 64 KiB probe boundary',
+    async (position) => {
+      const directory = await createWorkspace();
+      const filePath = path.join(directory, 'edge.jpg');
+      await writeFile(filePath, jpegWithSofAt(position));
+      const result = await executeRead({ args: { filePath }, directory });
+      expect(result.output).toContain('<dimensions>3x2</dimensions>');
+      expect(result.metadata.width).toBe(3);
+      expect(result.metadata.height).toBe(2);
+    },
+  );
 
   test('omits dimensions if the SOF0 header falls outside the 64 KiB probe', () => {
     expect(imageDimensions('image/jpeg', jpegWithSofAt(65_534))).toEqual({});
