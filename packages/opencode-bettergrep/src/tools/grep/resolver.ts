@@ -203,8 +203,8 @@ export function resolveGrepCli(
 
 function waitForSharedAutoInstall(
   state: SharedAutoInstallState,
+  deps: GrepResolverDependencies,
   signal?: AbortSignal,
-  grepDeps?: GrepResolverDependencies,
 ): Promise<ResolvedGrepCli> {
   state.waiters += 1;
 
@@ -212,14 +212,13 @@ function waitForSharedAutoInstall(
     state.waiters = Math.max(0, state.waiters - 1);
     if (state.waiters > 0 || state.settled) return;
     if (
-      grepDeps &&
       signal?.aborted &&
       (getAbortKind(signal) === 'timeout' ||
         (signal.reason as { name?: unknown } | undefined)?.name ===
           'TimeoutError')
     ) {
       failedInstallRetryAfter.set(
-        grepDeps,
+        deps,
         Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
       );
     }
@@ -320,11 +319,7 @@ export async function resolveGrepCliWithAutoInstall(
   }
 
   autoInstallState ??= createSharedAutoInstall(deps);
-  return waitForSharedAutoInstall(
-    autoInstallState,
-    signal,
-    current.backend === 'grep' ? deps : undefined,
-  );
+  return waitForSharedAutoInstall(autoInstallState, deps, signal);
 }
 
 export function resetGrepCliResolverForTests(): void {
