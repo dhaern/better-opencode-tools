@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, spyOn, test } from 'bun:test';
-import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -14,8 +14,12 @@ import {
 import { normalizeGlobInputAsync } from './normalize';
 import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { collectMatchedPaths } from './runner-output';
-import { adaptSupervisedSearch, type ManagedSearch } from './supervised-search';
-import { createRepoContext, createTempTracker, until } from './test-helpers';
+import {
+  adaptSupervisedSearch,
+  adaptWindowsSearch,
+  type ManagedSearch,
+} from './supervised-search';
+import { createRepoContext, createTempTracker } from './test-helpers';
 
 function spawnTestSearch(
   cmd: string,
@@ -23,6 +27,20 @@ function spawnTestSearch(
   options: SupervisorOptions & { postExitDrainMs?: number },
 ): ManagedSearch {
   return adaptSupervisedSearch(spawnSupervised([cmd, ...args], options), {
+    postExitDrainMs: options.postExitDrainMs,
+  });
+}
+
+function spawnScript(
+  script: string,
+  options: { cwd: string; killGraceMs?: number; postExitDrainMs?: number },
+): ManagedSearch {
+  return spawnTestSearch('node', ['-e', script], {
+    cwd: options.cwd,
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    killGraceMs: options.killGraceMs,
     postExitDrainMs: options.postExitDrainMs,
   });
 }
@@ -63,6 +81,23 @@ const fakeResolve = async () =>
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+async function within<T>(
+  pending: Promise<T>,
+  ms = 2000,
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function normalizeSearchInput(
   args: Partial<Parameters<typeof normalizeGlobInputAsync>[0]>,
   repoDir: string,
@@ -85,6 +120,57 @@ function isAlive(pid: number | undefined): boolean {
 
 describe('tools/glob/runner spawn failures', () => {
   const temps = createTempTracker();
+
+  test('Windows adapter waits for close and stops only through the child capability', async () => {
+    const child = fakeChild();
+    let kills = 0;
+    child.kill = () => {
+      kills++;
+      return true;
+    };
+    const managed = adaptWindowsSearch(child);
+    let completed = false;
+    void managed.completed.then(() => {
+      completed = true;
+    });
+    child.emit('error', new Error('spawn failed'));
+    await nextTurn();
+    expect(completed).toBe(false);
+    managed.stop();
+    expect(kills).toBe(1);
+    child.emit('close', null, null);
+    expect(await within(managed.completed)).toEqual({
+      code: null,
+      signal: null,
+      error: 'spawn failed',
+    });
+    expect(managed.readExit()).toEqual(await managed.completed);
+  });
+
+  test('cancelled managed search without an exit status retains exit code 130', async () => {
+    const child = fakeChild();
+    const completion =
+      Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
+    const controller = new AbortController();
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: () => ({
+        child,
+        completed: completion.promise,
+        readExit: () => undefined,
+        stop: () => completion.resolve({ code: null, signal: null }),
+      }),
+    });
+    const pending = run(
+      await normalizeSearchInput({}, temps.createRepo()),
+      controller.signal,
+    );
+    await nextTurn();
+    controller.abort();
+    const result = await pending;
+    expect(result.cancelled).toBe(true);
+    expect(result.exitCode).toBe(130);
+  });
 
   test.skipIf(process.platform === 'win32')(
     'default supervisor stops a NUL-writing executable at limit one without a five-second grace',
@@ -148,23 +234,6 @@ describe('tools/glob/runner spawn failures', () => {
       expect(performance.now() - started).toBeLessThan(2500);
     },
   );
-
-  test('cancelled raw child without an exit status retains exit code 130', async () => {
-    const child = fakeChild();
-    const controller = new AbortController();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => child,
-      killGraceMs: 0,
-    });
-    const input = await normalizeSearchInput({}, temps.createRepo());
-    const pending = run(input, controller.signal);
-    await nextTurn();
-    controller.abort();
-    const result = await pending;
-    expect(result.cancelled).toBe(true);
-    expect(result.exitCode).toBe(130);
-  });
 
   test.each(
     (['limit', 'abort', 'timeout'] as const).flatMap((ending) =>
@@ -558,119 +627,6 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result.timedOut).toBe(reason === 'timeout');
   });
 
-  test.each([
-    '',
-    'rg: permission denied',
-  ])('reports exit 2 without rows, with stderr %j', async (stderr) => {
-    const child = fakeChild();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => child,
-    });
-    const input = await normalizeSearchInput({}, temps.createRepo());
-    const pending = run(input, new AbortController().signal);
-    await nextTurn();
-    child.stderr?.emit('data', stderr);
-    child.emit('close', 2, null);
-    const result = await pending;
-    expect(result.files).toEqual([]);
-    expect(result.exitCode).toBe(2);
-    expect(result.incomplete).toBe(true);
-    expect(result.error).toBe(stderr || 'rg exited with code 2');
-  });
-
-  test.each([
-    'close',
-    'cancel',
-    'error',
-  ] as const)('destroys readers and cleans listeners safely after %s', async (ending) => {
-    class FailingReader extends PassThrough {
-      override _destroy(
-        _error: Error | null,
-        callback: (error?: Error | null) => void,
-      ) {
-        queueMicrotask(() => callback(new Error('asynchronous destroy error')));
-      }
-    }
-    const controller = new AbortController();
-    const child = fakeChild();
-    const stdout = new FailingReader();
-    const stderr = new FailingReader();
-    child.stdout = stdout;
-    child.stderr = stderr;
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => child,
-      killGraceMs: 10,
-    });
-    const repoDir = temps.createRepo();
-    const input = await normalizeSearchInput({}, repoDir);
-    const pending = run(input, controller.signal);
-    await nextTurn();
-    stdout.write('a.ts\0partial');
-    if (ending === 'close') child.emit('close', 0, null);
-    else if (ending === 'cancel') controller.abort();
-    else {
-      stdout.emit('error', new Error('original pipe error'));
-      stdout.emit('error', new Error('second pipe error'));
-    }
-    const result = await pending;
-    await nextTurn();
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    if (ending === 'error') {
-      expect(result.error).toBe('original pipe error');
-      expect(result.incomplete).toBe(true);
-    }
-    for (const reader of [stdout, stderr]) {
-      expect(reader.destroyed).toBe(true);
-      expect(reader.listenerCount('data')).toBe(0);
-      expect(reader.listenerCount('error')).toBe(0);
-      expect(reader.listenerCount('close')).toBe(0);
-    }
-    if (ending !== 'close') child.emit('close', null, 'SIGTERM');
-    expect(child.listenerCount('error')).toBe(0);
-    expect(child.listenerCount('close')).toBe(0);
-  });
-
-  test.each([
-    'exit',
-    'close',
-  ] as const)('never signals an abandoned/reusable PGID after child %s', async (event) => {
-    const controller = new AbortController();
-    const child = fakeChild();
-    Object.defineProperty(child, 'pid', { value: 12345 });
-    const directSignals: unknown[] = [];
-    child.kill = (signal) => {
-      directSignals.push(signal);
-      return true;
-    };
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => child,
-      killGraceMs: 10,
-    });
-    const input = await normalizeSearchInput({}, temps.createRepo());
-    // Pretend every numeric process/group lookup succeeds, including after
-    // the old group disappeared and the PGID was reused. No ESRCH safety
-    // assumption, and no probe can be mistaken for an ownership guarantee.
-    const numericKill = spyOn(process, 'kill').mockReturnValue(true);
-    try {
-      const pending = run(input, controller.signal);
-      await nextTurn();
-      controller.abort();
-      await pending;
-      child.emit(event, null, 'SIGTERM');
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(numericKill).not.toHaveBeenCalled();
-      expect(directSignals).toEqual([
-        process.platform === 'win32' ? undefined : 'SIGTERM',
-      ]);
-      child.emit('close', null, 'SIGTERM');
-    } finally {
-      numericKill.mockRestore();
-    }
-  });
-
   test.skipIf(process.platform === 'win32')(
     'keeps the supervisor alive after worker exit until its resistant descendant is killed',
     async () => {
@@ -1022,104 +978,67 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result.error).toContain('spawn threw');
   });
 
-  test('returns near the hard timeout instead of waiting for process exit', async () => {
+  test.each([
+    '',
+    'rg: permission denied',
+  ])('reports exit 2 without rows, with stderr %j', async (diagnostic) => {
     const repoDir = temps.createRepo();
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) =>
-        nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            "process.stdout.write('a.ts\\0b.ts\\0'); setInterval(() => {}, 1000)",
-          ],
-          {
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: (_cmd, _args, options) =>
+        spawnScript(
+          `process.stderr.write(${JSON.stringify(diagnostic)}); process.exit(2);`,
+          options,
         ),
     });
-    const input = await normalizeSearchInput({ timeout_ms: 200 }, repoDir);
-    const started = Date.now();
-    const result = await runRipgrep(input, new AbortController().signal);
-    const elapsed = Date.now() - started;
-
-    expect(elapsed).toBeLessThan(1000);
-    expect(result.timedOut).toBe(true);
+    const result = await run(
+      await normalizeSearchInput({}, repoDir),
+      new AbortController().signal,
+    );
+    expect(result.files).toEqual([]);
+    expect(result.exitCode).toBe(2);
     expect(result.incomplete).toBe(true);
-    expect(result.files).toEqual([
-      `${repoDir}/src/a.ts`,
-      `${repoDir}/src/b.ts`,
-    ]);
+    expect(result.error).toBe(diagnostic || 'rg exited with code 2');
   });
 
-  test('kills stubborn child after timeout grace', async () => {
+  test('caps stderr retention from a supervised search', async () => {
     const repoDir = temps.createRepo();
-    let child: ReturnType<typeof nodeSpawn> | undefined;
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) => {
-        child = nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
-          ],
-          {
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
-        );
-        return child;
-      },
-      killGraceMs: 20,
-    });
-    const input = await normalizeSearchInput({ timeout_ms: 20 }, repoDir);
-
-    const result = await runRipgrep(input, new AbortController().signal);
-    await until(() => !isAlive(child?.pid), { timeoutMs: 1000, intervalMs: 5 });
-
-    expect(result.timedOut).toBe(true);
-    expect(isAlive(child?.pid)).toBe(false);
-  });
-
-  test('raw injected ChildProcess stops early at limit plus one without waiting for timeout', async () => {
-    const repoDir = temps.createRepo();
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) =>
-        nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            "process.stdout.write(Array.from({length: 10}, (_, i) => 'f' + i + '.ts').join('\\0') + '\\0'); setInterval(() => {}, 1000)",
-          ],
-          {
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: (_cmd, _args, options) =>
+        spawnScript(
+          "process.stderr.write('x'.repeat(1_048_576)); process.stdout.write('a.ts\\0');",
+          options,
         ),
     });
     const input = await normalizeSearchInput(
-      { limit: 2, timeout_ms: 5000 },
+      { limit: 1, timeout_ms: 3000 },
       repoDir,
     );
-    const started = Date.now();
-    const result = await runRipgrep(input, new AbortController().signal);
+    const result = await run(input, new AbortController().signal);
+    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+    expect(result.stderr.length).toBeLessThanOrEqual(8 * 1024 + 40);
+    expect(result.stderr).toContain('[stderr truncated at 8192 bytes]');
+  });
 
-    expect(Date.now() - started).toBeLessThan(1000);
-    expect(result.timedOut).toBe(false);
-    expect(result.truncated).toBe(true);
-    expect(result.count).toBe(2);
+  test('treats exit 2 with collected rows as a partial success', async () => {
+    const repoDir = temps.createRepo();
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: (_cmd, _args, options) =>
+        spawnScript(
+          "process.stdout.write('a.ts\\0'); process.stderr.write('rg: /locked: Permission denied'); process.exit(2);",
+          options,
+        ),
+    });
+    const result = await run(
+      await normalizeSearchInput({}, repoDir),
+      new AbortController().signal,
+    );
+    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+    expect(result.exitCode).toBe(2);
+    expect(result.incomplete).toBe(true);
+    expect(result.error).toBeUndefined();
   });
 
   test('reassembles multibyte paths split across stream chunks deterministically', async () => {
@@ -1154,150 +1073,5 @@ describe('tools/glob/runner spawn failures', () => {
     // The incomplete fragment must NOT become a path, even though the
     // stream ended without a terminator.
     expect(collected.read()).toEqual([`${repoDir}/src/a.ts`]);
-  });
-
-  test('kills stubborn child after early stop grace', async () => {
-    const repoDir = temps.createRepo();
-    let child: ReturnType<typeof nodeSpawn> | undefined;
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) => {
-        child = nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            "process.on('SIGTERM', () => {}); process.stdout.write(Array.from({length: 10}, (_, i) => 'f' + i + '.ts').join('\\0') + '\\0'); setInterval(() => {}, 1000)",
-          ],
-          {
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
-        );
-        return child;
-      },
-      killGraceMs: 20,
-    });
-    const input = await normalizeSearchInput(
-      { limit: 2, timeout_ms: 5000 },
-      repoDir,
-    );
-
-    const result = await runRipgrep(input, new AbortController().signal);
-    await until(() => !isAlive(child?.pid), { timeoutMs: 1000, intervalMs: 5 });
-
-    expect(result.truncated).toBe(true);
-    expect(result.timedOut).toBe(false);
-    expect(isAlive(child?.pid)).toBe(false);
-  });
-
-  test('terminates the child when a stream error fires mid-run', async () => {
-    const repoDir = temps.createRepo();
-    let child: ReturnType<typeof nodeSpawn> | undefined;
-    let firstRecordReceived = false;
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) => {
-        child = nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            "process.stdout.write('a.ts\\0'); setInterval(() => {}, 1000)",
-          ],
-          { stdio: ['pipe', 'pipe', 'pipe'] },
-        );
-        child.stdout?.once('data', () => {
-          firstRecordReceived = true;
-          setImmediate(() =>
-            child?.stdout?.emit('error', new Error('injected pipe error')),
-          );
-        });
-        return child;
-      },
-      killGraceMs: 20,
-    });
-    const input = await normalizeSearchInput({ timeout_ms: 5000 }, repoDir);
-
-    // Inject only after the first data event; a wall-clock delay may fire
-    // before a slow child has produced any bytes.
-    const pending = runRipgrep(input, new AbortController().signal);
-    await until(() => firstRecordReceived);
-    const result = await pending;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    expect(result.error).toContain('injected pipe error');
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    // The error settlement must have STARTED termination: the child cannot
-    // stay alive after the grace period.
-    expect(isAlive(child?.pid)).toBe(false);
-  });
-
-  test('caps stderr retention while draining the stream', async () => {
-    const repoDir = temps.createRepo();
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) =>
-        nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            `
-            process.stderr.write('x'.repeat(1_048_576));
-            process.stdout.write('a.ts\\0');
-            `,
-          ],
-          { stdio: ['pipe', 'pipe', 'pipe'] },
-        ),
-    });
-    const input = await normalizeSearchInput(
-      { limit: 1, timeout_ms: 3000 },
-      repoDir,
-    );
-    const result = await runRipgrep(input, new AbortController().signal);
-
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.stderr.length).toBeLessThanOrEqual(8 * 1024 + 40);
-    expect(result.stderr).toContain('[stderr truncated at 8192 bytes]');
-  });
-
-  test('treats exit 2 with collected rows as a partial success', async () => {
-    const repoDir = temps.createRepo();
-    const runRipgrep = createRipgrepRunner({
-      resolve: async () => ({
-        path: process.execPath,
-        backend: 'rg',
-        source: 'system-rg',
-      }),
-      spawn: (_cmd, _args, _opts) =>
-        nodeSpawn(
-          process.execPath,
-          [
-            '-e',
-            `
-            process.stdout.write('a.ts\\0');
-            process.stderr.write('rg: /locked: Permission denied');
-            process.exit(2);
-            `,
-          ],
-          { stdio: ['pipe', 'pipe', 'pipe'] },
-        ),
-    });
-    const input = await normalizeSearchInput({ timeout_ms: 2000 }, repoDir);
-    const result = await runRipgrep(input, new AbortController().signal);
-
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.exitCode).toBe(2);
-    expect(result.incomplete).toBe(true);
-    expect(result.error).toBeUndefined();
   });
 });

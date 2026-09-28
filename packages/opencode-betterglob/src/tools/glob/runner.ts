@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { AbortWaitError } from '../../utils/abort';
 import { POST_EXIT_DRAIN_MS } from '../../utils/process-output';
 import {
@@ -19,6 +19,7 @@ import {
 import {
   adaptSpawnedSearch,
   adaptSupervisedSearch,
+  adaptWindowsSearch,
   DEFAULT_CLEANUP_WAIT_MS,
   type ManagedSearch,
   waitForManagedCleanup,
@@ -35,11 +36,7 @@ interface SpawnOptions {
 
 export interface RunnerDeps {
   resolve: typeof resolveGlobCliWithAutoInstall;
-  spawn: (
-    cmd: string,
-    args: string[],
-    opts: SpawnOptions,
-  ) => ChildProcess | ManagedSearch;
+  spawn: (cmd: string, args: string[], opts: SpawnOptions) => ManagedSearch;
   killGraceMs?: number;
   postExitDrainMs?: number;
   // Final-result budget after an early stop, independent of the search timeout.
@@ -57,7 +54,9 @@ export function createDefaultRunnerDeps(): RunnerDeps {
     resolve: resolveGlobCliWithAutoInstall,
     spawn: (cmd, args, options) =>
       process.platform === 'win32'
-        ? nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio })
+        ? adaptWindowsSearch(
+            nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio }),
+          )
         : adaptSupervisedSearch(
             spawnSupervised([cmd, ...args], {
               cwd: options.cwd,
@@ -183,7 +182,6 @@ export function createRipgrepRunner(
             killGraceMs: deps.killGraceMs,
             postExitDrainMs: deps.postExitDrainMs,
           }),
-          deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
         );
       } catch (error) {
         return emptyResult(input, currentCommand(), {
@@ -193,7 +191,6 @@ export function createRipgrepRunner(
       }
 
       const child = search.child;
-      const managedCompleted = search.completed;
 
       let finishLimit: ((value: 'limit') => void) | undefined;
       const limitResult = new Promise<'limit'>((resolve) => {
@@ -227,7 +224,7 @@ export function createRipgrepRunner(
       const earlyStop = typeof ended === 'string';
       let finalExit = !earlyStop && ended.type === 'close' ? ended : undefined;
       let cleanupError: string | undefined;
-      if (earlyStop && managedCompleted) {
+      if (earlyStop) {
         // Search has ended. Do not let its deadline reclassify a limit stop
         // while we wait for the independently bounded cleanup protocol.
         clearTimeout(timeout);
@@ -243,7 +240,7 @@ export function createRipgrepRunner(
           budget - (performance.now() - (stopRequestedAt ?? performance.now())),
         );
         const cleanup = await waitForManagedCleanup(
-          managedCompleted,
+          search.completed,
           remaining,
         );
         if (cleanup) finalExit = { type: 'close', ...cleanup };
@@ -266,19 +263,15 @@ export function createRipgrepRunner(
           search.readExit()?.code ??
           child.exitCode ??
           INTERRUPT_EXIT_CODES[ended])
-        : ended.type === 'close'
-          ? (ended.code ?? 1)
-          : 1;
+        : (ended.code ?? 1);
       const interrupted =
         state.timedOut || state.cancelled || state.limitReached;
       const exitError =
         cleanupError ??
         finalExit?.error ??
-        (!earlyStop && ended.type === 'error'
-          ? toErrorMessage(ended.error)
-          : !interrupted && finalExit?.signal
-            ? `rg terminated by signal ${finalExit.signal}`
-            : undefined);
+        (!interrupted && finalExit?.signal
+          ? `rg terminated by signal ${finalExit.signal}`
+          : undefined);
 
       // Native parity: exit 2 with rows already collected is a partial
       // success (e.g. a permission-denied subtree), not a hard failure.

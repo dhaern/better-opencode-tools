@@ -24,77 +24,46 @@ export interface ManagedSearch {
   completed: Promise<SearchExit>;
 }
 
-export type SearchDone =
-  | {
-      type: 'close';
-      code: number | null;
-      signal: NodeJS.Signals | null;
-      error?: string;
-    }
-  | { type: 'error'; error: unknown };
+export type SearchDone = { type: 'close' } & SearchExit;
 
-interface SearchProcess extends Omit<ManagedSearch, 'completed'> {
-  completed?: Promise<SearchExit>;
-  markExited?: () => void;
-  onKillDeadline?: () => void;
+// Windows has no private POSIX supervisor. Only a transport close confirms
+// completion, and stop is the ChildProcess capability (never a saved PID).
+export function adaptWindowsSearch(child: ChildProcess): ManagedSearch {
+  let exit: SearchExit | undefined;
+  let failure: string | undefined;
+  const onError = (error: unknown) => {
+    failure ??= toErrorMessage(error);
+  };
+  const completed = new Promise<SearchExit>((resolve) => {
+    child.on('error', onError);
+    child.once('close', (code, signal) => {
+      child.removeListener('error', onError);
+      exit = { code, signal, ...(failure ? { error: failure } : {}) };
+      resolve(exit);
+    });
+  });
+  return {
+    child,
+    completed,
+    stop: () => {
+      child.kill();
+    },
+    readExit: () => exit,
+  };
 }
 
-// The only boundary between raw injected children and supervised searches.
-// Raw children have no group ownership; signalling a saved PID is forbidden.
-export function adaptSpawnedSearch(
-  spawned: ChildProcess | ManagedSearch,
-  killGraceMs: number,
-): SearchProcess {
-  if ('child' in spawned) {
-    return {
-      ...spawned,
-      completed: spawned.completed.catch((error) => ({
-        ...(spawned.readExit() ?? { code: null, signal: null }),
-        error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
-      })),
-    };
-  }
-  let exited = false;
-  let killTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearKill = () => {
-    clearTimeout(killTimer);
-    killTimer = undefined;
+export function adaptSpawnedSearch(spawned: ManagedSearch): ManagedSearch {
+  return {
+    ...spawned,
+    completed: spawned.completed.catch((error) => ({
+      ...(spawned.readExit() ?? { code: null, signal: null }),
+      error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
+    })),
   };
-  const kill = (signal?: NodeJS.Signals) => {
-    try {
-      spawned.kill(signal);
-    } catch {
-      // Process may have exited.
-    }
-  };
-  const markExited = () => {
-    exited = true;
-    clearKill();
-    spawned.removeListener('exit', markExited);
-  };
-  spawned.once('exit', markExited);
-  const search: SearchProcess = {
-    child: spawned,
-    stop: () => {
-      if (exited) return;
-      kill(process.platform === 'win32' ? undefined : 'SIGTERM');
-      if (process.platform !== 'win32' && !killTimer) {
-        killTimer = setTimeout(() => {
-          if (!exited) kill('SIGKILL');
-          clearKill();
-          search.onKillDeadline?.();
-        }, killGraceMs);
-        killTimer.unref?.();
-      }
-    },
-    readExit: () => undefined,
-    markExited,
-  };
-  return search;
 }
 
 export function watchSearchCompletion(
-  search: SearchProcess,
+  search: ManagedSearch,
   stop: () => void,
 ): {
   done: Promise<SearchDone>;
@@ -112,32 +81,21 @@ export function watchSearchCompletion(
     settled = true;
     settle(result);
   };
-  const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-    search.markExited?.();
-    if (search.completed) return;
-    clear();
-    finish({ type: 'close', code, signal });
-  };
-  const onError = (error: unknown) => {
-    if (settled) return;
-    stop();
-    if (!search.completed) finish({ type: 'error', error });
+  const onError = () => {
+    if (!settled) stop();
   };
   const clearReaderErrors = () => {
     child.stdout?.removeListener('error', onError);
     child.stderr?.removeListener('error', onError);
   };
   const clear = () => {
-    child.removeListener('close', onClose);
     child.removeListener('error', onError);
     clearReaderErrors();
   };
-  search.onKillDeadline = clear;
-  child.once('close', onClose);
   child.on('error', onError);
   child.stdout?.on('error', onError);
   child.stderr?.on('error', onError);
-  void search.completed?.then((exit) => {
+  void search.completed.then((exit) => {
     clear();
     finish({ type: 'close', ...exit });
   });
