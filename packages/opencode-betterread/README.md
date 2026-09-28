@@ -19,8 +19,9 @@ For OpenCode 1.x, the plugin respects `tool_output.max_lines` and
 `tool_output.max_bytes` when configured. Missing or invalid values default to
 2,000 lines and 51,200 bytes. The budget includes the path/type framing,
 continuation footer, and truncation note; the existing 262,144-character and
-524,288-byte safety ceilings still apply. Direct `executeRead` calls retain
-their legacy budgets unless a budget is passed explicitly.
+524,288-byte safety ceilings still apply. Calling the exported `createReadTool`
+without per-instance read limits uses the same 2,000-line and 51,200-byte
+defaults.
 
 ### 📁 Safer directory reads
 
