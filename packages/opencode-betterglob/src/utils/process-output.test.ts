@@ -166,21 +166,21 @@ describe.skipIf(process.platform === 'win32')(
       expect(isSupervisorError(cleanup)).toBe(true);
     });
 
-    test.each([
-      'supervised',
-      'direct',
-    ] as const)('maps a signal-only %s exit to failure', async (mode) => {
-      const options = mode === 'direct' ? { killProcessGroup: false } : {};
-      await expect(
-        within(
-          runProcess([node, '-e', "process.kill(process.pid, 'SIGKILL')"], {
-            killGraceMs: 250,
-            postCloseDrainMs: 250,
-            ...options,
-          }),
-        ),
-      ).resolves.toMatchObject({ exitCode: 1, aborted: false });
-    });
+    test.each(['supervised', 'direct'] as const)(
+      'maps a signal-only %s exit to failure',
+      async (mode) => {
+        const options = mode === 'direct' ? { killProcessGroup: false } : {};
+        await expect(
+          within(
+            runProcess([node, '-e', "process.kill(process.pid, 'SIGKILL')"], {
+              killGraceMs: 250,
+              postCloseDrainMs: 250,
+              ...options,
+            }),
+          ),
+        ).resolves.toMatchObject({ exitCode: 1, aborted: false });
+      },
+    );
 
     test('rejects bare supervisor death even after a successful taskExit', async () => {
       const child = spawnSupervised([node, '-e', 'process.exit(0)']);
@@ -595,33 +595,33 @@ describe.skipIf(process.platform === 'win32')(
       }
     });
 
-    test.each([
-      'stdout',
-      'stderr',
-    ] as const)('observes an early %s stream error and cleans up', async (stream) => {
-      let child!: SupervisedProcess;
-      const pending = runProcess(
-        [
-          node,
-          '-e',
-          'process.stdout.write("READY\\n"); setInterval(() => {}, 1000);',
-        ],
-        { killGraceMs: 30 },
-        undefined,
-        (cmd, options) => (child = spawnSupervised(cmd, options)),
-      );
-      const error = new Error(`${stream} failed before collection`);
-      try {
-        await ready(child.proc);
-        child.proc[stream]?.emit('error', error);
-        // Error observers were installed synchronously at process creation.
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        await expect(within(pending)).rejects.toBe(error);
-        expect(child.proc.signalCode).toBe('SIGKILL');
-      } finally {
-        await child.stop(0);
-      }
-    });
+    test.each(['stdout', 'stderr'] as const)(
+      'observes an early %s stream error and cleans up',
+      async (stream) => {
+        let child!: SupervisedProcess;
+        const pending = runProcess(
+          [
+            node,
+            '-e',
+            'process.stdout.write("READY\\n"); setInterval(() => {}, 1000);',
+          ],
+          { killGraceMs: 30 },
+          undefined,
+          (cmd, options) => (child = spawnSupervised(cmd, options)),
+        );
+        const error = new Error(`${stream} failed before collection`);
+        try {
+          await ready(child.proc);
+          child.proc[stream]?.emit('error', error);
+          // Error observers were installed synchronously at process creation.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          await expect(within(pending)).rejects.toBe(error);
+          expect(child.proc.signalCode).toBe('SIGKILL');
+        } finally {
+          await child.stop(0);
+        }
+      },
+    );
 
     test('reports task spawn errors over IPC, without an unobserved rejection', async () => {
       let child!: SupervisedProcess;

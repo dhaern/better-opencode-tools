@@ -151,58 +151,58 @@ describe('tools/glob/runner spawn failures', () => {
     });
   });
 
-  test.each([
-    'windows',
-    'supervised',
-  ] as const)('%s adapter stops on stream error, retains its diagnostic, and destroys readers', async (adapter) => {
-    const fixture =
-      adapter === 'supervised' ? controlledSupervisor() : undefined;
-    const child = fixture?.child ?? fakeChild();
-    let stops = 0;
-    if (fixture) {
-      fixture.supervised.stop = () => {
-        stops++;
-        void fixture.task.promise.then(() => fixture.cleanup.resolve());
-        return fixture.cleanup.promise;
-      };
-    } else {
-      child.kill = () => {
-        stops++;
-        return true;
-      };
-    }
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () =>
-        fixture
-          ? adaptSupervisedSearch(fixture.supervised)
-          : adaptWindowsSearch(child),
-    });
-    const repoDir = temps.createRepo();
-    const pending = run(
-      await normalizeSearchInput({}, repoDir),
-      new AbortController().signal,
-    );
-    await nextTurn();
-    child.stdout?.emit('data', 'a.ts\0');
-    child.stderr?.emit('error', new Error('read failed'));
-    if (fixture) {
-      // The supervised adapter must close abandoned pipes at the error,
-      // not only after its post-exit drain deadline expires.
+  test.each(['windows', 'supervised'] as const)(
+    '%s adapter stops on stream error, retains its diagnostic, and destroys readers',
+    async (adapter) => {
+      const fixture =
+        adapter === 'supervised' ? controlledSupervisor() : undefined;
+      const child = fixture?.child ?? fakeChild();
+      let stops = 0;
+      if (fixture) {
+        fixture.supervised.stop = () => {
+          stops++;
+          void fixture.task.promise.then(() => fixture.cleanup.resolve());
+          return fixture.cleanup.promise;
+        };
+      } else {
+        child.kill = () => {
+          stops++;
+          return true;
+        };
+      }
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: () =>
+          fixture
+            ? adaptSupervisedSearch(fixture.supervised)
+            : adaptWindowsSearch(child),
+      });
+      const repoDir = temps.createRepo();
+      const pending = run(
+        await normalizeSearchInput({}, repoDir),
+        new AbortController().signal,
+      );
+      await nextTurn();
+      child.stdout?.emit('data', 'a.ts\0');
+      child.stderr?.emit('error', new Error('read failed'));
+      if (fixture) {
+        // The supervised adapter must close abandoned pipes at the error,
+        // not only after its post-exit drain deadline expires.
+        expect(child.stdout?.destroyed).toBe(true);
+        fixture.task.resolve({ code: 0, signal: null });
+      } else child.emit('close', 0, null);
+      const result = await within(pending);
+      expect(result?.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.incomplete).toBe(true);
+      expect(result?.error).toContain(
+        fixture ? 'Output reader failed: read failed' : 'read failed',
+      );
+      expect(stops).toBe(1);
       expect(child.stdout?.destroyed).toBe(true);
-      fixture.task.resolve({ code: 0, signal: null });
-    } else child.emit('close', 0, null);
-    const result = await within(pending);
-    expect(result?.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result?.exitCode).toBe(0);
-    expect(result?.incomplete).toBe(true);
-    expect(result?.error).toContain(
-      fixture ? 'Output reader failed: read failed' : 'read failed',
-    );
-    expect(stops).toBe(1);
-    expect(child.stdout?.destroyed).toBe(true);
-    expect(child.stderr?.destroyed).toBe(true);
-  });
+      expect(child.stderr?.destroyed).toBe(true);
+    },
+  );
 
   test('cancelled managed search without an exit status retains exit code 130', async () => {
     const child = fakeChild();
@@ -311,133 +311,132 @@ describe('tools/glob/runner spawn failures', () => {
         cleanup,
       })),
     ),
-  )('awaits final cleanup after $ending and preserves $cleanup semantics', async ({
-    ending,
-    cleanup,
-  }) => {
-    const child = fakeChild();
-    const completion =
-      Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
-    const taskExit = { code: cleanup === 'confirmed' ? 0 : 2, signal: null };
-    const controller = new AbortController();
-    const repoDir = temps.createRepo();
-    let stops = 0;
-    let finished = false;
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => ({
-        child,
-        stop: () => {
-          stops++;
-        },
-        readExit: () => taskExit,
-        completed: completion.promise,
-      }),
-      cleanupWaitMs: 2000,
-    });
-    const input = await normalizeSearchInput(
-      { limit: ending === 'limit' ? 1 : 10 },
-      repoDir,
-    );
-    const pending = run(input, controller.signal);
-    void pending.then(() => {
-      finished = true;
-    });
-    await nextTurn();
-    child.stdout?.emit('data', 'a.ts\0');
-    if (ending === 'limit') child.stdout?.emit('data', 'b.ts\0');
-    else
-      controller.abort(
-        ending === 'timeout'
-          ? new DOMException('deadline', 'TimeoutError')
-          : new Error('cancelled'),
+  )(
+    'awaits final cleanup after $ending and preserves $cleanup semantics',
+    async ({ ending, cleanup }) => {
+      const child = fakeChild();
+      const completion =
+        Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
+      const taskExit = { code: cleanup === 'confirmed' ? 0 : 2, signal: null };
+      const controller = new AbortController();
+      const repoDir = temps.createRepo();
+      let stops = 0;
+      let finished = false;
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: () => ({
+          child,
+          stop: () => {
+            stops++;
+          },
+          readExit: () => taskExit,
+          completed: completion.promise,
+        }),
+        cleanupWaitMs: 2000,
+      });
+      const input = await normalizeSearchInput(
+        { limit: ending === 'limit' ? 1 : 10 },
+        repoDir,
       );
-    await nextTurn();
-    expect(finished).toBe(false);
-    expect(stops).toBe(1);
-    // Diagnostics and complete paths received while cleanup is pending must
-    // be present in the FINAL result, not discarded by the early race winner.
-    child.stderr?.emit('data', 'late cleanup diagnostic');
-    if (ending !== 'limit') child.stdout?.emit('data', 'b.ts\0unfinished');
-    completion.resolve({
-      ...taskExit,
-      ...(cleanup === 'error'
-        ? { error: 'cleanup unconfirmed: watchdog' }
-        : {}),
-    });
-    const result = await within(pending, 2500);
-    expect(result).toBeDefined();
-    if (!result) return;
-    expect(result.files).toEqual(
-      ending === 'limit'
-        ? [`${repoDir}/src/a.ts`]
-        : [`${repoDir}/src/a.ts`, `${repoDir}/src/b.ts`],
-    );
-    expect(result.stderr).toBe('late cleanup diagnostic');
-    expect(result.exitCode).toBe(taskExit.code);
-    expect(result.truncated).toBe(ending === 'limit');
-    expect(result.cancelled).toBe(ending === 'abort');
-    expect(result.timedOut).toBe(ending === 'timeout');
-    expect(result.incomplete).toBe(
-      ending !== 'limit' || cleanup !== 'confirmed',
-    );
-    if (cleanup === 'confirmed') expect(result.error).toBeUndefined();
-    else expect(result.error).toContain('watchdog');
-    await nextTurn();
-    for (const stream of [child.stdout, child.stderr]) {
-      expect(stream?.destroyed).toBe(true);
-      expect(stream?.listenerCount('data')).toBe(0);
-      expect(stream?.listenerCount('error')).toBe(0);
-    }
-  });
+      const pending = run(input, controller.signal);
+      void pending.then(() => {
+        finished = true;
+      });
+      await nextTurn();
+      child.stdout?.emit('data', 'a.ts\0');
+      if (ending === 'limit') child.stdout?.emit('data', 'b.ts\0');
+      else
+        controller.abort(
+          ending === 'timeout'
+            ? new DOMException('deadline', 'TimeoutError')
+            : new Error('cancelled'),
+        );
+      await nextTurn();
+      expect(finished).toBe(false);
+      expect(stops).toBe(1);
+      // Diagnostics and complete paths received while cleanup is pending must
+      // be present in the FINAL result, not discarded by the early race winner.
+      child.stderr?.emit('data', 'late cleanup diagnostic');
+      if (ending !== 'limit') child.stdout?.emit('data', 'b.ts\0unfinished');
+      completion.resolve({
+        ...taskExit,
+        ...(cleanup === 'error'
+          ? { error: 'cleanup unconfirmed: watchdog' }
+          : {}),
+      });
+      const result = await within(pending, 2500);
+      expect(result).toBeDefined();
+      if (!result) return;
+      expect(result.files).toEqual(
+        ending === 'limit'
+          ? [`${repoDir}/src/a.ts`]
+          : [`${repoDir}/src/a.ts`, `${repoDir}/src/b.ts`],
+      );
+      expect(result.stderr).toBe('late cleanup diagnostic');
+      expect(result.exitCode).toBe(taskExit.code);
+      expect(result.truncated).toBe(ending === 'limit');
+      expect(result.cancelled).toBe(ending === 'abort');
+      expect(result.timedOut).toBe(ending === 'timeout');
+      expect(result.incomplete).toBe(
+        ending !== 'limit' || cleanup !== 'confirmed',
+      );
+      if (cleanup === 'confirmed') expect(result.error).toBeUndefined();
+      else expect(result.error).toContain('watchdog');
+      await nextTurn();
+      for (const stream of [child.stdout, child.stderr]) {
+        expect(stream?.destroyed).toBe(true);
+        expect(stream?.listenerCount('data')).toBe(0);
+        expect(stream?.listenerCount('error')).toBe(0);
+      }
+    },
+  );
 
-  test.each([
-    'limit',
-    'abort',
-    'timeout',
-  ] as const)('bounds stalled cleanup after %s and ignores late completion', async (ending) => {
-    const child = fakeChild();
-    const completion =
-      Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
-    const controller = new AbortController();
-    const repoDir = temps.createRepo();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () => ({
-        child,
-        stop: () => undefined,
-        readExit: () =>
-          ending === 'limit' ? undefined : { code: 0, signal: null },
-        completed: completion.promise,
-      }),
-      cleanupWaitMs: 0,
-    });
-    const input = await normalizeSearchInput({ limit: 1 }, repoDir);
-    const pending = run(input, controller.signal);
-    await nextTurn();
-    child.stdout?.emit('data', 'a.ts\0');
-    if (ending === 'limit') child.stdout?.emit('data', 'b.ts\0');
-    else
-      controller.abort(
-        ending === 'timeout'
-          ? new DOMException('deadline', 'TimeoutError')
-          : new Error('cancelled'),
-      );
-    const result = await within(pending, 2500);
-    expect(result).toBeDefined();
-    if (!result) return;
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.exitCode).toBe(0);
-    expect(result.incomplete).toBe(true);
-    expect(result.error).toContain('cleanup wait deadline exceeded');
-    expect(result.error).not.toContain('Supervisor');
-    expect(result.cancelled).toBe(ending === 'abort');
-    expect(result.timedOut).toBe(ending === 'timeout');
-    expect(child.listenerCount('error')).toBe(0);
-    completion.resolve({ code: 0, signal: null });
-    await nextTurn();
-    expect(result.error).toContain('cleanup wait deadline exceeded');
-  });
+  test.each(['limit', 'abort', 'timeout'] as const)(
+    'bounds stalled cleanup after %s and ignores late completion',
+    async (ending) => {
+      const child = fakeChild();
+      const completion =
+        Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
+      const controller = new AbortController();
+      const repoDir = temps.createRepo();
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: () => ({
+          child,
+          stop: () => undefined,
+          readExit: () =>
+            ending === 'limit' ? undefined : { code: 0, signal: null },
+          completed: completion.promise,
+        }),
+        cleanupWaitMs: 0,
+      });
+      const input = await normalizeSearchInput({ limit: 1 }, repoDir);
+      const pending = run(input, controller.signal);
+      await nextTurn();
+      child.stdout?.emit('data', 'a.ts\0');
+      if (ending === 'limit') child.stdout?.emit('data', 'b.ts\0');
+      else
+        controller.abort(
+          ending === 'timeout'
+            ? new DOMException('deadline', 'TimeoutError')
+            : new Error('cancelled'),
+        );
+      const result = await within(pending, 2500);
+      expect(result).toBeDefined();
+      if (!result) return;
+      expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result.exitCode).toBe(0);
+      expect(result.incomplete).toBe(true);
+      expect(result.error).toContain('cleanup wait deadline exceeded');
+      expect(result.error).not.toContain('Supervisor');
+      expect(result.cancelled).toBe(ending === 'abort');
+      expect(result.timedOut).toBe(ending === 'timeout');
+      expect(child.listenerCount('error')).toBe(0);
+      completion.resolve({ code: 0, signal: null });
+      await nextTurn();
+      expect(result.error).toContain('cleanup wait deadline exceeded');
+    },
+  );
 
   test('the search deadline cannot reclassify a limit stop during cleanup', async () => {
     const child = fakeChild();
@@ -515,38 +514,39 @@ describe('tools/glob/runner spawn failures', () => {
     }
   });
 
-  test.each([
-    0, 2,
-  ])('reports unconfirmed cleanup after task exit %i with inherited pipes', async (code) => {
-    const fixture = controlledSupervisor();
-    const repoDir = temps.createRepo();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: () =>
-        adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
-    });
-    const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
-    const pending = run(input, new AbortController().signal);
-    await nextTurn();
-    fixture.child.stdout?.emit('data', 'a.ts\0');
-    fixture.task.resolve({ code, signal: null });
-    queueMicrotask(() => {
-      fixture.child.emit('close', null, 'SIGKILL');
-      fixture.cleanup.reject(
-        new Error('cleanup unconfirmed: unexpected supervisor death'),
-      );
-    });
-    const result = await within(pending, 2500);
-    expect(result).toBeDefined();
-    if (!result) return;
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.exitCode).toBe(code);
-    expect(result.error).toContain('cleanup unconfirmed');
-    expect(result.incomplete).toBe(true);
-    expect(result.timedOut).toBe(false);
-    expect(fixture.releases()).toBe(0);
-    expect(fixture.stops).toEqual([]);
-  });
+  test.each([0, 2])(
+    'reports unconfirmed cleanup after task exit %i with inherited pipes',
+    async (code) => {
+      const fixture = controlledSupervisor();
+      const repoDir = temps.createRepo();
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: () =>
+          adaptSupervisedSearch(fixture.supervised, { postExitDrainMs: 0 }),
+      });
+      const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
+      const pending = run(input, new AbortController().signal);
+      await nextTurn();
+      fixture.child.stdout?.emit('data', 'a.ts\0');
+      fixture.task.resolve({ code, signal: null });
+      queueMicrotask(() => {
+        fixture.child.emit('close', null, 'SIGKILL');
+        fixture.cleanup.reject(
+          new Error('cleanup unconfirmed: unexpected supervisor death'),
+        );
+      });
+      const result = await within(pending, 2500);
+      expect(result).toBeDefined();
+      if (!result) return;
+      expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result.exitCode).toBe(code);
+      expect(result.error).toContain('cleanup unconfirmed');
+      expect(result.incomplete).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(fixture.releases()).toBe(0);
+      expect(fixture.stops).toEqual([]);
+    },
+  );
 
   test('transport close after release cannot replace the cleanup protocol', async () => {
     const fixture = controlledSupervisor();
@@ -581,128 +581,128 @@ describe('tools/glob/runner spawn failures', () => {
     expect(fixture.stops).toEqual([]);
   });
 
-  test.each([
-    'release',
-    'stop',
-  ] as const)('adapts common task status, output drain and idempotent %s', async (ending) => {
-    const child = fakeChild();
-    const task = Promise.withResolvers<SupervisedExit>();
-    const cleanup = Promise.withResolvers<void>();
-    let releases = 0;
-    let stops = 0;
-    const supervised: SupervisedProcess = {
-      proc: child,
-      exited: task.promise,
-      closed: cleanup.promise,
-      exitCode: null,
-      release: () => {
-        releases++;
-        return cleanup.promise;
-      },
-      stop: () => {
-        stops++;
-        return cleanup.promise;
-      },
-    };
-    const managed = adaptSupervisedSearch(supervised);
-    if (ending === 'stop') {
-      managed.stop();
-      managed.stop();
-    }
-    task.resolve({ code: 2, signal: null });
-    await nextTurn();
-    expect(managed.readExit()).toEqual({ code: 2, signal: null });
-    expect(releases).toBe(0);
-    child.stdout?.emit('end');
-    expect(releases).toBe(0); // stderr can still contain diagnostic output.
-    child.stderr?.emit('close');
-    child.stdout?.emit('close');
-    expect(releases).toBe(ending === 'release' ? 1 : 0);
-    expect(stops).toBe(ending === 'stop' ? 1 : 0);
-    cleanup.resolve();
-    await nextTurn();
-    managed.stop(); // An abandoned transport is never signalled again.
-    expect(stops).toBe(ending === 'stop' ? 1 : 0);
-    for (const stream of [child.stdout, child.stderr]) {
-      expect(stream?.listenerCount('end')).toBe(0);
-      expect(stream?.listenerCount('close')).toBe(0);
-      expect(stream?.listenerCount('error')).toBe(0);
-      stream?.destroy();
-    }
-  });
+  test.each(['release', 'stop'] as const)(
+    'adapts common task status, output drain and idempotent %s',
+    async (ending) => {
+      const child = fakeChild();
+      const task = Promise.withResolvers<SupervisedExit>();
+      const cleanup = Promise.withResolvers<void>();
+      let releases = 0;
+      let stops = 0;
+      const supervised: SupervisedProcess = {
+        proc: child,
+        exited: task.promise,
+        closed: cleanup.promise,
+        exitCode: null,
+        release: () => {
+          releases++;
+          return cleanup.promise;
+        },
+        stop: () => {
+          stops++;
+          return cleanup.promise;
+        },
+      };
+      const managed = adaptSupervisedSearch(supervised);
+      if (ending === 'stop') {
+        managed.stop();
+        managed.stop();
+      }
+      task.resolve({ code: 2, signal: null });
+      await nextTurn();
+      expect(managed.readExit()).toEqual({ code: 2, signal: null });
+      expect(releases).toBe(0);
+      child.stdout?.emit('end');
+      expect(releases).toBe(0); // stderr can still contain diagnostic output.
+      child.stderr?.emit('close');
+      child.stdout?.emit('close');
+      expect(releases).toBe(ending === 'release' ? 1 : 0);
+      expect(stops).toBe(ending === 'stop' ? 1 : 0);
+      cleanup.resolve();
+      await nextTurn();
+      managed.stop(); // An abandoned transport is never signalled again.
+      expect(stops).toBe(ending === 'stop' ? 1 : 0);
+      for (const stream of [child.stdout, child.stderr]) {
+        expect(stream?.listenerCount('end')).toBe(0);
+        expect(stream?.listenerCount('close')).toBe(0);
+        expect(stream?.listenerCount('error')).toBe(0);
+        stream?.destroy();
+      }
+    },
+  );
 
-  test.each([
-    'cancel',
-    'timeout',
-  ] as const)('does not spawn when %s arrives after CLI resolution wins the race', async (reason) => {
-    const controller = new AbortController();
-    const input = await normalizeSearchInput({}, temps.createRepo());
-    let resolvedPathRead = false;
-    let spawns = 0;
-    const run = createRipgrepRunner({
-      resolve: async () => {
-        // Let the resolver's then/catch chain settle first, but deliver
-        // abort before the winning race's await continuation resumes.
-        queueMicrotask(() => {
+  test.each(['cancel', 'timeout'] as const)(
+    'does not spawn when %s arrives after CLI resolution wins the race',
+    async (reason) => {
+      const controller = new AbortController();
+      const input = await normalizeSearchInput({}, temps.createRepo());
+      let resolvedPathRead = false;
+      let spawns = 0;
+      const run = createRipgrepRunner({
+        resolve: async () => {
+          // Let the resolver's then/catch chain settle first, but deliver
+          // abort before the winning race's await continuation resumes.
           queueMicrotask(() => {
             queueMicrotask(() => {
-              controller.abort(
-                reason === 'timeout'
-                  ? new DOMException('deadline', 'TimeoutError')
-                  : new Error('cancelled'),
-              );
+              queueMicrotask(() => {
+                controller.abort(
+                  reason === 'timeout'
+                    ? new DOMException('deadline', 'TimeoutError')
+                    : new Error('cancelled'),
+                );
+              });
             });
           });
-        });
-        return {
-          // Reading this proves the CLI, not cancellation, won the race.
-          get path() {
-            resolvedPathRead = true;
-            return 'injected-rg';
-          },
-          backend: 'rg',
-          source: 'system-rg',
-        };
-      },
-      spawn: () => {
-        spawns++;
-        throw new Error('must not spawn');
-      },
-    });
+          return {
+            // Reading this proves the CLI, not cancellation, won the race.
+            get path() {
+              resolvedPathRead = true;
+              return 'injected-rg';
+            },
+            backend: 'rg',
+            source: 'system-rg',
+          };
+        },
+        spawn: () => {
+          spawns++;
+          throw new Error('must not spawn');
+        },
+      });
 
-    const result = await run(input, controller.signal);
-    expect(resolvedPathRead).toBe(true);
-    expect(spawns).toBe(0);
-    expect(result.incomplete).toBe(true);
-    expect(result.cancelled).toBe(reason === 'cancel');
-    expect(result.timedOut).toBe(reason === 'timeout');
-    expect(result.exitCode).toBe(reason === 'cancel' ? 130 : 124);
-    expect(result.error).toBeUndefined();
-  });
+      const result = await run(input, controller.signal);
+      expect(resolvedPathRead).toBe(true);
+      expect(spawns).toBe(0);
+      expect(result.incomplete).toBe(true);
+      expect(result.cancelled).toBe(reason === 'cancel');
+      expect(result.timedOut).toBe(reason === 'timeout');
+      expect(result.exitCode).toBe(reason === 'cancel' ? 130 : 124);
+      expect(result.error).toBeUndefined();
+    },
+  );
 
-  test.each([
-    'cancel',
-    'timeout',
-  ] as const)('classifies a pre-aborted %s without resolving or spawning', async (reason) => {
-    const controller = new AbortController();
-    controller.abort(
-      reason === 'timeout'
-        ? new DOMException('deadline', 'TimeoutError')
-        : new Error('cancelled'),
-    );
-    const unexpected = () => {
-      throw new Error('must not resolve or spawn');
-    };
-    const run = createRipgrepRunner({
-      resolve: unexpected,
-      spawn: unexpected,
-    });
-    const input = await normalizeSearchInput({}, temps.createRepo());
-    const result = await run(input, controller.signal);
-    expect(result.exitCode).toBe(reason === 'cancel' ? 130 : 124);
-    expect(result.cancelled).toBe(reason === 'cancel');
-    expect(result.timedOut).toBe(reason === 'timeout');
-  });
+  test.each(['cancel', 'timeout'] as const)(
+    'classifies a pre-aborted %s without resolving or spawning',
+    async (reason) => {
+      const controller = new AbortController();
+      controller.abort(
+        reason === 'timeout'
+          ? new DOMException('deadline', 'TimeoutError')
+          : new Error('cancelled'),
+      );
+      const unexpected = () => {
+        throw new Error('must not resolve or spawn');
+      };
+      const run = createRipgrepRunner({
+        resolve: unexpected,
+        spawn: unexpected,
+      });
+      const input = await normalizeSearchInput({}, temps.createRepo());
+      const result = await run(input, controller.signal);
+      expect(result.exitCode).toBe(reason === 'cancel' ? 130 : 124);
+      expect(result.cancelled).toBe(reason === 'cancel');
+      expect(result.timedOut).toBe(reason === 'timeout');
+    },
+  );
 
   test.skipIf(process.platform === 'win32')(
     'keeps the supervisor alive after worker exit until its resistant descendant is killed',
@@ -1057,28 +1057,28 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result.error).toContain('spawn threw');
   });
 
-  test.each([
-    '',
-    'rg: permission denied',
-  ])('reports exit 2 without rows, with stderr %j', async (diagnostic) => {
-    const repoDir = temps.createRepo();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: (_cmd, _args, options) =>
-        spawnScript(
-          `process.stderr.write(${JSON.stringify(diagnostic)}); process.exit(2);`,
-          options,
-        ),
-    });
-    const result = await run(
-      await normalizeSearchInput({}, repoDir),
-      new AbortController().signal,
-    );
-    expect(result.files).toEqual([]);
-    expect(result.exitCode).toBe(2);
-    expect(result.incomplete).toBe(true);
-    expect(result.error).toBe(diagnostic || 'rg exited with code 2');
-  });
+  test.each(['', 'rg: permission denied'])(
+    'reports exit 2 without rows, with stderr %j',
+    async (diagnostic) => {
+      const repoDir = temps.createRepo();
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: (_cmd, _args, options) =>
+          spawnScript(
+            `process.stderr.write(${JSON.stringify(diagnostic)}); process.exit(2);`,
+            options,
+          ),
+      });
+      const result = await run(
+        await normalizeSearchInput({}, repoDir),
+        new AbortController().signal,
+      );
+      expect(result.files).toEqual([]);
+      expect(result.exitCode).toBe(2);
+      expect(result.incomplete).toBe(true);
+      expect(result.error).toBe(diagnostic || 'rg exited with code 2');
+    },
+  );
 
   test('caps stderr retention from a supervised search', async () => {
     const repoDir = temps.createRepo();
