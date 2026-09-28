@@ -45,6 +45,7 @@ interface MemoizedCli {
   cacheDir: string;
   stamp: string;
   rgStamp?: string;
+  createdAt: number;
 }
 let cliMemo = new WeakMap<GrepResolverDependencies, MemoizedCli>();
 export const AUTO_INSTALL_RETRY_AFTER_MS = 10 * 60_000;
@@ -74,6 +75,7 @@ function rememberCli(
         cli,
         stamp,
         rgStamp,
+        createdAt: Date.now(),
         pathEnv: process.env.PATH,
         cacheDir: getRipgrepCacheDir(),
       });
@@ -161,13 +163,15 @@ async function resolveAsync(
   const findExecutable = deps.findExecutable ?? defaultFindExecutable;
   const memo = cliMemo.get(deps);
   if (memo) {
-    // GNU stays memoized only while the rejected rg candidate is unchanged.
+    // GNU stays memoized only while the rejected rg candidate is unchanged
+    // and the rejection is younger than the negative-cache TTL.
     if (
       memo.pathEnv === process.env.PATH &&
       memo.cacheDir === getRipgrepCacheDir() &&
       statStamp(memo.cli.path) === memo.stamp &&
       (memo.cli.backend === 'rg' ||
-        memo.rgStamp === statStamp(findExecutable(RG_BINARY) ?? ''))
+        (memo.rgStamp === statStamp(findExecutable(RG_BINARY) ?? '') &&
+          Date.now() - memo.createdAt < AUTO_INSTALL_RETRY_AFTER_MS))
     ) {
       return memo.cli;
     }

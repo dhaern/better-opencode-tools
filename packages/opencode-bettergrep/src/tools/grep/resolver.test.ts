@@ -310,11 +310,13 @@ describe('tools/grep/resolver', () => {
       const install = mock(async () => {
         throw new Error('offline');
       });
+      const rgProbe = mock(() => false);
       const deps = {
         findExecutable: (name: string) =>
-          name === 'grep' ? '/usr/bin/grep' : null,
+          name === 'rg' ? process.execPath : '/usr/bin/grep',
         getInstalledRipgrepPath: () => null,
         isSupportedGrep: () => true,
+        isSupportedRipgrep: rgProbe,
         installLatestStableRipgrep: install,
       };
       for (let index = 0; index < 3; index++) {
@@ -323,9 +325,11 @@ describe('tools/grep/resolver', () => {
         );
       }
       expect(install).toHaveBeenCalledTimes(1);
+      expect(rgProbe).toHaveBeenCalledTimes(1);
       jest.advanceTimersByTime(600_001);
       expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
       expect(install).toHaveBeenCalledTimes(2);
+      expect(rgProbe).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }
