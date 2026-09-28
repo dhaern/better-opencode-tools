@@ -311,7 +311,7 @@ describe('tools/glob/runner spawn failures', () => {
 
   test.each(
     (['limit', 'abort', 'timeout'] as const).flatMap((ending) =>
-      (['reject', 'error', 'confirmed'] as const).map((cleanup) => ({
+      (['error', 'confirmed'] as const).map((cleanup) => ({
         ending,
         cleanup,
       })),
@@ -364,15 +364,12 @@ describe('tools/glob/runner spawn failures', () => {
     // be present in the FINAL result, not discarded by the early race winner.
     child.stderr?.emit('data', 'late cleanup diagnostic');
     if (ending !== 'limit') child.stdout?.emit('data', 'b.ts\0unfinished');
-    if (cleanup === 'reject')
-      completion.reject(new Error('cleanup watchdog rejected'));
-    else
-      completion.resolve({
-        ...taskExit,
-        ...(cleanup === 'error'
-          ? { error: 'cleanup unconfirmed: watchdog' }
-          : {}),
-      });
+    completion.resolve({
+      ...taskExit,
+      ...(cleanup === 'error'
+        ? { error: 'cleanup unconfirmed: watchdog' }
+        : {}),
+    });
     const result = await pending;
     expect(result.files).toEqual(
       ending === 'limit'

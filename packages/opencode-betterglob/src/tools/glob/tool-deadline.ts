@@ -1,11 +1,15 @@
 import { raceSignal } from '../../utils/abort';
-import { DEFAULT_CLEANUP_WAIT_MS } from '../../utils/process-output';
+import {
+  cleanupBudget,
+  DEFAULT_SEARCH_KILL_GRACE_MS,
+} from '../../utils/process-output';
 import { normalizeTimeoutMs } from './normalize';
 
 export const TIMEOUT_ERROR_MESSAGE =
   'glob search exceeded its automatic deadline.';
 // Allow the runner's TERM/watchdog/drain to settle before the outer deadline.
-export const RUNNER_ABORT_GRACE_MS = DEFAULT_CLEANUP_WAIT_MS + 250;
+export const RUNNER_ABORT_GRACE_MS =
+  cleanupBudget({ killGraceMs: DEFAULT_SEARCH_KILL_GRACE_MS }) + 250;
 
 /** Measures automatic work and aborts pending preparation when it expires. */
 export class AutoClock {

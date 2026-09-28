@@ -1,22 +1,16 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { AbortWaitError } from '../../utils/abort';
 import {
-  adaptSpawnedSearch,
   adaptSupervisedSearch,
   adaptWindowsSearch,
-  DEFAULT_CLEANUP_WAIT_MS,
+  cleanupBudget,
+  DEFAULT_SEARCH_KILL_GRACE_MS,
   type ManagedSearch,
-  POST_EXIT_DRAIN_MS,
   toErrorMessage,
   waitForManagedCleanup,
   watchSearchCompletion,
 } from '../../utils/process-output';
-import {
-  DEFAULT_CLEANUP_TIMEOUT_MS,
-  DEFAULT_KILL_GRACE_MS,
-  duration,
-  spawnSupervised,
-} from '../../utils/process-supervisor';
+import { spawnSupervised } from '../../utils/process-supervisor';
 import { resolveGlobCliWithAutoInstall } from './resolver';
 import { buildRgCommand } from './rg-args';
 import {
@@ -46,11 +40,10 @@ export interface RunnerDeps {
 const isTimeoutReason = (signal: AbortSignal) =>
   signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
 const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
-const SEARCH_KILL_GRACE_MS = 250;
 
 export function createDefaultRunnerDeps(): RunnerDeps {
   return {
-    killGraceMs: SEARCH_KILL_GRACE_MS,
+    killGraceMs: DEFAULT_SEARCH_KILL_GRACE_MS,
     resolve: resolveGlobCliWithAutoInstall,
     spawn: (cmd, args, options) =>
       process.platform === 'win32'
@@ -85,13 +78,12 @@ export function createRipgrepRunner(
         exitCode: state.cancelled ? 130 : 124,
       });
     const controller = new AbortController();
-    let search: ReturnType<typeof adaptSpawnedSearch> | undefined;
+    let search: ManagedSearch | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let removeAbort = () => undefined;
     let stopStdout: () => void = () => undefined;
     let stopStderr: () => void = () => undefined;
     let clearDone: () => void = () => undefined;
-    let clearReaderErrors: () => void = () => undefined;
     let stopping = false;
     let stopRequestedAt: number | undefined;
 
@@ -175,14 +167,12 @@ export function createRipgrepRunner(
         if (signal.aborted || controller.signal.aborted) {
           return interruptedResult();
         }
-        search = adaptSpawnedSearch(
-          deps.spawn(cmd, args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            cwd: input.searchPath,
-            killGraceMs: deps.killGraceMs,
-            postExitDrainMs: deps.postExitDrainMs,
-          }),
-        );
+        search = deps.spawn(cmd, args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          cwd: input.searchPath,
+          killGraceMs: deps.killGraceMs,
+          postExitDrainMs: deps.postExitDrainMs,
+        });
       } catch (error) {
         return emptyResult(input, currentCommand(), {
           exitCode: 1,
@@ -211,7 +201,6 @@ export function createRipgrepRunner(
 
       const completion = watchSearchCompletion(search, stop);
       clearDone = completion.clear;
-      clearReaderErrors = completion.clearReaderErrors;
 
       // Also handle a synchronous abort from an injected spawn implementation.
       if (controller.signal.aborted) stop();
@@ -222,19 +211,18 @@ export function createRipgrepRunner(
         limitResult,
       ]);
       const earlyStop = typeof ended === 'string';
-      let finalExit = !earlyStop && ended.type === 'close' ? ended : undefined;
+      let finalExit = !earlyStop ? ended : undefined;
       let cleanupError: string | undefined;
       if (earlyStop) {
         // Search has ended. Do not let its deadline reclassify a limit stop
         // while we wait for the independently bounded cleanup protocol.
         clearTimeout(timeout);
         removeAbort();
-        const defaultBudget =
-          (deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS) +
-          DEFAULT_CLEANUP_TIMEOUT_MS +
-          (deps.postExitDrainMs ?? POST_EXIT_DRAIN_MS);
-        const requestedBudget = deps.cleanupWaitMs ?? defaultBudget;
-        const budget = duration(requestedBudget, DEFAULT_CLEANUP_WAIT_MS);
+        const budget = cleanupBudget({
+          killGraceMs: deps.killGraceMs,
+          postCloseDrainMs: deps.postExitDrainMs,
+          cleanupWaitMs: deps.cleanupWaitMs,
+        });
         const remaining = Math.max(
           0,
           budget - (performance.now() - (stopRequestedAt ?? performance.now())),
@@ -243,25 +231,19 @@ export function createRipgrepRunner(
           search.completed,
           remaining,
         );
-        if (cleanup) finalExit = { type: 'close', ...cleanup };
+        if (cleanup) finalExit = cleanup;
         else {
           cleanupError =
             'Supervisor cleanup unconfirmed: cleanup wait deadline exceeded';
         }
-        clearDone();
       }
       const incomplete = state.timedOut || state.cancelled;
       const output = stdout.read();
       const err = stderr.read();
       const result = sliceLimit(input, output);
-      if (!earlyStop && ended.type === 'close') {
-        clearDone();
-      }
-
       const exitCode = earlyStop
         ? (finalExit?.code ??
           search.readExit()?.code ??
-          child.exitCode ??
           INTERRUPT_EXIT_CODES[ended])
         : (ended.code ?? 1);
       const interrupted =
@@ -276,10 +258,7 @@ export function createRipgrepRunner(
       // Native parity: exit 2 with rows already collected is a partial
       // success (e.g. a permission-denied subtree), not a hard failure.
       const partialByExitCode =
-        !earlyStop &&
-        ended.type === 'close' &&
-        ended.code === 2 &&
-        result.length > 0;
+        !earlyStop && ended.code === 2 && result.length > 0;
       const failed =
         Boolean(exitError) ||
         (!interrupted &&
@@ -314,7 +293,7 @@ export function createRipgrepRunner(
     } finally {
       clearTimeout(timeout);
       removeAbort();
-      clearReaderErrors();
+      clearDone();
       stopStdout();
       stopStderr();
       // Reader guards survive destruction; child listeners last until close/escalation.

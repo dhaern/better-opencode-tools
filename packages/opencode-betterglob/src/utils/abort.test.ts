@@ -1,10 +1,8 @@
 import { describe, expect, jest, spyOn, test } from 'bun:test';
-import type { ChildProcess } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { watchStderr } from '../tools/glob/runner-output';
 import { AbortWaitError, raceSignal } from './abort';
-import { capText, waitForProcessOutputWithAbortGrace } from './process-output';
+import { capText } from './process-output';
 
 describe('abort race', () => {
   test('returns a value without leaving a listener', async () => {
@@ -105,25 +103,5 @@ describe('abort race', () => {
       `${'x'.repeat(8192)}\n[stderr truncated at 8192 bytes]`,
     );
     stderr.stop();
-    for (const supervised of [false, true]) {
-      const child = new EventEmitter() as ChildProcess;
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      const pending = waitForProcessOutputWithAbortGrace({
-        proc: child,
-        exited: Promise.resolve(0),
-        closed: supervised ? Promise.resolve() : undefined,
-        release: supervised ? async () => undefined : undefined,
-        get exitCode() {
-          return 0;
-        },
-      });
-      child.stderr.emit('data', Buffer.alloc(8192, 120));
-      child.stderr.emit('data', Buffer.from('y'));
-      child.stderr.emit('end');
-      child.stdout.emit('end');
-      child.emit('close', 0, null);
-      expect((await pending).stderr).toBe(stderr.read());
-    }
   });
 });

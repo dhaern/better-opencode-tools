@@ -4,6 +4,7 @@ import {
   CleanupUnconfirmedError,
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
+  duration,
   isSupervisorError,
   type SupervisedProcess,
   SupervisorRuntimeError,
@@ -13,6 +14,7 @@ import { validatedStamps } from './stamped-probe';
 
 export const POST_EXIT_DRAIN_MS = 1_000;
 export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
+export const DEFAULT_SEARCH_KILL_GRACE_MS = 250;
 
 export function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -84,15 +86,6 @@ export function watchCappedStream(
   };
 }
 
-export interface ProcessHandle {
-  proc: ChildProcess;
-  exited: Promise<number>;
-  closed?: Promise<void>;
-  stop?: (graceMs?: number) => Promise<void>;
-  release?: () => Promise<void>;
-  readonly exitCode: number | null;
-}
-
 export interface ProcessOptions {
   stdout?: 'pipe' | 'inherit' | 'ignore';
   stderr?: 'pipe' | 'inherit' | 'ignore';
@@ -112,216 +105,89 @@ export interface ProcessResult {
   aborted: boolean;
 }
 
-export function waitForProcessOutputWithAbortGrace(
-  proc: ProcessHandle,
-  signal?: AbortSignal,
-  options: ProcessOptions = {},
-): Promise<ProcessResult> {
-  return new Promise((resolve, reject) => {
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let drainTimer: ReturnType<typeof setTimeout> | undefined;
-    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
-    let cleanupDeadline = Infinity;
-    let finished = false;
-    let processExited = false;
-    let processError: unknown;
-    let outputError: unknown;
-    let stdoutText = '';
-    let stderrError: unknown;
-    let stderrText = '';
-    let stdoutSettled = false;
-    let stderrSettled = false;
-    let aborted = signal?.aborted === true;
-    let exitCode = 1;
-    let cleanupSettled = !proc.closed;
-    let releaseRequested = false;
-    let terminating = false;
+export function cleanupBudget(
+  options: ProcessOptions & { cleanupWaitMs?: number } = {},
+): number {
+  return duration(
+    options.cleanupWaitMs ??
+      (options.killGraceMs ?? DEFAULT_KILL_GRACE_MS) +
+        (options.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS) +
+        (options.postCloseDrainMs ?? POST_EXIT_DRAIN_MS),
+    DEFAULT_CLEANUP_WAIT_MS,
+  );
+}
 
-    const cleanup = () => {
-      clearTimeout(cleanupTimer);
-      clearTimeout(drainTimer);
-      clearTimeout(killTimer);
-      signal?.removeEventListener('abort', onAbort);
-      proc.proc.removeListener('close', onClose);
-      proc.proc.removeListener('exit', onExit);
-      proc.proc.removeListener('error', onProcessError);
+function startOutputDrain(
+  child: ChildProcess,
+  timeoutMs: number,
+  onDeadline: () => void,
+): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    onDeadline();
+    destroyReader(child.stdout);
+    destroyReader(child.stderr);
+  }, timeoutMs);
+  timer.unref?.();
+  return timer;
+}
+
+function adaptDirectSearch(
+  child: ChildProcess,
+  options: ProcessOptions,
+): ManagedSearch {
+  let exit: SearchExit | undefined;
+  let failure: unknown;
+  let taskCode: number | null = null;
+  let stopped = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  const completed = Promise.withResolvers<SearchExit>();
+  const onError = (error: unknown) => {
+    failure ??= error;
+  };
+  const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (exit) return;
+    clearTimeout(killTimer);
+    clearTimeout(drainTimer);
+    child.removeListener('error', onError);
+    exit = {
+      code: code ?? taskCode ?? child.exitCode ?? 1,
+      signal,
+      failure,
+      error: failure === undefined ? undefined : toErrorMessage(failure),
     };
-
-    const cleanupFailed = (error: unknown) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      closeReaders();
-      reject(
-        processError instanceof SupervisorRuntimeError
-          ? processError
-          : isSupervisorError(error)
-            ? error
-            : new CleanupUnconfirmedError(
-                error instanceof Error ? error.message : String(error),
-              ),
-      );
-    };
-
-    const watchCleanup = (grace: number) => {
-      if (cleanupSettled) return;
-      const timeout = options.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
-      const wait = Math.max(0, Math.min(grace + timeout, 2_147_483_647));
-      const deadline = performance.now() + wait;
-      if (deadline >= cleanupDeadline) return;
-      cleanupDeadline = deadline;
-      clearTimeout(cleanupTimer);
-      cleanupTimer = setTimeout(
-        () =>
-          cleanupFailed(new CleanupUnconfirmedError('parent watchdog expired')),
-        wait,
-      );
-    };
-
-    const terminate = () => {
-      if (terminating) return;
-      terminating = true;
-      if (proc.stop) {
-        // The supervisor owns the grace timer even after task exit.
-        const grace = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-        watchCleanup(grace);
-        void proc.stop(grace).catch(cleanupFailed);
-        return;
-      }
-      try {
-        proc.proc.kill('SIGTERM');
-      } catch {
-        // Process may have exited.
-      }
-      if (!killTimer) {
-        killTimer = setTimeout(() => {
-          try {
-            proc.proc.kill('SIGKILL');
-          } catch {
-            // Process may have exited.
-          } finally {
-            // Descendants can keep pipes open after SIGKILL; close readers.
-            if (!finished) {
-              processExited = true;
-              exitCode = proc.exitCode ?? 1;
-              closeReaders();
-            }
-          }
-        }, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
-        killTimer.unref?.();
-      }
-    };
-
-    const finish = () => {
-      if (finished || !processExited || !stdoutSettled || !stderrSettled)
-        return;
-      if (!cleanupSettled) {
-        if (!terminating && !releaseRequested) {
-          releaseRequested = true;
-          watchCleanup(0);
-          void proc.release?.().catch(cleanupFailed);
-        }
-        return;
-      }
-      finished = true;
-      cleanup();
-
-      const failure = processError || outputError || stderrError;
-      if (failure)
-        reject(failure instanceof Error ? failure : new Error(String(failure)));
-      else
-        resolve({ exitCode, stdout: stdoutText, stderr: stderrText, aborted });
-    };
-
-    const closeReaders = () => {
-      destroyReader(proc.proc.stdout);
-      destroyReader(proc.proc.stderr);
-      finish();
-    };
-
-    const scheduleDrain = () => {
-      if ((stdoutSettled && stderrSettled) || drainTimer) return;
-      drainTimer = setTimeout(() => {
-        if (finished) return;
-        // Hold the group leader while inherited output can still be open.
-        if (proc.stop) terminate();
-        closeReaders();
-      }, options.postCloseDrainMs ?? POST_EXIT_DRAIN_MS);
-      drainTimer.unref?.();
-    };
-
-    const onExit = (code: number | null) => {
-      processExited = true;
-      exitCode = code ?? proc.exitCode ?? 1;
-      // A descendant may still retain a pipe after task exit.
-      scheduleDrain();
-      finish();
-    };
-
-    const onClose = (code: number | null) => {
-      processExited = true;
-      exitCode = code ?? proc.exitCode ?? 1;
-      clearTimeout(killTimer);
-      scheduleDrain();
-      finish();
-    };
-
-    const onProcessError = (error: unknown) => {
-      if (finished || processExited) return;
-      processError = error;
-      // Spawn error precedes close, which remains authoritative.
-      terminate();
-      if (proc.closed) {
-        processExited = true;
-        scheduleDrain();
-        finish();
-      }
-    };
-
-    const onAbort = () => {
-      aborted = true;
-      terminate();
-      finish();
-    };
-
-    // Close confirms direct children; exited observes task/supervisor status.
-    if (!proc.closed) {
-      proc.proc.once('close', onClose);
-      proc.proc.once('exit', onExit);
-    }
-    proc.proc.once('error', onProcessError);
-    void proc.exited.then(onExit, onProcessError);
-    void proc.closed?.then(() => {
-      cleanupSettled = true;
-      clearTimeout(cleanupTimer);
-      // Task exit and bounded output drain still govern settlement.
-      scheduleDrain();
-      finish();
-    }, cleanupFailed);
-
-    // Observe both output streams immediately.
-    watchCappedStream(proc.proc.stdout, 'stdout', (text, error) => {
-      stdoutSettled = true;
-      stdoutText = text;
-      if (error !== undefined) {
-        outputError = error;
-        terminate();
-      }
-      finish();
-    });
-    watchCappedStream(proc.proc.stderr, 'stderr', (text, error) => {
-      stderrSettled = true;
-      stderrText = text;
-      if (error !== undefined) {
-        stderrError = error;
-        terminate();
-      }
-      finish();
-    });
-
-    if (signal?.aborted) terminate();
-    else signal?.addEventListener('abort', onAbort, { once: true });
+    destroyReader(child.stdout);
+    destroyReader(child.stderr);
+    completed.resolve(exit);
+  };
+  child.on('error', onError);
+  child.once('close', finish);
+  child.once('exit', (code) => {
+    taskCode = code;
+    drainTimer = startOutputDrain(
+      child,
+      options.postCloseDrainMs ?? POST_EXIT_DRAIN_MS,
+      () => undefined,
+    );
   });
+  return {
+    child,
+    completed: completed.promise,
+    readExit: () => exit,
+    stop: () => {
+      if (stopped || exit) return;
+      stopped = true;
+      child.kill();
+      if (process.platform === 'win32') return;
+      killTimer = setTimeout(() => {
+        if (exit) return;
+        child.kill('SIGKILL');
+        destroyReader(child.stdout);
+        destroyReader(child.stderr);
+      }, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+      killTimer.unref?.();
+    },
+  };
 }
 
 export function runProcess(
@@ -346,27 +212,76 @@ export function runProcess(
       cwd: options.cwd,
       env: options.env as NodeJS.ProcessEnv,
     });
-  const exited = owner
-    ? owner.exited.then((result) => result.code)
-    : new Promise<number>((resolve, reject) => {
-        child.once('error', reject);
-        child.once('exit', (code) => resolve(code ?? 1));
-      });
-  void exited.catch(() => undefined);
-  return waitForProcessOutputWithAbortGrace(
-    {
-      proc: child,
-      exited,
-      closed: owner?.closed,
-      stop: owner?.stop,
-      release: owner?.release,
-      get exitCode() {
-        return owner ? owner.exitCode : child.exitCode;
-      },
-    },
-    signal,
-    options,
+  const search = owner
+    ? adaptSupervisedSearch(owner, {
+        postExitDrainMs: options.postCloseDrainMs,
+      })
+    : adaptDirectSearch(child, options);
+  return collectProcess(search, owner, options, signal);
+}
+
+async function collectProcess(
+  search: ManagedSearch,
+  owner: SupervisedProcess | undefined,
+  options: ProcessOptions,
+  signal?: AbortSignal,
+): Promise<ProcessResult> {
+  const child = search.child;
+  const text = { stdout: '', stderr: '' };
+  let failure: unknown;
+  let aborted = signal?.aborted === true;
+  let stopStarted: number | undefined;
+  const stopped = Promise.withResolvers<void>();
+  const stop = () => {
+    if (stopStarted !== undefined) return;
+    stopStarted = performance.now();
+    search.stop();
+    stopped.resolve();
+  };
+  const readers = (['stdout', 'stderr'] as const).map((label) =>
+    watchCappedStream(child[label], label, (value, error) => {
+      text[label] = value;
+      if (error !== undefined) failure ??= error;
+    }),
   );
+  const completion = watchSearchCompletion(search, stop);
+  const onAbort = () => {
+    aborted = true;
+    stop();
+  };
+  if (aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+  const taskExit = owner
+    ? owner.exited.then(
+        () => undefined,
+        () => undefined,
+      )
+    : new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  try {
+    const needsBudget = await Promise.race([
+      completion.done.then(() => false),
+      taskExit.then(() => true),
+      stopped.promise.then(() => true),
+    ]);
+    const budget = cleanupBudget(options);
+    const remaining = Math.max(
+      0,
+      budget - (performance.now() - (stopStarted ?? performance.now())),
+    );
+    const exit = needsBudget
+      ? await waitForManagedCleanup(completion.done, remaining)
+      : await completion.done;
+    if (!exit)
+      throw new CleanupUnconfirmedError('cleanup wait deadline exceeded');
+    const original = failure ?? exit.failure;
+    if (original !== undefined)
+      throw original instanceof Error ? original : new Error(String(original));
+    return { exitCode: exit.code ?? 1, ...text, aborted };
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    completion.clear();
+    for (const reader of readers) reader.stop();
+  }
 }
 
 export function isMissingExecutableError(error: unknown): boolean {
@@ -424,6 +339,7 @@ export interface SearchExit {
   code: number | null;
   signal: NodeJS.Signals | null;
   error?: string;
+  failure?: unknown;
 }
 
 export interface ManagedSearch {
@@ -437,7 +353,7 @@ export interface ManagedSearch {
   completed: Promise<SearchExit>;
 }
 
-export type SearchDone = { type: 'close' } & SearchExit;
+export type SearchDone = SearchExit;
 
 // Windows has no private POSIX supervisor. Only a transport close confirms
 // completion, and stop is the ChildProcess capability (never a saved PID).
@@ -465,56 +381,44 @@ export function adaptWindowsSearch(child: ChildProcess): ManagedSearch {
   };
 }
 
-export function adaptSpawnedSearch(spawned: ManagedSearch): ManagedSearch {
-  return {
-    ...spawned,
-    completed: spawned.completed.catch((error) => ({
-      ...(spawned.readExit() ?? { code: null, signal: null }),
-      error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
-    })),
-  };
-}
-
 export function watchSearchCompletion(
   search: ManagedSearch,
   stop: () => void,
 ): {
   done: Promise<SearchDone>;
   clear: () => void;
-  clearReaderErrors: () => void;
 } {
   const child = search.child;
-  let settle!: (result: SearchDone) => void;
-  const done = new Promise<SearchDone>((resolve) => {
-    settle = resolve;
-  });
-  let settled = false;
-  let failure: string | undefined;
-  const finish = (result: SearchDone) => {
-    if (settled) return;
-    settled = true;
-    settle(result);
-  };
+  let failure: unknown;
   const onError = (error: unknown) => {
-    failure ??= toErrorMessage(error);
-    if (!settled) stop();
-  };
-  const clearReaderErrors = () => {
-    child.stdout?.removeListener('error', onError);
-    child.stderr?.removeListener('error', onError);
+    failure ??= error;
+    stop();
   };
   const clear = () => {
     child.removeListener('error', onError);
-    clearReaderErrors();
+    child.stdout?.removeListener('error', onError);
+    child.stderr?.removeListener('error', onError);
   };
   child.on('error', onError);
   child.stdout?.on('error', onError);
   child.stderr?.on('error', onError);
-  void search.completed.then((exit) => {
-    clear();
-    finish({ type: 'close', ...exit, error: exit.error ?? failure });
-  });
-  return { done, clear, clearReaderErrors };
+  const done = search.completed
+    .then(
+      (exit) => ({
+        ...exit,
+        error:
+          exit.error ??
+          (failure === undefined ? undefined : toErrorMessage(failure)),
+        failure: exit.failure ?? failure,
+      }),
+      (error: unknown) => ({
+        ...(search.readExit() ?? { code: null, signal: null }),
+        error: toErrorMessage(error),
+        failure: error,
+      }),
+    )
+    .finally(clear);
+  return { done, clear };
 }
 
 export const DEFAULT_CLEANUP_WAIT_MS =
@@ -550,6 +454,7 @@ export function adaptSupervisedSearch(
   let finished = false;
   let cleanupError: string | undefined;
   let drainError: string | undefined;
+  let failure: unknown;
   let pendingOutputs = 0;
   let outputsDestroyed = false;
   let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -567,12 +472,17 @@ export function adaptSupervisedSearch(
     const error = [
       ...new Set([exit.error, drainError, cleanupError].filter(Boolean)),
     ].join('; ');
-    resolveCompleted({ ...exit, ...(error ? { error } : {}) });
+    resolveCompleted({
+      ...exit,
+      ...(error ? { error } : {}),
+      ...(failure === undefined ? {} : { failure }),
+    });
   };
   const stop = (graceMs?: number) => {
     if (stopped || closed) return;
     stopped = true;
     void supervised.stop(graceMs).catch((error) => {
+      failure ??= error;
       cleanupError = `Supervisor cleanup failed: ${toErrorMessage(error)}`;
       finish();
     });
@@ -581,6 +491,7 @@ export function adaptSupervisedSearch(
     if (!exit || pendingOutputs || stopped || released || closed) return;
     released = true;
     void supervised.release().catch((error) => {
+      failure ??= error;
       cleanupError = `Supervisor release failed: ${toErrorMessage(error)}`;
       stop();
     });
@@ -595,12 +506,10 @@ export function adaptSupervisedSearch(
   };
   const startDrain = () => {
     if (!pendingOutputs || drainTimer || finished) return;
-    drainTimer = setTimeout(() => {
+    drainTimer = startOutputDrain(child, drainMs, () => {
       drainError = 'Output drain deadline exceeded after task exit';
       stop(0);
-      destroyOutputs();
-    }, drainMs);
-    drainTimer.unref?.();
+    });
   };
   for (const output of [child.stdout, child.stderr]) {
     if (!output || output.readableEnded || output.closed) continue;
@@ -618,6 +527,7 @@ export function adaptSupervisedSearch(
       finish();
     };
     const onError = (error: unknown) => {
+      failure ??= error;
       drainError ??= `Output reader failed: ${toErrorMessage(error)}`;
       stop();
       destroyOutputs();
@@ -637,6 +547,7 @@ export function adaptSupervisedSearch(
     },
     (error) => {
       if (exit || finished) return;
+      failure ??= error;
       exit = { code: null, signal: null, error: toErrorMessage(error) };
       startDrain();
       release();
@@ -646,6 +557,7 @@ export function adaptSupervisedSearch(
   const onCleanup = (confirmed: boolean, error?: unknown) => {
     closed = true;
     if (!confirmed) {
+      failure ??= error;
       cleanupError =
         error === undefined
           ? 'Supervisor cleanup unconfirmed'
