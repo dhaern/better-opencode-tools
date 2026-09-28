@@ -751,7 +751,7 @@ describe('executeRead', () => {
   });
 
   test.each([
-    65_520, 65_526,
+    65_520, 65_526, 65_527,
   ])('reads JPEG SOF0 at byte %i near the 64 KiB probe boundary', async (position) => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'edge.jpg');
