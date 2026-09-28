@@ -1,32 +1,21 @@
 import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { createReadRenderMetadataHook } from './hooks/read-render-metadata';
-import {
-  createReadTool,
-  READ_DESCRIPTION,
-  READ_TOOL_ID,
-  readArgsSchema,
-} from './tools/read';
+import { READ_DESCRIPTION, READ_TOOL_ID } from './tools/read/constants';
+import { hostOutputLimits } from './tools/read/limits';
+import { createReadTool, readArgsSchema } from './tools/read/tool';
 
 const server: Plugin = async (ctx) => {
-  const read = createReadTool(ctx);
-  const hook = createReadRenderMetadataHook();
+  let outputLimits = hostOutputLimits();
 
   return {
+    config: async (config) => {
+      outputLimits = hostOutputLimits(config);
+    },
     tool: {
-      read,
+      read: createReadTool({ ...ctx, readLimits: () => outputLimits }),
     },
 
-    'tool.execute.after': async (input, output) => {
-      await hook['tool.execute.after'](
-        input as {
-          tool: string;
-          args?: { filePath?: unknown };
-        },
-        output as {
-          title?: unknown;
-        },
-      );
-    },
+    ...createReadRenderMetadataHook(),
   };
 };
 

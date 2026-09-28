@@ -23,8 +23,8 @@ export type TextReadResult = {
   totalLines?: number;
   truncatedByBytes: boolean;
   truncatedByLineLength: boolean;
+  firstTruncatedLine?: number;
   hasMore: boolean;
-  mtimeMs: number;
 };
 
 export type DirectoryReadResult = {
@@ -37,6 +37,7 @@ export type DirectoryReadResult = {
   totalEntriesKnown: boolean;
   hasMore: boolean;
   truncatedByBytes: boolean;
+  formattedOutput?: string;
 };
 
 export type ImageInfoResult = {
@@ -48,25 +49,15 @@ export type ImageInfoResult = {
   height?: number;
 };
 
-export type NotebookReadResult = {
+export type NotebookReadResult = Omit<TextReadResult, 'kind'> & {
   kind: 'notebook';
   mode: 'parsed' | 'raw-fallback';
-  path: string;
-  content: string;
-  startLine: number;
-  endLine: number;
-  totalLines?: number;
-  truncatedByBytes: boolean;
-  truncatedByLineLength: boolean;
-  hasMore: boolean;
-  mtimeMs: number;
 };
 
 export type PdfReadResult = {
   kind: 'pdf';
   path: string;
   pageCount?: number;
-  mtimeMs: number;
 };
 
 export type ReadInspection = {
@@ -77,20 +68,9 @@ export type ReadInspection = {
   exists: boolean;
   kind: ReadTargetKind;
   fileStat?: Stats;
-  similarPaths: string[];
 };
 
 export type ReadExecutionResult = {
-  kind:
-    | TextReadResult['kind']
-    | DirectoryReadResult['kind']
-    | ImageInfoResult['kind']
-    | NotebookReadResult['kind']
-    | PdfReadResult['kind']
-    | 'binary';
-  path: string;
-  resolvedPath: string;
-  realPath?: string;
   output: string;
   metadata: Record<string, unknown>;
   attachments?: Array<{
