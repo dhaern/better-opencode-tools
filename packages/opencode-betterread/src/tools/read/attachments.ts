@@ -72,15 +72,30 @@ export function isProbablyBinary(filePath: string, sample: Buffer): boolean {
 
 function jpegDimensions(buffer: Buffer): Dimensions {
   let offset = 2;
-  while (offset + 9 < buffer.length) {
-    if (buffer[offset] !== 0xff) break;
-    if (JPEG_SOF_MARKERS.has(buffer[offset + 1])) {
+  while (offset < buffer.length) {
+    if (buffer[offset++] !== 0xff) break;
+    while (buffer[offset] === 0xff) offset += 1;
+    if (offset >= buffer.length) break;
+    const marker = buffer[offset++];
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (
+      marker === 0x00 ||
+      marker === 0xd8 ||
+      marker === 0xd9 ||
+      marker === 0xda
+    )
+      break;
+    if (offset + 2 > buffer.length) break;
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) break;
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      if (length < 8) break;
       return {
-        height: buffer.readUInt16BE(offset + 5),
-        width: buffer.readUInt16BE(offset + 7),
+        height: buffer.readUInt16BE(offset + 3),
+        width: buffer.readUInt16BE(offset + 5),
       };
     }
-    offset += buffer.readUInt16BE(offset + 2) + 2;
+    offset += length;
   }
   return {};
 }

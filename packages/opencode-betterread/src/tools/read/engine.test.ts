@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readBoundedBytes } from './attachments';
+import { imageDimensions, readBoundedBytes } from './attachments';
 import {
   ATTACHMENT_DATA_URL_NOTE,
   FAST_PATH_MAX_BYTES,
@@ -718,6 +718,19 @@ describe('executeRead', () => {
         filename: 'tiny.png',
       },
     ]);
+  });
+
+  test('reads JPEG SOF0 dimensions after fill bytes and standalone markers', () => {
+    const jpeg = Buffer.from([
+      0xff, 0xd8, 0xff, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xff, 0x01,
+      0xff, 0xd0, 0xff, 0xd7, 0xff, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02,
+      0x00, 0x03, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+      0xff, 0xd9,
+    ]);
+    expect(imageDimensions('image/jpeg', jpeg)).toEqual({
+      width: 3,
+      height: 2,
+    });
   });
 
   test('names symlinked image attachments after the requested file', async () => {
