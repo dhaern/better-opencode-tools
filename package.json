@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Monorepo for standalone Better OpenCode tool plugins.",
-  "packageManager": "bun@1.3.13",
+  "packageManager": "bun@1.4.2",
   "workspaces": [
     "packages/*"
   ],

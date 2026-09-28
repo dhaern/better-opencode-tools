@@ -11,7 +11,8 @@ import {
 import { readFile as readFileAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { probeCommand, throwIfAborted } from './install-probe';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
+import { probeExecutable } from './cli-probe';
 
 const INSTALL_LOCK_WAIT_MS = 50;
 
@@ -51,16 +52,15 @@ export function getRipgrepBinaryName(): string {
   return process.platform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-export function getInstalledRipgrepPath(): string | null {
-  if (existsSync(getRipgrepInstallLockPath())) {
-    return null;
-  }
-
+function installedBinaryCandidate(): string | null {
+  if (existsSync(getRipgrepInstallLockPath())) return null;
   const binaryPath = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binaryPath)) {
-    return null;
-  }
+  return existsSync(binaryPath) ? binaryPath : null;
+}
 
+export function getInstalledRipgrepPath(): string | null {
+  const binaryPath = installedBinaryCandidate();
+  if (!binaryPath) return null;
   // Readers are non-destructive: cache cleanup only happens under the
   // install lock so a concurrent publisher cannot have its valid install
   // deleted between this check and a later deletion.
@@ -74,6 +74,24 @@ export function getInstalledRipgrepPath(): string | null {
 
 function computeSha256(filePath: string): string {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function assertBinarySha256(actual: string, expected: string): void {
+  if (actual !== expected) {
+    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
+  }
+}
+
+function assertValidationOutput(output: string, exitCode: number | null): void {
+  if (exitCode !== 0) {
+    throw new Error(
+      `Installed ripgrep binary failed validation with exit ${String(exitCode)}.`,
+    );
+  }
+
+  if (!output.toLowerCase().includes('ripgrep')) {
+    throw new Error('Installed binary did not identify itself as ripgrep.');
+  }
 }
 
 export async function computeSha256Async(
@@ -105,10 +123,7 @@ function validateCachedBinary(binaryPath: string): void {
   const metadata = readInstalledMetadata();
   const binarySha256 = computeSha256(binaryPath);
 
-  if (binarySha256 !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
+  assertBinarySha256(binarySha256, metadata.binarySha256);
   validateInstalledBinary(binaryPath);
 }
 
@@ -118,45 +133,28 @@ export function ensureExecutable(binaryPath: string): void {
   }
 }
 
-function validateInstalledBinary(
-  binaryPath: string,
-  signal?: AbortSignal,
-): void {
-  throwIfAborted(signal);
+function validateInstalledBinary(binaryPath: string): void {
   const result = spawnSync(binaryPath, ['--version'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-
-  throwIfAborted(signal);
-
-  if (result.status !== 0) {
-    throw new Error(
-      `Installed ripgrep binary failed validation with exit ${String(result.status)}.`,
-    );
-  }
-
-  const output =
-    `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`.toLowerCase();
-  if (!output.includes('ripgrep')) {
-    throw new Error('Installed binary did not identify itself as ripgrep.');
-  }
+  const output = `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`;
+  assertValidationOutput(output, result.status);
 }
 
 export async function validateInstalledBinaryAsync(
   binaryPath: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const result = await probeCommand([binaryPath, '--version'], signal);
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Installed ripgrep binary failed validation with exit ${String(result.exitCode)}.`,
-    );
-  }
-
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (!output.includes('ripgrep')) {
-    throw new Error('Installed binary did not identify itself as ripgrep.');
-  }
+  const result = await probeExecutable(
+    binaryPath,
+    ['--version'],
+    signal,
+    undefined,
+    undefined,
+    createAbortError,
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+  assertValidationOutput(output, result.exitCode);
 }
 
 export async function validateCachedBinaryAsync(
@@ -166,10 +164,7 @@ export async function validateCachedBinaryAsync(
   const metadata = await readInstalledMetadataAsync(signal);
   const binarySha256 = await computeSha256Async(binaryPath, signal);
 
-  if (binarySha256 !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
+  assertBinarySha256(binarySha256, metadata.binarySha256);
   await validateInstalledBinaryAsync(binaryPath, signal);
 }
 
@@ -177,14 +172,8 @@ export async function getInstalledRipgrepPathAsync(
   signal?: AbortSignal,
 ): Promise<string | null> {
   throwIfAborted(signal);
-  if (existsSync(getRipgrepInstallLockPath())) {
-    return null;
-  }
-
-  const binaryPath = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binaryPath)) {
-    return null;
-  }
+  const binaryPath = installedBinaryCandidate();
+  if (!binaryPath) return null;
 
   try {
     await validateCachedBinaryAsync(binaryPath, signal);
@@ -211,11 +200,7 @@ export async function acquireInstallLock(
       mkdirSync(lockPath);
       return () => rmSync(lockPath, { recursive: true, force: true });
     } catch (error) {
-      const code =
-        typeof error === 'object' && error && 'code' in error
-          ? String((error as { code?: unknown }).code)
-          : '';
-      if (code !== 'EEXIST') throw error;
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
 
       try {
         if (Date.now() - statSync(lockPath).mtimeMs > INSTALL_LOCK_STALE_MS) {

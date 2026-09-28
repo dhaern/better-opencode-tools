@@ -68,6 +68,8 @@ export interface NormalizedGrepInput {
   sortBy: GrepSortMode;
   sortOrder: GrepSortOrder;
   searchTargets?: string[];
+  /** Replay batches run ripgrep single-threaded so argv order is preserved. */
+  sequentialReplay?: boolean;
   searchTargetKinds: Array<'file' | 'directory'>;
   cwd: string;
   worktree: string;

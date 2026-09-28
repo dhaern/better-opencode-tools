@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { release } from 'node:os';
+import { createAbortError, throwIfAborted } from './abort';
 import { crossSpawn, waitForProcessOutputWithAbortGrace } from './compat';
 
 const SUPPORT_PROBE_TIMEOUT_MS = 5_000;
@@ -88,20 +89,12 @@ export function getZipExtractionSupportError(): string | undefined {
     : 'ripgrep auto-install requires unzip to extract zip archives.';
 }
 
-function createAbortError(): Error {
-  const error = new Error('ripgrep auto-install was aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
 export async function extractZip(
   archivePath: string,
   destDir: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
+  throwIfAborted(signal);
 
   let proc: ReturnType<typeof crossSpawn>;
 
@@ -165,9 +158,7 @@ export async function extractZip(
   }
   const exitCode = output;
 
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
+  throwIfAborted(signal);
 
   const stderr = await stderrPromise;
   if (exitCode !== 0) {

@@ -1,5 +1,9 @@
-import type { ChildProcess } from 'node:child_process';
-import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
+import { AbortWaitError, createSearchAbortError } from '../../utils/abort';
+import {
+  type CrossSpawnResult,
+  crossSpawn,
+  terminateProcess,
+} from '../../utils/compat';
 import {
   DEFAULT_GREP_MAX_CONCURRENCY,
   DEFAULT_GREP_RETRY_DELAY_MS,
@@ -8,20 +12,11 @@ import {
 } from './constants';
 import type { GrepBackend } from './types';
 
+export { AbortWaitError, createSearchAbortError } from '../../utils/abort';
+
 export class RetryableRipgrepError extends Error {}
-export class AbortWaitError extends Error {}
 
-export type GrepProcess = CrossSpawnResult & {
-  proc: ChildProcess;
-};
-
-const KILL_GRACE_MS = 500;
-const KILL_TIMERS = new WeakMap<GrepProcess, ReturnType<typeof setTimeout>>();
-
-function hasExited(proc: GrepProcess): boolean {
-  return proc.proc.exitCode !== null || proc.proc.signalCode !== null;
-}
-
+export type GrepProcess = CrossSpawnResult;
 const ABORT_KIND = new WeakMap<AbortSignal, 'timeout' | 'cancel'>();
 
 export function setAbortKind(
@@ -72,9 +67,7 @@ class Semaphore {
 
   private acquire(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) {
-      return Promise.reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
+      return Promise.reject(createSearchAbortError());
     }
 
     if (this.active < this.limit) {
@@ -93,9 +86,7 @@ class Semaphore {
         if (index >= 0) {
           this.queue.splice(index, 1);
         }
-        reject(
-          new AbortWaitError('Search was cancelled before execution started.'),
-        );
+        reject(createSearchAbortError());
       };
 
       this.queue.push(entry);
@@ -121,13 +112,7 @@ export function sleepWithSignal(
   }
 
   if (signal.aborted) {
-    return Promise.reject(
-      new AbortWaitError(
-        isTimedOutAbort(signal)
-          ? 'Search retry backoff timed out.'
-          : 'Search retry backoff was aborted.',
-      ),
-    );
+    return Promise.reject(retryAbortError(signal));
   }
 
   return new Promise((resolve, reject) => {
@@ -137,17 +122,19 @@ export function sleepWithSignal(
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(
-        new AbortWaitError(
-          isTimedOutAbort(signal)
-            ? 'Search retry backoff timed out.'
-            : 'Search retry backoff was aborted.',
-        ),
-      );
+      reject(retryAbortError(signal));
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function retryAbortError(signal: AbortSignal): AbortWaitError {
+  return new AbortWaitError(
+    isTimedOutAbort(signal)
+      ? 'Search retry backoff timed out.'
+      : 'Search retry backoff was aborted.',
+  );
 }
 
 export function remainingTimeout(deadline: number): number {
@@ -165,13 +152,11 @@ export function createGlobalAbortState(
   timeout: () => void;
 } {
   const controller = new AbortController();
-  let kind: 'timeout' | 'cancel' | undefined;
 
   const settle = (next: 'timeout' | 'cancel', reason: string) => {
     if (!setAbortKind(controller.signal, next)) {
       return false;
     }
-    kind = next;
     controller.abort(reason);
     return true;
   };
@@ -201,8 +186,8 @@ export function createGlobalAbortState(
       clearTimeout(timeoutId);
       signal.removeEventListener('abort', onAbort);
     },
-    getTimedOut: () => kind === 'timeout',
-    getCancelled: () => kind === 'cancel',
+    getTimedOut: () => getAbortKind(controller.signal) === 'timeout',
+    getCancelled: () => getAbortKind(controller.signal) === 'cancel',
     timeout: () => {
       if (settle('timeout', 'grep-timeout')) {
         clearTimeout(timeoutId);
@@ -212,52 +197,8 @@ export function createGlobalAbortState(
   };
 }
 
-function clearKillTimer(proc: GrepProcess): void {
-  const timer = KILL_TIMERS.get(proc);
-  if (!timer) {
-    return;
-  }
-
-  clearTimeout(timer);
-  KILL_TIMERS.delete(proc);
-}
-
-function sendSignal(proc: GrepProcess, signal?: NodeJS.Signals | number): void {
-  try {
-    proc.kill(signal);
-  } catch {
-    // Process may have already exited.
-  }
-}
-
 export function killProcess(proc: GrepProcess): void {
-  if (hasExited(proc)) {
-    clearKillTimer(proc);
-    return;
-  }
-
-  if (process.platform === 'win32') {
-    sendSignal(proc);
-    return;
-  }
-
-  sendSignal(proc, 'SIGTERM');
-  if (hasExited(proc) || KILL_TIMERS.has(proc)) {
-    return;
-  }
-
-  const timer = setTimeout(() => {
-    KILL_TIMERS.delete(proc);
-    if (!hasExited(proc)) {
-      sendSignal(proc, 'SIGKILL');
-    }
-  }, KILL_GRACE_MS);
-  timer.unref?.();
-  KILL_TIMERS.set(proc, timer);
-  void proc.exited.then(
-    () => clearKillTimer(proc),
-    () => clearKillTimer(proc),
-  );
+  void terminateProcess(proc);
 }
 
 export function spawnRipgrep(
@@ -265,12 +206,7 @@ export function spawnRipgrep(
   cwd: string,
   env?: NodeJS.ProcessEnv,
 ): GrepProcess {
-  return crossSpawn(command, {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env,
-  }) as GrepProcess;
+  return crossSpawn(command, { cwd, stdout: 'pipe', stderr: 'pipe', env });
 }
 
 export interface TerminationState {
@@ -284,10 +220,15 @@ export function attachTerminationHandlers(
   signal: AbortSignal,
 ): {
   state: TerminationState;
+  stopped: Promise<void>;
   cleanup: () => void;
 } {
   const state: TerminationState = { timedOut: false, cancelled: false };
   let settled = false;
+  let notifyStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => {
+    notifyStopped = resolve;
+  });
   const settle = (kind: 'timeout' | 'cancel') => {
     if (settled) {
       return;
@@ -296,6 +237,7 @@ export function attachTerminationHandlers(
     state.timedOut = kind === 'timeout';
     state.cancelled = kind === 'cancel';
     killProcess(proc);
+    notifyStopped();
   };
   const timeoutId = setTimeout(() => {
     settle('timeout');
@@ -313,6 +255,7 @@ export function attachTerminationHandlers(
 
   return {
     state,
+    stopped,
     cleanup: () => {
       clearTimeout(timeoutId);
       signal.removeEventListener('abort', abortHandler);
@@ -350,15 +293,11 @@ export function isTransientFailure(error: unknown): boolean {
   const message = toErrorMessage(error);
   const text = `${code} ${message}`.toLowerCase();
 
-  return [
-    'eagain',
-    'emfile',
-    'enfile',
-    'etxtbsy',
-    'resource temporarily unavailable',
-    'too many open files',
-    'text file busy',
-  ].some((needle) => text.includes(needle));
+  return (
+    ['eagain', 'emfile', 'enfile', 'etxtbsy'].some((needle) =>
+      text.includes(needle),
+    ) || isTransientStderr(text)
+  );
 }
 
 export function isTransientStderr(stderr: string): boolean {
@@ -373,7 +312,7 @@ export function isTransientStderr(stderr: string): boolean {
 export async function waitForExitAndStderr(
   proc: GrepProcess,
   stderrPromise: Promise<string>,
-): Promise<{ exitCode: number; stderr: string; error?: string }> {
+): Promise<{ exitCode: number; stderr: string; error?: unknown }> {
   const [exitResult, stderr] = await Promise.allSettled([
     proc.exited,
     stderrPromise,
@@ -383,9 +322,7 @@ export async function waitForExitAndStderr(
   return {
     exitCode,
     stderr: stderr.status === 'fulfilled' ? stderr.value : '',
-    ...(exitResult.status === 'rejected'
-      ? { error: toErrorMessage(exitResult.reason) }
-      : {}),
+    ...(exitResult.status === 'rejected' ? { error: exitResult.reason } : {}),
   };
 }
 

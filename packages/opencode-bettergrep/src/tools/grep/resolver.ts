@@ -1,17 +1,24 @@
-import { log } from '../../utils';
+import { statSync } from 'node:fs';
 import {
   defaultFindExecutable,
   defaultIsSupportedGrep,
   defaultIsSupportedRipgrep,
+  isSupportedVersion,
   probeExecutable,
+  raceWithAbort,
 } from './cli-probe';
 import { GREP_BINARY, RG_BINARY } from './constants';
 import { installLatestStableRipgrep } from './downloader';
 import {
   getInstalledRipgrepPath,
   getInstalledRipgrepPathAsync,
+  getRipgrepCacheDir,
 } from './rg-cache';
-import { AbortWaitError } from './runtime';
+import {
+  AbortWaitError,
+  createSearchAbortError,
+  getAbortKind,
+} from './runtime';
 import type { GrepBackend } from './types';
 
 export interface ResolvedGrepCli {
@@ -29,7 +36,56 @@ interface GrepResolverDependencies {
   installLatestStableRipgrep?: (signal?: AbortSignal) => Promise<string>;
   isSupportedRipgrep?: (path: string) => boolean;
   isSupportedGrep?: (path: string) => boolean;
-  logger?: (message: string, data?: unknown) => void;
+}
+
+const DEFAULT_DEPS: GrepResolverDependencies = {};
+interface MemoizedCli {
+  cli: ResolvedGrepCli;
+  pathEnv: string | undefined;
+  cacheDir: string;
+  stamp: string;
+  rgStamp?: string;
+  createdAt: number;
+}
+let cliMemo = new WeakMap<GrepResolverDependencies, MemoizedCli>();
+export const AUTO_INSTALL_RETRY_AFTER_MS = 10 * 60_000;
+export const AUTO_INSTALL_TIMEOUT_MS = 30_000;
+let failedInstallRetryAfter = new WeakMap<GrepResolverDependencies, number>();
+
+function statStamp(binaryPath: string): string | undefined {
+  try {
+    const stat = statSync(binaryPath);
+    return stat.isFile()
+      ? `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.mode}`
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberCli(
+  deps: GrepResolverDependencies,
+  cli: ResolvedGrepCli,
+  rgStamp?: string,
+): ResolvedGrepCli {
+  if (cli.source !== 'missing-rg') {
+    const stamp = statStamp(cli.path);
+    if (stamp)
+      cliMemo.set(deps, {
+        cli,
+        stamp,
+        rgStamp,
+        createdAt: Date.now(),
+        pathEnv: process.env.PATH,
+        cacheDir: getRipgrepCacheDir(),
+      });
+  }
+  return cli;
+}
+
+export function invalidateGrepCliResolverCache(): void {
+  cliMemo = new WeakMap();
+  failedInstallRetryAfter = new WeakMap();
 }
 
 interface SharedAutoInstallState {
@@ -42,12 +98,7 @@ interface SharedAutoInstallState {
 let autoInstallState: SharedAutoInstallState | null = null;
 
 function buildUnavailableBackendMessage(error?: unknown): string {
-  const suffix =
-    error instanceof Error && error.message.length > 0
-      ? ` Auto-install error: ${error.message}`
-      : '';
-
-  return `Neither ripgrep (rg) nor GNU grep is available. Checked system rg, managed rg, ripgrep auto-install, and system grep.${suffix}`;
+  return `Neither ripgrep (rg) nor GNU grep is available. Checked system rg, managed rg, ripgrep auto-install, and system grep.${error instanceof Error && error.message ? ` Auto-install error: ${error.message}` : ''}`;
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -55,6 +106,17 @@ function isAbortLikeError(error: unknown): boolean {
     error instanceof AbortWaitError ||
     (error instanceof Error && error.name === 'AbortError')
   );
+}
+
+function resolvedCli(
+  path: string,
+  source: ResolvedGrepCli['source'],
+): ResolvedGrepCli {
+  return {
+    path,
+    source,
+    backend: source === 'system-gnu-grep' ? 'grep' : 'rg',
+  };
 }
 
 function resolveSync(deps: GrepResolverDependencies = {}): ResolvedGrepCli {
@@ -67,63 +129,60 @@ function resolveSync(deps: GrepResolverDependencies = {}): ResolvedGrepCli {
 
   const systemRg = findExecutable(RG_BINARY);
   if (systemRg && isSupportedRipgrep(systemRg)) {
-    return {
-      path: systemRg,
-      backend: 'rg',
-      source: 'system-rg',
-    };
+    return resolvedCli(systemRg, 'system-rg');
   }
 
   const managedRg = getManagedRipgrepPath();
-  if (managedRg) {
-    return {
-      path: managedRg,
-      backend: 'rg',
-      source: 'managed-rg',
-    };
-  }
+  if (managedRg) return resolvedCli(managedRg, 'managed-rg');
 
   const systemGrep = findExecutable(GREP_BINARY);
   if (systemGrep && isSupportedGrep(systemGrep)) {
-    return {
-      path: systemGrep,
-      backend: 'grep',
-      source: 'system-gnu-grep',
-    };
+    return resolvedCli(systemGrep, 'system-gnu-grep');
   }
 
-  return {
-    path: RG_BINARY,
-    backend: 'rg',
-    source: 'missing-rg',
-  };
+  return resolvedCli(RG_BINARY, 'missing-rg');
+}
+
+async function supportsBinary(
+  binary: string,
+  kind: 'rg' | 'grep',
+  override: ((path: string) => boolean) | undefined,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (override) return override(binary) === true;
+  const probe = await probeExecutable(binary, ['--version'], signal);
+  if (probe.timedOut || probe.exitCode !== 0) return false;
+  return isSupportedVersion(kind, probe.stdout, probe.stderr);
 }
 
 async function resolveAsync(
-  deps: GrepResolverDependencies = {},
+  deps: GrepResolverDependencies = DEFAULT_DEPS,
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
+  if (signal?.aborted) throw createSearchAbortError();
   const findExecutable = deps.findExecutable ?? defaultFindExecutable;
+  const memo = cliMemo.get(deps);
+  if (memo) {
+    // GNU stays memoized only while the rejected rg candidate is unchanged
+    // and the rejection is younger than the negative-cache TTL.
+    if (
+      memo.pathEnv === process.env.PATH &&
+      memo.cacheDir === getRipgrepCacheDir() &&
+      statStamp(memo.cli.path) === memo.stamp &&
+      (memo.cli.backend === 'rg' ||
+        (memo.rgStamp === statStamp(findExecutable(RG_BINARY) ?? '') &&
+          Date.now() - memo.createdAt < AUTO_INSTALL_RETRY_AFTER_MS))
+    ) {
+      return memo.cli;
+    }
+    cliMemo.delete(deps);
+  }
   const systemRg = findExecutable(RG_BINARY);
-
-  if (systemRg) {
-    const supported = deps.isSupportedRipgrep
-      ? deps.isSupportedRipgrep(systemRg)
-      : undefined;
-    if (supported === true) {
-      return { path: systemRg, backend: 'rg', source: 'system-rg' };
-    }
-
-    if (supported === undefined) {
-      const probe = await probeExecutable(systemRg, ['--version'], signal);
-      if (
-        !probe.timedOut &&
-        probe.exitCode === 0 &&
-        /ripgrep/i.test(`${probe.stdout}\n${probe.stderr}`)
-      ) {
-        return { path: systemRg, backend: 'rg', source: 'system-rg' };
-      }
-    }
+  if (
+    systemRg &&
+    (await supportsBinary(systemRg, 'rg', deps.isSupportedRipgrep, signal))
+  ) {
+    return rememberCli(deps, resolvedCli(systemRg, 'system-rg'));
   }
 
   const managedRg = deps.getInstalledRipgrepPathAsync
@@ -132,39 +191,22 @@ async function resolveAsync(
       ? deps.getInstalledRipgrepPath()
       : await getInstalledRipgrepPathAsync(signal);
   if (managedRg) {
-    return { path: managedRg, backend: 'rg', source: 'managed-rg' };
+    return rememberCli(deps, resolvedCli(managedRg, 'managed-rg'));
   }
 
   const systemGrep = findExecutable(GREP_BINARY);
-  if (systemGrep) {
-    const supported = deps.isSupportedGrep
-      ? deps.isSupportedGrep(systemGrep)
-      : undefined;
-    if (supported === true) {
-      return {
-        path: systemGrep,
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      };
-    }
-
-    if (supported === undefined) {
-      const probe = await probeExecutable(systemGrep, ['--version'], signal);
-      if (
-        !probe.timedOut &&
-        probe.exitCode === 0 &&
-        /^.*GNU grep/m.test(probe.stdout.split(/\r?\n/, 1)[0] ?? '')
-      ) {
-        return {
-          path: systemGrep,
-          backend: 'grep',
-          source: 'system-gnu-grep',
-        };
-      }
-    }
+  if (
+    systemGrep &&
+    (await supportsBinary(systemGrep, 'grep', deps.isSupportedGrep, signal))
+  ) {
+    return rememberCli(
+      deps,
+      resolvedCli(systemGrep, 'system-gnu-grep'),
+      statStamp(systemRg ?? ''),
+    );
   }
 
-  return { path: RG_BINARY, backend: 'rg', source: 'missing-rg' };
+  return resolvedCli(RG_BINARY, 'missing-rg');
 }
 
 export function resolveGrepCli(
@@ -173,76 +215,30 @@ export function resolveGrepCli(
   return resolveSync(deps);
 }
 
-function isResolvedRipgrep(cli: ResolvedGrepCli): boolean {
-  return cli.backend === 'rg' && cli.source !== 'missing-rg';
-}
-
-function raceWithAbort<T>(
-  promise: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-
-  if (signal.aborted) {
-    return Promise.reject(
-      new AbortWaitError('Search was cancelled before execution started.'),
-    );
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      reject(
-        new AbortWaitError('Search was cancelled before execution started.'),
-      );
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
-function releaseAutoInstallWaiter(state: SharedAutoInstallState): void {
-  state.waiters = Math.max(0, state.waiters - 1);
-
-  if (state.waiters > 0 || state.settled) {
-    return;
-  }
-
-  if (autoInstallState === state) {
-    autoInstallState = null;
-  }
-
-  state.controller.abort();
-}
-
 function waitForSharedAutoInstall(
   state: SharedAutoInstallState,
+  deps: GrepResolverDependencies,
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
   state.waiters += 1;
 
-  let released = false;
-  const release = () => {
-    if (released) {
-      return;
+  return raceWithAbort(state.promise, signal).finally(() => {
+    state.waiters = Math.max(0, state.waiters - 1);
+    if (state.waiters > 0 || state.settled) return;
+    if (
+      signal?.aborted &&
+      (getAbortKind(signal) === 'timeout' ||
+        (signal.reason as { name?: unknown } | undefined)?.name ===
+          'TimeoutError')
+    ) {
+      failedInstallRetryAfter.set(
+        deps,
+        Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
+      );
     }
-
-    released = true;
-    releaseAutoInstallWaiter(state);
-  };
-
-  return raceWithAbort(state.promise, signal).finally(release);
+    if (autoInstallState === state) autoInstallState = null;
+    state.controller.abort();
+  });
 }
 
 function createSharedAutoInstall(
@@ -251,48 +247,60 @@ function createSharedAutoInstall(
   const installManagedRipgrep =
     deps.installLatestStableRipgrep ?? installLatestStableRipgrep;
   const controller = new AbortController();
+  const installController = new AbortController();
+  const abortInstall = () => installController.abort();
+  controller.signal.addEventListener('abort', abortInstall, { once: true });
+  let installTimer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const state: SharedAutoInstallState = {
     controller,
     waiters: 0,
     settled: false,
-    promise: Promise.resolve({
-      path: RG_BINARY,
-      backend: 'rg' as const,
-      source: 'missing-rg' as const,
-    }),
+    promise: Promise.resolve(resolvedCli(RG_BINARY, 'missing-rg')),
   };
 
   state.promise = (async () => {
     try {
-      const installedPath = await installManagedRipgrep(controller.signal);
-      return {
-        path: installedPath,
-        backend: 'rg' as const,
-        source: 'managed-rg' as const,
-      };
+      const deadline = new Promise<never>((_, reject) => {
+        installTimer = setTimeout(() => {
+          timedOut = true;
+          installController.abort();
+          reject(
+            new Error(
+              `ripgrep auto-install timed out after ${AUTO_INSTALL_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, AUTO_INSTALL_TIMEOUT_MS);
+      });
+      const installedPath = await raceWithAbort(
+        Promise.race([
+          installManagedRipgrep(installController.signal),
+          deadline,
+        ]),
+        controller.signal,
+      );
+      // A previously memoized GNU fallback must not shadow a new managed rg.
+      cliMemo.delete(deps);
+      failedInstallRetryAfter.delete(deps);
+      return rememberCli(deps, resolvedCli(installedPath, 'managed-rg'));
     } catch (error) {
-      if (isAbortLikeError(error) || controller.signal.aborted) {
-        throw new AbortWaitError(
-          'Search was cancelled before execution started.',
-        );
+      if (controller.signal.aborted || (!timedOut && isAbortLikeError(error))) {
+        throw createSearchAbortError();
       }
 
       const fallback = await resolveAsync(deps, controller.signal);
-      const logger = deps.logger ?? log;
-
       if (fallback.backend === 'grep') {
-        logger('ripgrep auto-install failed; falling back to GNU grep.', {
-          error: error instanceof Error ? error.message : String(error),
-          grep_path: fallback.path,
-        });
+        failedInstallRetryAfter.set(
+          deps,
+          Date.now() + AUTO_INSTALL_RETRY_AFTER_MS,
+        );
         return fallback;
       }
 
-      logger('ripgrep auto-install failed and no GNU grep fallback exists.', {
-        error: error instanceof Error ? error.message : String(error),
-      });
       throw new Error(buildUnavailableBackendMessage(error));
     } finally {
+      clearTimeout(installTimer);
+      controller.signal.removeEventListener('abort', abortInstall);
       state.settled = true;
 
       if (autoInstallState === state) {
@@ -308,27 +316,27 @@ function createSharedAutoInstall(
 }
 
 export async function resolveGrepCliWithAutoInstall(
-  deps: GrepResolverDependencies = {},
+  deps: GrepResolverDependencies = DEFAULT_DEPS,
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
-  if (signal?.aborted) {
-    throw new AbortWaitError('Search was cancelled before execution started.');
-  }
-
   const current = await resolveAsync(deps, signal);
-  if (isResolvedRipgrep(current)) {
+  if (current.backend === 'rg' && current.source !== 'missing-rg') {
+    failedInstallRetryAfter.delete(deps);
     return current;
   }
 
-  if (autoInstallState) {
-    return waitForSharedAutoInstall(autoInstallState, signal);
+  if (
+    current.backend === 'grep' &&
+    (failedInstallRetryAfter.get(deps) ?? 0) > Date.now()
+  ) {
+    return current;
   }
 
-  autoInstallState = createSharedAutoInstall(deps);
-
-  return waitForSharedAutoInstall(autoInstallState, signal);
+  autoInstallState ??= createSharedAutoInstall(deps);
+  return waitForSharedAutoInstall(autoInstallState, deps, signal);
 }
 
 export function resetGrepCliResolverForTests(): void {
   autoInstallState = null;
+  invalidateGrepCliResolverCache();
 }

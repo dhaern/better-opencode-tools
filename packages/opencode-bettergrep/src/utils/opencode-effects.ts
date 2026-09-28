@@ -15,13 +15,3 @@ export async function runOpenCodeSideEffect<T>(
 ): Promise<void> {
   await resolveOpenCodeEffect(value);
 }
-
-export async function runBestEffortOpenCodeSideEffect<T>(
-  value: MaybeEffect<T>,
-): Promise<void> {
-  try {
-    await runOpenCodeSideEffect(value);
-  } catch {
-    // Best-effort side effects must not affect tool execution.
-  }
-}

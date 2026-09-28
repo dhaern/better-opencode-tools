@@ -14,7 +14,7 @@ describe('utils/compat', () => {
         .readableFlowing,
     ).toBe(null);
     const output = await child.stdout();
-    await child.exited;
+    expect(await child.exited).toBe(0);
 
     expect(output.length).toBeLessThan(1_000_050);
     expect(output).toContain('[process output truncated]');
