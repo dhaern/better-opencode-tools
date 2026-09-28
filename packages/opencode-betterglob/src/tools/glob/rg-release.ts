@@ -1,8 +1,10 @@
-import { access, writeFile } from 'node:fs/promises';
-import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
-import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
+import { access } from 'node:fs/promises';
+import { createAbortError, throwIfAborted } from '../../utils/abort';
+import {
+  isMissingExecutableError,
+  runProcess,
+} from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
-import { createAbortError, throwIfAborted } from './install-io';
 
 interface RipgrepReleaseAsset {
   name?: string;
@@ -26,18 +28,19 @@ function parseSha256Digest(value: string | undefined): string {
     ?.trim()
     .replace(/^sha256:/i, '')
     .toLowerCase();
-
-  if (!normalized || !/^[0-9a-f]{64}$/.test(normalized)) {
+  if (!normalized || !/^[0-9a-f]{64}$/.test(normalized))
     throw new Error(
       'Latest ripgrep release metadata is missing a valid SHA-256 digest.',
     );
-  }
-
   return normalized;
 }
 
-async function detectLinuxLibcAsync(
+export async function detectLinuxLibcAsync(
   signal?: AbortSignal,
+  deps: {
+    exists?: (file: string) => Promise<boolean>;
+    run?: typeof runProcess;
+  } = {},
 ): Promise<'gnu' | 'musl'> {
   const loaders = [
     '/lib/ld-musl-x86_64.so.1',
@@ -48,29 +51,20 @@ async function detectLinuxLibcAsync(
 
   throwIfAborted(signal);
   for (const file of loaders) {
-    const exists = await access(file).then(
-      () => true,
-      () => false,
-    );
+    const exists = await (deps.exists?.(file) ??
+      access(file).then(
+        () => true,
+        () => false,
+      ));
     throwIfAborted(signal);
     if (exists) return 'musl';
   }
 
   try {
-    const proc = crossSpawn(['ldd', '--version'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      detached: process.platform !== 'win32',
-      killProcessGroup: process.platform !== 'win32',
-    });
-    const stdoutPromise = proc.stdout();
-    const stderrPromise = proc.stderr();
-    const result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
-      signal,
-      stdoutPromise,
+    const result = await (deps.run ?? runProcess)(
+      ['ldd', '--version'],
       { killGraceMs: 250, postCloseDrainMs: 250 },
+      signal,
     );
     if (signal?.aborted) throw createAbortError();
     if (result.aborted) return 'gnu';
@@ -85,61 +79,37 @@ async function detectLinuxLibcAsync(
   }
 }
 
-function getPlatformCandidates(): PlatformCandidate[] {
-  if (process.platform === 'darwin') {
-    if (process.arch === 'arm64') {
-      return [{ target: 'aarch64-apple-darwin', extension: 'tar.gz' }];
-    }
-    if (process.arch === 'x64') {
-      return [{ target: 'x86_64-apple-darwin', extension: 'tar.gz' }];
-    }
-    return [];
-  }
-
-  if (process.platform === 'win32') {
-    if (process.arch === 'arm64') {
-      return [{ target: 'aarch64-pc-windows-msvc', extension: 'zip' }];
-    }
-    if (process.arch === 'x64') {
-      return [{ target: 'x86_64-pc-windows-msvc', extension: 'zip' }];
-    }
-    return [];
-  }
-
-  return [];
+export function platformCandidates(
+  platform: NodeJS.Platform,
+  arch: string,
+  libc: 'gnu' | 'musl' = 'gnu',
+): PlatformCandidate[] {
+  const cpu =
+    arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : undefined;
+  if (!cpu) return [];
+  if (platform === 'darwin')
+    return [{ target: `${cpu}-apple-darwin`, extension: 'tar.gz' }];
+  if (platform === 'win32')
+    return [{ target: `${cpu}-pc-windows-msvc`, extension: 'zip' }];
+  if (platform !== 'linux') return [];
+  const alternate = libc === 'gnu' ? 'musl' : 'gnu';
+  return [libc, alternate].map((variant) => ({
+    target: `${cpu}-unknown-linux-${variant}`,
+    extension: 'tar.gz' as const,
+  }));
 }
 
-async function getPlatformCandidatesAsync(
+export async function getPlatformCandidatesAsync(
   signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  detectLibc = detectLinuxLibcAsync,
 ): Promise<PlatformCandidate[]> {
-  if (process.platform !== 'linux') return getPlatformCandidates();
-
-  const libc = await detectLinuxLibcAsync(signal);
-  if (process.arch === 'arm64') {
-    return libc === 'musl'
-      ? [
-          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-        ]
-      : [
-          { target: 'aarch64-unknown-linux-gnu', extension: 'tar.gz' },
-          { target: 'aarch64-unknown-linux-musl', extension: 'tar.gz' },
-        ];
-  }
-
-  if (process.arch === 'x64') {
-    return libc === 'musl'
-      ? [
-          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-        ]
-      : [
-          { target: 'x86_64-unknown-linux-gnu', extension: 'tar.gz' },
-          { target: 'x86_64-unknown-linux-musl', extension: 'tar.gz' },
-        ];
-  }
-
-  return [];
+  const libc =
+    platform === 'linux' && (arch === 'arm64' || arch === 'x64')
+      ? await detectLibc(signal)
+      : 'gnu';
+  return platformCandidates(platform, arch, libc);
 }
 
 export async function fetchLatestRelease(
@@ -157,11 +127,10 @@ export async function fetchLatestRelease(
     },
   );
 
-  if (!response.ok) {
+  if (!response.ok)
     throw new Error(
       `Failed to resolve latest ripgrep release: HTTP ${response.status} ${response.statusText}`,
     );
-  }
 
   const payload = (await response.json()) as RipgrepReleaseResponse;
   if (!payload.tag_name || !Array.isArray(payload.assets)) {
@@ -202,22 +171,4 @@ export async function selectReleaseAssetAsync(
   throw new Error(
     `No ripgrep asset is available for ${process.platform}-${process.arch}.`,
   );
-}
-
-export async function downloadArchive(
-  url: string,
-  file: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const response = await fetch(url, { redirect: 'follow', signal });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download ripgrep archive: HTTP ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const buffer = await response.arrayBuffer();
-  throwIfAborted(signal);
-  await writeFile(file, Buffer.from(buffer), { signal });
 }

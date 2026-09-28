@@ -87,7 +87,7 @@ Add the plugin to your OpenCode config:
 
 ```bash
 bun run typecheck
-bun test
+BETTERGLOB_TEST_RG="$(command -v rg)" bun test
 bun run build
 bun run check
 ```
@@ -99,6 +99,11 @@ bun run check
   timeout.
 - First run may need network access if the plugin has to download a managed
   `ripgrep` binary.
+- On Bun hosts, a working `node` executable must also be available on `PATH`
+  for POSIX process supervision; Bun's child-process IPC is not used.
+- The first managed ripgrep installation loads `proper-lockfile`, which patches
+  some Node process/fs functions and signal listeners. Importing the plugin
+  without installing ripgrep does not load it or apply those patches.
 - Symlink traversal is disabled. `follow_symlinks: true` is rejected because
   an `rg --follow` process cannot be confined to the destinations authorized
   before it starts.

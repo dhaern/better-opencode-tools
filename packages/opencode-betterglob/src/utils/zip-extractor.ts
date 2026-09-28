@@ -1,27 +1,17 @@
 import { release } from 'node:os';
-import {
-  crossSpawn,
-  isMissingExecutableError,
-  waitForProcessOutputWithAbortGrace,
-} from './compat';
+import { createAbortError } from './abort';
+import { isMissingExecutableError, runProcess } from './process-output';
 import { isSupervisorError } from './process-supervisor';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
 
 function getWindowsBuildNumber(): number | null {
   if (process.platform !== 'win32') return null;
-
-  const parts = release().split('.');
-  if (parts.length >= 3) {
-    const build = Number.parseInt(parts[2] ?? '', 10);
-    if (!Number.isNaN(build)) return build;
-  }
-  return null;
+  const build = Number.parseInt(release().split('.')[2] ?? '', 10);
+  return Number.isNaN(build) ? null : build;
 }
 
-function escapePowerShellPath(file: string): string {
-  return file.replace(/'/g, "''");
-}
+const escapePowerShellPath = (file: string) => file.replace(/'/g, "''");
 
 type WindowsZipExtractor = 'tar' | 'pwsh' | 'powershell';
 
@@ -33,20 +23,15 @@ export async function commandSucceeds(
   if (signal?.aborted) throw createAbortError();
 
   try {
-    const proc = crossSpawn([command, ...args], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      detached: process.platform !== 'win32',
-      killProcessGroup: process.platform !== 'win32',
-    });
-    const stdoutPromise = proc.stdout();
-    const stderrPromise = proc.stderr();
-    const result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
+    const result = await runProcess(
+      [command, ...args],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        killGraceMs: 250,
+        postCloseDrainMs: 250,
+      },
       signal,
-      stdoutPromise,
-      { killGraceMs: 250, postCloseDrainMs: 250 },
     );
     if (signal?.aborted) throw createAbortError();
     return !result.aborted && result.exitCode === 0;
@@ -75,44 +60,23 @@ export async function getZipExtractionSupportErrorAsync(
   if (signal?.aborted) throw createAbortError();
   if (process.platform === 'win32') {
     const extractor = await getWindowsZipExtractorAsync(signal);
-
-    if (
-      extractor === 'tar' &&
-      !(await commandSucceeds('tar', ['--version'], signal))
-    ) {
-      return 'ripgrep auto-install requires tar on this Windows host to extract zip archives.';
-    }
-
-    if (
-      extractor === 'pwsh' &&
-      !(await commandSucceeds('pwsh', ['-v'], signal))
-    ) {
-      return 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.';
-    }
-
-    if (
-      extractor === 'powershell' &&
-      !(await commandSucceeds(
-        'powershell',
-        ['-Command', '$PSVersionTable.PSVersion.ToString()'],
-        signal,
-      ))
-    ) {
-      return 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
-    }
-
-    return undefined;
+    const args =
+      extractor === 'tar'
+        ? ['--version']
+        : extractor === 'pwsh'
+          ? ['-v']
+          : ['-Command', '$PSVersionTable.PSVersion.ToString()'];
+    if (await commandSucceeds(extractor, args, signal)) return undefined;
+    return extractor === 'tar'
+      ? 'ripgrep auto-install requires tar on this Windows host to extract zip archives.'
+      : extractor === 'pwsh'
+        ? 'ripgrep auto-install requires pwsh to extract zip archives on this Windows host.'
+        : 'ripgrep auto-install requires PowerShell to extract zip archives on this Windows host.';
   }
 
   return (await commandSucceeds('unzip', ['-v'], signal))
     ? undefined
     : 'ripgrep auto-install requires unzip to extract zip archives.';
-}
-
-function createAbortError(): Error {
-  const error = new Error('ripgrep auto-install was aborted');
-  error.name = 'AbortError';
-  return error;
 }
 
 export async function extractZip(
@@ -124,45 +88,26 @@ export async function extractZip(
 
   const proc = await (async () => {
     if (process.platform !== 'win32') {
-      return crossSpawn(['unzip', '-o', archivePath, '-d', destDir], {
-        stdout: 'ignore',
-        stderr: 'pipe',
-        detached: true,
-        killProcessGroup: true,
-      });
+      return ['unzip', '-o', archivePath, '-d', destDir];
     }
 
     const extractor = await getWindowsZipExtractorAsync(signal);
     if (signal?.aborted) throw createAbortError();
     if (extractor === 'tar') {
-      return crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
-        stdout: 'ignore',
-        stderr: 'pipe',
-        detached: false,
-        killProcessGroup: false,
-      });
+      return ['tar', '-xf', archivePath, '-C', destDir];
     }
 
     const command = extractor === 'pwsh' ? 'pwsh' : 'powershell';
-    return crossSpawn(
-      [
-        command,
-        '-Command',
-        `Expand-Archive -Path '${escapePowerShellPath(archivePath)}' -DestinationPath '${escapePowerShellPath(destDir)}' -Force`,
-      ],
-      {
-        stdout: 'ignore',
-        stderr: 'pipe',
-        detached: false,
-        killProcessGroup: false,
-      },
-    );
+    return [
+      command,
+      '-Command',
+      `Expand-Archive -Path '${escapePowerShellPath(archivePath)}' -DestinationPath '${escapePowerShellPath(destDir)}' -Force`,
+    ];
   })();
 
-  const stderrPromise = proc.stderr();
-  const { exitCode, stderr } = await waitForProcessOutputWithAbortGrace(
+  const { exitCode, stderr } = await runProcess(
     proc,
-    stderrPromise,
+    { stdout: 'ignore', stderr: 'pipe' },
     signal,
   );
 

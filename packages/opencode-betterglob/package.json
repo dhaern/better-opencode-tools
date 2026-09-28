@@ -24,7 +24,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9.0"
   },
   "license": "MIT",
   "keywords": [
@@ -40,26 +40,26 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external effect && tsc --emitDeclarationOnly",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin --external effect --external which --external proper-lockfile && tsc --emitDeclarationOnly",
     "prepack": "bun run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "bun test",
     "lint": "biome lint src package.json README.md biome.json tsconfig.json",
-    "check": "biome check src package.json README.md biome.json tsconfig.json",
-    "format": "biome format src package.json README.md biome.json tsconfig.json --write"
+    "check": "biome check src package.json README.md biome.json tsconfig.json tsconfig.test.json",
+    "format": "biome format src package.json README.md biome.json tsconfig.json tsconfig.test.json --write"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.32",
     "effect": "4.0.0-beta.83",
     "proper-lockfile": "^4.1.2",
-    "which": "^6.0.1"
+    "which": "^7.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.11",
-    "@types/node": "^24.6.1",
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^24.19.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/which": "^3.0.4",
-    "bun-types": "1.3.12",
-    "typescript": "^5.9.3"
+    "bun-types": "1.4.2",
+    "typescript": "7.0.2"
   }
 }

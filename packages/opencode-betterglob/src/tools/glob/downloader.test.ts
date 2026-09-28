@@ -6,7 +6,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs, {
   chmodSync,
   existsSync,
+  lutimesSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -19,15 +21,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { lock } from 'proper-lockfile';
+import { runProcess } from '../../utils/process-output';
+import { extractZip } from '../../utils/zip-extractor';
 import {
-  getInstalledRipgrepPath,
+  extractTarGz,
+  findBinaryRecursive,
+  installLatestStableRipgrep,
+} from './downloader';
+import {
+  computeSha256Async,
+  fileStamp,
+  InvalidCachedBinaryError,
+  readRegularFile,
+} from './install-io';
+import {
   getInstalledRipgrepPathAsync,
   getRipgrepBinaryName,
   getRipgrepCacheDir,
-  installLatestStableRipgrep,
+} from './rg-cache';
+import {
   type PublishStagedBinaryInput,
   publishStagedBinary,
-} from './downloader';
+} from './rg-publication';
 
 function sha256(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -58,6 +73,28 @@ describe('tools/glob/downloader', () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('distinguishes an unrelated too-many-files error from the entry limit', async () => {
+    const unavailable = (async () => {
+      throw new Error('EMFILE: too many open files, scandir');
+    }) as typeof import('node:fs/promises').readdir;
+    await expect(
+      findBinaryRecursive('/not-read', 'rg', undefined, undefined, unavailable),
+    ).resolves.toBeNull();
+
+    const oneEntry = (async () => [
+      { name: 'anything', isFile: () => true },
+    ]) as unknown as typeof import('node:fs/promises').readdir;
+    await expect(
+      findBinaryRecursive(
+        '/not-read',
+        'rg',
+        undefined,
+        { entries: 100_000 },
+        oneEntry,
+      ),
+    ).rejects.toThrow('ripgrep archive contains too many extracted entries.');
   });
 
   // Explicit skip instead of a mid-test throw: Windows runs report these
@@ -105,6 +142,28 @@ describe('tools/glob/downloader', () => {
       binarySha256: sha256(staged),
     };
   }
+
+  test('reads and hashes bounded regular files, rejecting excess and non-files', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'betterglob-io-'));
+    tempDirs.push(dir);
+    const file = path.join(dir, 'fixture');
+    writeFileSync(file, 'hello');
+    expect((await readRegularFile(file, 5)).toString()).toBe('hello');
+    expect(await computeSha256Async(file)).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    );
+    expect(await fileStamp(file)).toMatch(/^[^:]+:[^:]+:5:/);
+    await expect(readRegularFile(file, 4)).rejects.toThrow(
+      'Cached file exceeds its size limit:',
+    );
+    await expect(computeSha256Async(file, undefined, 4)).rejects.toBeInstanceOf(
+      InvalidCachedBinaryError,
+    );
+    if (process.platform !== 'win32')
+      await expect(readRegularFile(dir, 1024)).rejects.toThrow(
+        'Cached file is not a regular file:',
+      );
+  });
 
   (process.platform === 'linux' && ['arm64', 'x64'].includes(process.arch)
     ? test
@@ -163,6 +222,29 @@ describe('tools/glob/downloader', () => {
         expect(await installLatestStableRipgrep()).toBe(binary);
         expect(fetchMock).toHaveBeenCalledTimes(2);
         for (const call of syncCalls) expect(call).not.toHaveBeenCalled();
+        const invalid = path.join(dir, 'invalid-archive');
+        writeFileSync(invalid, 'not an archive');
+        for (const [command, extract, message] of [
+          [
+            ['tar', '-xzf', invalid, '-C', source],
+            extractTarGz,
+            'ripgrep extraction failed (exit',
+          ],
+          [
+            ['unzip', '-o', invalid, '-d', source],
+            extractZip,
+            'zip extraction failed (exit',
+          ],
+        ] as const) {
+          const output = await runProcess([...command], { stdout: 'ignore' });
+          expect(output.stderr.trim().length).toBeGreaterThan(0);
+          const error = await extract(invalid, source).catch(
+            (failure: Error) => failure,
+          );
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).message).toContain(message);
+          expect((error as Error).message).toContain(output.stderr.trim());
+        }
       } finally {
         for (const call of syncCalls) call.mockRestore();
         fetchMock.mockRestore();
@@ -199,6 +281,46 @@ describe('tools/glob/downloader', () => {
       for (const orphan of orphans) expect(existsSync(orphan)).toBe(false);
       expect(readFileSync(unrelated, 'utf8')).toBe('keep');
       expect(await getInstalledRipgrepPathAsync()).toBe(binary);
+    },
+  );
+
+  testPosix(
+    'removes only install directories older than 24 hours under the lock',
+    async () => {
+      const { binary, metadata } = setupCache();
+      const dir = path.dirname(binary);
+      const input = stage(binary, metadata, 'staged-rg');
+      const stale = path.join(dir, `.install-${Date.now()}-abc123`);
+      const fresh = path.join(dir, '.install-1000000000000-def456');
+      const unrelated = path.join(dir, '.install-unrelated');
+      const staleFile = path.join(dir, '.install-1000000000000-ghi789');
+      const staleLink = path.join(dir, '.install-1000000000000-jkl012');
+      for (const entry of [stale, fresh, unrelated]) {
+        mkdirSync(entry);
+        writeFileSync(path.join(entry, 'archive'), 'preserve or cleanup');
+      }
+      writeFileSync(staleFile, 'not a directory');
+      symlinkSync(unrelated, staleLink);
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
+      utimesSync(stale, old, old);
+      utimesSync(fresh, recent, recent);
+      utimesSync(unrelated, old, old);
+      utimesSync(staleFile, old, old);
+      lutimesSync(staleLink, old, old);
+      input.acquireLock = async (file, options) => {
+        const release = await lock(file, options);
+        expect(existsSync(stale)).toBe(true);
+        expect(existsSync(fresh)).toBe(true);
+        return release;
+      };
+
+      await publishStagedBinary(input);
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+      expect(existsSync(staleFile)).toBe(true);
+      expect(existsSync(staleLink)).toBe(true);
     },
   );
 
@@ -358,7 +480,6 @@ describe('tools/glob/downloader', () => {
       }),
     );
 
-    expect(getInstalledRipgrepPath()).toBe(binary);
     expect(await getInstalledRipgrepPathAsync()).toBe(binary);
     expect(existsSync(binary)).toBe(true);
     expect(existsSync(metadata)).toBe(true);
@@ -381,7 +502,7 @@ describe('tools/glob/downloader', () => {
 
   testPosix(
     'does not repair or delete invalid cache during read-only probe',
-    () => {
+    async () => {
       const { binary, metadata } = setupCache();
       writeFakeRipgrep(binary);
       writeFileSync(
@@ -394,49 +515,11 @@ describe('tools/glob/downloader', () => {
         }),
       );
 
-      expect(getInstalledRipgrepPath({ repair: false })).toBeNull();
+      expect(await getInstalledRipgrepPathAsync()).toBeNull();
       expect(existsSync(binary)).toBe(true);
       expect(existsSync(metadata)).toBe(true);
     },
   );
-
-  testPosix('does not repair invalid cache through the legacy sync API', () => {
-    const { binary, metadata } = setupCache();
-    writeFakeRipgrep(binary);
-    writeFileSync(
-      metadata,
-      JSON.stringify({
-        version: '14.1.1',
-        assetName: 'ripgrep.tar.gz',
-        archiveSha256: 'a'.repeat(64),
-        binarySha256: 'b'.repeat(64),
-      }),
-    );
-
-    // The async publisher performs repair under its proper-lockfile lock.
-    // The synchronous compatibility API cannot safely acquire that lock.
-    expect(getInstalledRipgrepPath({ repair: true })).toBeNull();
-    expect(existsSync(binary)).toBe(true);
-    expect(existsSync(metadata)).toBe(true);
-  });
-
-  testPosix('default reads never repair invalid cache', () => {
-    const { binary, metadata } = setupCache();
-    writeFakeRipgrep(binary);
-    writeFileSync(
-      metadata,
-      JSON.stringify({
-        version: '14.1.1',
-        assetName: 'ripgrep.tar.gz',
-        archiveSha256: 'a'.repeat(64),
-        binarySha256: 'b'.repeat(64),
-      }),
-    );
-
-    expect(getInstalledRipgrepPath()).toBeNull();
-    expect(existsSync(binary)).toBe(true);
-    expect(existsSync(metadata)).toBe(true);
-  });
 
   testPosix(
     'publishes a staged binary over a corrupt cache under the lock',
@@ -473,7 +556,7 @@ describe('tools/glob/downloader', () => {
       });
 
       // The corrupt cache was replaced under the lock, not left blocking.
-      expect(getInstalledRipgrepPath()).toBe(binary);
+      expect(await getInstalledRipgrepPathAsync()).toBe(binary);
       expect(existsSync(staged)).toBe(false);
     },
   );
@@ -596,7 +679,7 @@ describe('tools/glob/downloader', () => {
         binarySha256: sha256(staged),
       });
 
-      expect(getInstalledRipgrepPath()).toBe(binary);
+      expect(await getInstalledRipgrepPathAsync()).toBe(binary);
       expect(existsSync(metadata)).toBe(true);
       expect(existsSync(staged)).toBe(false);
     },

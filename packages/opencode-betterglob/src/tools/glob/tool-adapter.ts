@@ -1,8 +1,9 @@
 import path from 'node:path';
+import type { ToolContext } from '@opencode-ai/plugin';
 import {
   runBestEffortOpenCodeSideEffect,
   runOpenCodeSideEffect,
-} from '../../utils/opencode-effects';
+} from '../../utils/tool-context';
 import {
   DEFAULT_GLOB_LIMIT,
   DEFAULT_GLOB_TIMEOUT_MS,
@@ -26,10 +27,10 @@ function isInsideAllowedBoundary(input: {
   worktree: string;
   searchPath: string;
 }): boolean {
-  if (containsPath(input.directory, input.searchPath)) return true;
   return (
-    isEffectiveBoundary(input.worktree) &&
-    containsPath(input.worktree, input.searchPath)
+    containsPath(input.directory, input.searchPath) ||
+    (isEffectiveBoundary(input.worktree) &&
+      containsPath(input.worktree, input.searchPath))
   );
 }
 
@@ -61,7 +62,7 @@ export function baseMetadata(
       args.sort_order ??
       (sortBy === 'mtime' ? 'desc' : 'asc'),
     hidden: input?.hidden ?? args.hidden !== false,
-    follow_symlinks: input?.followSymlinks ?? args.follow_symlinks === true,
+    follow_symlinks: false,
     timeout_ms: input?.timeoutMs ?? args.timeout_ms ?? DEFAULT_GLOB_TIMEOUT_MS,
   };
 }
@@ -75,8 +76,7 @@ export function resultMetadata(
     ...baseMetadata(args, input),
     count: result.count,
     truncated: result.truncated,
-    // Plugin-authoritative truncation flag: the host overwrites
-    // `truncated` with its own text-level truncation after execution.
+    // The host overwrites `truncated`; this is the plugin's result flag.
     search_truncated: result.truncated,
     incomplete: result.incomplete,
     timed_out: result.timedOut,
@@ -88,69 +88,55 @@ export function resultMetadata(
   };
 }
 
-export async function askExternalDirectory(
-  ctx: {
-    ask: (payload: {
-      permission: string;
-      patterns: string[];
-      always: string[];
-      metadata: Record<string, unknown>;
-    }) => Promise<unknown> | unknown;
-  },
-  input: {
-    directory: string;
-    worktree: string;
-    searchPath: string;
-    followSymlinks: boolean;
-  },
-): Promise<void> {
-  if (!input.followSymlinks && isInsideAllowedBoundary(input)) {
-    return;
-  }
+type AskContext = Pick<ToolContext, 'ask'>;
 
-  const normalizedPath =
-    process.platform === 'win32'
-      ? input.searchPath.replaceAll('\\', '/')
-      : input.searchPath;
-  const glob = `${normalizedPath}/*`;
-  await runOpenCodeSideEffect(
+function askPermission(
+  ctx: AskContext,
+  permission: string,
+  value: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  return runOpenCodeSideEffect(
     ctx.ask({
-      permission: 'external_directory',
-      patterns: [glob],
-      always: [glob],
-      metadata: {
-        filepath: input.searchPath,
-        parentDir: input.searchPath,
-        follow_symlinks: input.followSymlinks,
-        may_traverse_outside_worktree: input.followSymlinks,
-      },
+      permission,
+      patterns: [value],
+      always: [value],
+      metadata,
     }),
   );
 }
 
-export async function askRipgrepAutoInstall(ctx: {
-  ask: (payload: {
-    permission: string;
-    patterns: string[];
-    always: string[];
-    metadata: Record<string, unknown>;
-  }) => Promise<unknown> | unknown;
-}): Promise<void> {
-  const cacheDir = getRipgrepCacheDir();
-  const dir =
-    process.platform === 'win32' ? cacheDir.replaceAll('\\', '/') : cacheDir;
-  await runOpenCodeSideEffect(
-    ctx.ask({
-      permission: 'install_ripgrep',
-      patterns: [dir],
-      always: [dir],
-      metadata: {
-        tool: GLOB_TOOL_ID,
-        action: 'auto_install_ripgrep',
-        cache_dir: dir,
-      },
-    }),
-  );
+export const permissionPath = (
+  file: string,
+  platform = process.platform,
+): string => (platform === 'win32' ? file.replaceAll('\\', '/') : file);
+
+export async function askExternalDirectory(
+  ctx: AskContext,
+  input: {
+    directory: string;
+    worktree: string;
+    searchPath: string;
+  },
+): Promise<void> {
+  if (isInsideAllowedBoundary(input)) return;
+
+  const glob = `${permissionPath(input.searchPath)}/*`;
+  await askPermission(ctx, 'external_directory', glob, {
+    filepath: input.searchPath,
+    parentDir: input.searchPath,
+    follow_symlinks: false,
+    may_traverse_outside_worktree: false,
+  });
+}
+
+export async function askRipgrepAutoInstall(ctx: AskContext): Promise<void> {
+  const dir = permissionPath(getRipgrepCacheDir());
+  await askPermission(ctx, 'install_ripgrep', dir, {
+    tool: GLOB_TOOL_ID,
+    action: 'auto_install_ripgrep',
+    cache_dir: dir,
+  });
 }
 
 export function failureMetadata(
@@ -169,12 +155,7 @@ export function failureMetadata(
 }
 
 export async function emit(
-  ctx: {
-    metadata: (payload: {
-      title?: string;
-      metadata?: Record<string, unknown>;
-    }) => Promise<unknown> | unknown;
-  },
+  ctx: Pick<ToolContext, 'metadata'>,
   name: string,
   metadata: Record<string, unknown>,
 ): Promise<void> {
@@ -192,8 +173,6 @@ export async function emit(
         timer.unref?.();
       }),
     ]);
-  } catch {
-    // Metadata is best-effort.
   } finally {
     clearTimeout(timer);
   }

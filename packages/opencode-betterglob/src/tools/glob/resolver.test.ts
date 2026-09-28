@@ -11,7 +11,6 @@ import {
 } from '../../utils/process-supervisor';
 import {
   resetGlobCliResolverForTests,
-  resolveGlobCli,
   resolveGlobCliAsync,
   resolveGlobCliWithAutoInstall,
 } from './resolver';
@@ -25,62 +24,68 @@ describe('tools/glob/resolver', () => {
     test.each([
       new SupervisorRuntimeError(),
       new CleanupUnconfirmedError('validation supervisor died'),
-    ])(`${stage} infrastructure rejection never resolves missing-rg or permits installation: %s`, async (error) => {
-      let installs = 0;
-      const deps = {
-        ensureSupervisorRuntimeAsync: async () => {
-          if (stage === 'runtime') throw error;
-        },
-        findExecutableAsync: async () =>
-          stage === 'probe' ? '/system/rg' : null,
-        validateExecutableAsync: async () => {
-          throw error;
-        },
-        // Inject the cache boundary: downloader must preserve the original
-        // validation rejection for this contract to hold in production.
-        getInstalledRipgrepPathAsync: async () => {
-          throw error;
-        },
-        installLatestStableRipgrep: async () => {
-          installs++;
-          return '/managed/rg';
-        },
-      };
-      await expect(resolveGlobCliAsync(deps)).rejects.toBe(error);
-      await expect(resolveGlobCliWithAutoInstall(deps)).rejects.toBe(error);
-      await expect(
-        resolveGlobCliWithAutoInstall(deps, undefined, {
-          allowAutoInstall: true,
-        }),
-      ).rejects.toBe(error);
-      expect(installs).toBe(0);
-    });
+    ])(
+      `${stage} infrastructure rejection never resolves missing-rg or permits installation: %s`,
+      async (error) => {
+        let installs = 0;
+        const deps = {
+          ensureSupervisorRuntimeAsync: async () => {
+            if (stage === 'runtime') throw error;
+          },
+          findExecutableAsync: async () =>
+            stage === 'probe' ? '/system/rg' : null,
+          validateExecutableAsync: async () => {
+            throw error;
+          },
+          // Inject the cache boundary: downloader must preserve the original
+          // validation rejection for this contract to hold in production.
+          getInstalledRipgrepPathAsync: async () => {
+            throw error;
+          },
+          installLatestStableRipgrep: async () => {
+            installs++;
+            return '/managed/rg';
+          },
+        };
+        await expect(resolveGlobCliAsync(deps)).rejects.toBe(error);
+        await expect(resolveGlobCliWithAutoInstall(deps)).rejects.toBe(error);
+        await expect(
+          resolveGlobCliWithAutoInstall(deps, undefined, {
+            allowAutoInstall: true,
+          }),
+        ).rejects.toBe(error);
+        expect(installs).toBe(0);
+      },
+    );
   }
 
   test.each([
     new SupervisorRuntimeError(),
     new CleanupUnconfirmedError('publication validation supervisor died'),
-  ])('preserves infrastructure errors from an authorized installation: %s', async (error) => {
-    let logs = 0;
-    await expect(
-      resolveGlobCliWithAutoInstall(
-        {
-          ensureSupervisorRuntimeAsync: async () => {},
-          findExecutableAsync: async () => null,
-          getInstalledRipgrepPathAsync: async () => null,
-          installLatestStableRipgrep: async () => {
-            throw error;
+  ])(
+    'preserves infrastructure errors from an authorized installation: %s',
+    async (error) => {
+      let logs = 0;
+      await expect(
+        resolveGlobCliWithAutoInstall(
+          {
+            ensureSupervisorRuntimeAsync: async () => {},
+            findExecutableAsync: async () => null,
+            getInstalledRipgrepPathAsync: async () => null,
+            installLatestStableRipgrep: async () => {
+              throw error;
+            },
+            logger: () => {
+              logs++;
+            },
           },
-          logger: () => {
-            logs++;
-          },
-        },
-        undefined,
-        { allowAutoInstall: true },
-      ),
-    ).rejects.toBe(error);
-    expect(logs).toBe(0);
-  });
+          undefined,
+          { allowAutoInstall: true },
+        ),
+      ).rejects.toBe(error);
+      expect(logs).toBe(0);
+    },
+  );
 
   test.skipIf(process.platform === 'win32')(
     'real probe supervisor death cannot become absence or authorize auto-install',
@@ -155,19 +160,23 @@ describe('tools/glob/resolver', () => {
     },
   );
 
-  test('prefers system rg when available', () => {
-    expect(
-      resolveGlobCli({
-        findExecutable: () => '/usr/bin/rg',
-        getInstalledRipgrepPath: () => null,
-        validateExecutable: () => true,
-      }),
-    ).toEqual({
-      path: '/usr/bin/rg',
-      backend: 'rg',
-      source: 'system-rg',
-    });
-  });
+  test.each([
+    ['valid system', true, null, '/usr/bin/rg', 'system-rg'],
+    ['managed fallback', false, '/managed/rg', '/managed/rg', 'managed-rg'],
+    ['missing', false, null, 'rg', 'missing-rg'],
+  ] as const)(
+    'resolves %s with precedence',
+    async (_name, valid, managed, path, source) => {
+      await expect(
+        resolveGlobCliAsync({
+          ensureSupervisorRuntimeAsync: async () => {},
+          findExecutableAsync: async () => '/usr/bin/rg',
+          validateExecutableAsync: async () => valid,
+          getInstalledRipgrepPathAsync: async () => managed,
+        }),
+      ).resolves.toEqual({ path, backend: 'rg', source });
+    },
+  );
 
   test.skipIf(process.platform === 'win32' || !process.versions.bun)(
     'missing node fails preflight before rg lookup, validation, managed cache or authorized installation',
@@ -215,34 +224,6 @@ describe('tools/glob/resolver', () => {
     },
   );
 
-  test('falls back to managed rg when system rg is present but invalid', () => {
-    expect(
-      resolveGlobCli({
-        findExecutable: () => '/usr/bin/rg',
-        validateExecutable: () => false,
-        getInstalledRipgrepPath: () => '/managed/rg',
-      }),
-    ).toEqual({
-      path: '/managed/rg',
-      backend: 'rg',
-      source: 'managed-rg',
-    });
-  });
-
-  test('treats invalid system rg as missing when no managed rg exists', () => {
-    expect(
-      resolveGlobCli({
-        findExecutable: () => '/usr/bin/rg',
-        validateExecutable: () => false,
-        getInstalledRipgrepPath: () => null,
-      }),
-    ).toEqual({
-      path: 'rg',
-      backend: 'rg',
-      source: 'missing-rg',
-    });
-  });
-
   test('uses an asynchronous executable probe in the execution resolver', async () => {
     let probed = false;
     await expect(
@@ -284,26 +265,20 @@ describe('tools/glob/resolver', () => {
     await expect(pending).rejects.toThrow(/cancelled|aborted/i);
   });
 
-  test('cancels PATH lookup and observes its late rejection without using legacy APIs', async () => {
+  test('cancels PATH lookup and observes its late rejection', async () => {
     const controller = new AbortController();
     let rejectLookup!: (error: Error) => void;
     const lookup = new Promise<string | null>((_resolve, reject) => {
       rejectLookup = reject;
     });
     let receivedSignal: AbortSignal | undefined;
-    const legacy = () => {
-      throw new Error('legacy synchronous API must not run');
-    };
     const pending = resolveGlobCliAsync(
       {
-        findExecutable: legacy,
         ensureSupervisorRuntimeAsync: async () => {},
         findExecutableAsync: (_name, signal) => {
           receivedSignal = signal;
           return lookup;
         },
-        getInstalledRipgrepPath: legacy,
-        validateExecutable: legacy,
       },
       controller.signal,
     );
@@ -395,6 +370,7 @@ describe('tools/glob/resolver', () => {
     };
 
     const deps = {
+      ensureSupervisorRuntimeAsync: async () => {},
       findExecutableAsync: async () => null,
       getInstalledRipgrepPathAsync: async () => null,
       installLatestStableRipgrep,

@@ -27,6 +27,31 @@ export function createTempRepo(): string {
   return dir;
 }
 
+export async function until(
+  predicate: () => boolean,
+  { timeoutMs = 1000, intervalMs = 5 } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline)
+      throw new Error('Condition was not met before timeout');
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+export function within<T>(pending: Promise<T>, ms = 2_500): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    pending,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Test promise did not settle within ${ms} ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export function createTempTracker(options: { resetResolver?: boolean } = {}) {
   const dirs: string[] = [];
 

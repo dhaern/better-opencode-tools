@@ -1,10 +1,8 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
 import {
   realpath as realpathAsyncFs,
   stat as statAsyncFs,
 } from 'node:fs/promises';
 import path from 'node:path';
-import type { PluginInput, ToolContext } from '@opencode-ai/plugin';
 import {
   DEFAULT_GLOB_LIMIT,
   DEFAULT_GLOB_TIMEOUT_MS,
@@ -27,8 +25,11 @@ function integer(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.trunc(value as number));
 }
 
-function timeoutMs(value: number | undefined, fallback: number): number {
-  const normalized = integer(value, fallback);
+export function normalizeTimeoutMs(value: unknown): number {
+  const normalized = integer(
+    typeof value === 'number' ? value : undefined,
+    DEFAULT_GLOB_TIMEOUT_MS,
+  );
   if (normalized > MAX_TIMEOUT_MS) {
     throw new Error(
       `timeout_ms must not exceed ${MAX_TIMEOUT_MS} milliseconds`,
@@ -74,16 +75,6 @@ function splitAbsolutePattern(pattern: string): {
   };
 }
 
-function realpath(file: string, requested: string): string {
-  try {
-    return realpathSync.native ? realpathSync.native(file) : realpathSync(file);
-  } catch (error) {
-    throw new Error(
-      `Failed to resolve search path: ${requested} (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-}
-
 async function realpathAsync(file: string, requested: string): Promise<string> {
   try {
     return await realpathAsyncFs(file);
@@ -105,17 +96,26 @@ export function containsPath(root: string, target: string): boolean {
 export interface ResolvedGlobScope {
   cwd: string;
   worktreeRoot: string;
+  timeoutMs: number;
   requestedPath: string;
   resolvedPath: string;
   relativePattern: string;
   anchored: boolean;
 }
 
+interface GlobScopeContext {
+  directory?: string;
+  worktree?: string;
+}
+
 export function resolveGlobScope(
   args: GlobToolInput,
-  context: Pick<ToolContext, 'directory' | 'worktree'>,
-  pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
+  context: GlobScopeContext,
+  pluginCtx?: GlobScopeContext,
 ): ResolvedGlobScope {
+  if (args.follow_symlinks === true) {
+    throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
+  }
   if (typeof args.pattern !== 'string' || args.pattern.length === 0) {
     throw new Error('pattern must be a non-empty string');
   }
@@ -137,6 +137,7 @@ export function resolveGlobScope(
   return {
     cwd,
     worktreeRoot,
+    timeoutMs: normalizeTimeoutMs(args.timeout_ms),
     requestedPath,
     resolvedPath,
     relativePattern: normalizeRelativePattern(split.glob),
@@ -152,87 +153,30 @@ function anchorAbsoluteGlob(glob: string): string {
   return `/${normalizeRelativePattern(glob)}`;
 }
 
-export function normalizeGlobInput(
-  args: GlobToolInput,
-  context: Pick<ToolContext, 'directory' | 'worktree'>,
-  pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
-): NormalizedGlobInput {
-  if (args.follow_symlinks === true) {
-    throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
-  }
-
-  const scope = resolveGlobScope(args, context, pluginCtx);
-
-  if (!existsSync(scope.resolvedPath)) {
-    throw new Error(`Search path does not exist: ${scope.requestedPath}`);
-  }
-
-  const searchPath = realpath(scope.resolvedPath, scope.requestedPath);
-  const stat = statSync(searchPath);
-  const resolvedWorktree = scope.worktreeRoot;
-  const worktree = existsSync(resolvedWorktree)
-    ? realpath(resolvedWorktree, scope.worktreeRoot)
-    : resolvedWorktree;
-
-  if (!stat.isDirectory()) {
-    throw new Error(`Search path must be a directory: ${scope.requestedPath}`);
-  }
-
-  const sortBy = args.sort_by ?? 'mtime';
-
-  return {
-    pattern: args.pattern,
-    relativePattern: scope.anchored
-      ? anchorAbsoluteGlob(scope.relativePattern)
-      : scope.relativePattern,
-    requestedPath: scope.requestedPath,
-    resolvedPath: scope.resolvedPath,
-    searchPath,
-    limit: integer(args.limit, DEFAULT_GLOB_LIMIT),
-    sortBy,
-    sortOrder: args.sort_order ?? (sortBy === 'mtime' ? 'desc' : 'asc'),
-    hidden: args.hidden !== false,
-    // Retained in the normalized shape for compatibility with metadata
-    // consumers; true is rejected above because traversal cannot be confined.
-    followSymlinks: false,
-    timeoutMs: timeoutMs(args.timeout_ms, DEFAULT_GLOB_TIMEOUT_MS),
-    cwd: scope.cwd,
-    worktree,
-  };
-}
-
-/**
- * Async counterpart used by the tool execution path. Filesystem preparation
- * must be raceable against the execution deadline; the synchronous variant is
- * retained for compatibility with callers that already use it directly.
- */
+/** Filesystem preparation must be raceable against the execution deadline. */
 export async function normalizeGlobInputAsync(
   args: GlobToolInput,
-  context: Pick<ToolContext, 'directory' | 'worktree'>,
-  pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
+  context: GlobScopeContext,
+  pluginCtx?: GlobScopeContext,
+  resolvedScope?: ResolvedGlobScope,
 ): Promise<NormalizedGlobInput> {
-  if (args.follow_symlinks === true) {
-    throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
-  }
-
-  const scope = resolveGlobScope(args, context, pluginCtx);
-  let info: Awaited<ReturnType<typeof statAsyncFs>>;
-  try {
-    info = await statAsyncFs(scope.resolvedPath);
-  } catch {
+  const scope = resolvedScope ?? resolveGlobScope(args, context, pluginCtx);
+  const [status, realPath, worktreePath] = await Promise.allSettled([
+    statAsyncFs(scope.resolvedPath),
+    realpathAsync(scope.resolvedPath, scope.requestedPath),
+    realpathAsyncFs(scope.worktreeRoot),
+  ]);
+  if (status.status === 'rejected') {
     throw new Error(`Search path does not exist: ${scope.requestedPath}`);
   }
-
-  const searchPath = await realpathAsync(
-    scope.resolvedPath,
-    scope.requestedPath,
-  );
-  let worktree = scope.worktreeRoot;
-  try {
-    worktree = await realpathAsyncFs(scope.worktreeRoot);
-  } catch {
-    // Preserve the synchronous contract for a missing worktree root.
-  }
+  if (realPath.status === 'rejected') throw realPath.reason;
+  const info = status.value;
+  const searchPath = realPath.value;
+  // Preserve the synchronous contract for a missing worktree root.
+  const worktree =
+    worktreePath.status === 'fulfilled'
+      ? worktreePath.value
+      : scope.worktreeRoot;
 
   if (!info.isDirectory()) {
     throw new Error(`Search path must be a directory: ${scope.requestedPath}`);
@@ -251,8 +195,7 @@ export async function normalizeGlobInputAsync(
     sortBy,
     sortOrder: args.sort_order ?? (sortBy === 'mtime' ? 'desc' : 'asc'),
     hidden: args.hidden !== false,
-    followSymlinks: false,
-    timeoutMs: timeoutMs(args.timeout_ms, DEFAULT_GLOB_TIMEOUT_MS),
+    timeoutMs: scope.timeoutMs,
     cwd: scope.cwd,
     worktree,
   };

@@ -4,7 +4,7 @@ import { MAX_TIMEOUT_MS } from './normalize';
 
 const z = tool.schema;
 
-export const globArgsSchema: Record<string, unknown> = {
+export const globArgsSchema: Parameters<typeof tool>[0]['args'] = {
   pattern: z
     .string()
     .min(1)

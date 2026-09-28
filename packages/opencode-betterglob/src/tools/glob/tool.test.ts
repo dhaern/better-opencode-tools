@@ -1,15 +1,24 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, jest, mock, test } from 'bun:test';
 import { symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
+import { resolveOpenCodeEffect } from '../../utils/tool-context';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
-import { createExecutionContext, createTempTracker } from './test-helpers';
+import { MAX_TIMEOUT_MS } from './normalize';
+import { getRipgrepCacheDir } from './rg-cache';
+import {
+  createExecutionContext,
+  createTempTracker,
+  within,
+} from './test-helpers';
 import { createGlobTool } from './tool';
+import { permissionPath } from './tool-adapter';
 import type { GlobRunner, GlobSearchResult } from './types';
 
 describe('tools/glob/tool', () => {
+  afterEach(() => jest.useRealTimers());
   const temps = createTempTracker();
   const resolveSystem = () => ({
     path: 'rg',
@@ -17,8 +26,11 @@ describe('tools/glob/tool', () => {
     source: 'system-rg' as const,
   });
 
-  function getAskInput(ctx: ReturnType<typeof createExecutionContext>) {
-    const call = ctx.ask.mock.calls[0] as unknown as
+  function getAskInput(
+    ctx: ReturnType<typeof createExecutionContext>,
+    index = 0,
+  ) {
+    const call = ctx.ask.mock.calls[index] as unknown as
       | [
           {
             permission: string;
@@ -85,13 +97,25 @@ describe('tools/glob/tool', () => {
     expect(ctx.metadata).toHaveBeenCalledTimes(1);
 
     const ask = getAskInput(ctx);
-    expect(ask.permission).toBe('glob');
-    expect(ask.patterns).toEqual(['*.ts']);
-    expect(ask.always).toEqual(['*']);
-    expect(ask.metadata.limit).toBe(DEFAULT_GLOB_LIMIT);
-    expect(ask.metadata.timeout_ms).toBe(DEFAULT_GLOB_TIMEOUT_MS);
-    expect(ask.metadata.hidden).toBe(true);
-    expect(ask.metadata.follow_symlinks).toBe(false);
+    expect(ask).toEqual({
+      permission: 'glob',
+      patterns: ['*.ts'],
+      always: ['*'],
+      metadata: {
+        backend: 'rg',
+        pattern: '*.ts',
+        path: 'src',
+        resolved_path: undefined,
+        real_path: undefined,
+        relative_pattern: undefined,
+        limit: DEFAULT_GLOB_LIMIT,
+        sort_by: 'mtime',
+        sort_order: 'desc',
+        hidden: true,
+        follow_symlinks: false,
+        timeout_ms: DEFAULT_GLOB_TIMEOUT_MS,
+      },
+    });
 
     const metadata = getMetadataInput(ctx);
     expect(metadata.title).toBe('*.ts');
@@ -118,6 +142,73 @@ describe('tools/glob/tool', () => {
     expect(metadata.title).toBe('*.ts');
     expect(metadata.metadata.error_stage).toBe('normalize');
     expect(metadata.metadata.count).toBe(0);
+  });
+
+  test('rejects an excessive deadline before requesting permission', async () => {
+    const repoDir = temps.createRepo();
+    const glob = createGlobTool({
+      directory: repoDir,
+      worktree: repoDir,
+      client: {},
+    } as any);
+    const ctx = createExecutionContext(repoDir);
+    await expect(
+      glob.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: MAX_TIMEOUT_MS + 1 },
+        ctx as any,
+      ),
+    ).rejects.toThrow(/timeout_ms must not exceed/);
+    expect(ctx.ask).not.toHaveBeenCalled();
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('normalize');
+  });
+
+  test('keeps normalization stage when a CPU-bound resolver exhausts the deadline', async () => {
+    const repoDir = temps.createRepo();
+    const ctx = createExecutionContext(repoDir);
+    const run: GlobRunner = mock(async () => {
+      throw new Error('runner must not be called');
+    });
+    const glob = createGlobTool(
+      { directory: repoDir, worktree: repoDir, client: {} } as any,
+      {
+        run,
+        resolveCli: () => {
+          const until = performance.now() + 80;
+          while (performance.now() < until) {}
+          return resolveSystem();
+        },
+      },
+    );
+
+    await expect(
+      glob.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: 20 },
+        ctx as any,
+      ),
+    ).rejects.toThrow();
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('normalize');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test('classifies a rejected permission prompt as permission failure', async () => {
+    const repoDir = temps.createRepo();
+    const ctx = createExecutionContext(repoDir);
+    ctx.ask.mockImplementation(async () => {
+      throw new Error('permission refused');
+    });
+    const run: GlobRunner = mock(async () => {
+      throw new Error('runner must not be called');
+    });
+    const glob = createGlobTool(
+      { directory: repoDir, worktree: repoDir, client: {} } as any,
+      { run, resolveCli: resolveSystem },
+    );
+
+    await expect(
+      glob.execute({ pattern: '*.ts', path: 'src' }, ctx as any),
+    ).rejects.toThrow('permission refused');
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('permission');
+    expect(run).not.toHaveBeenCalled();
   });
 
   test('does not let metadata failure break successful glob output', async () => {
@@ -181,24 +272,19 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: outside }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const externalCall = ctx.ask.mock.calls[1] as unknown as
-      | [
-          {
-            permission: string;
-            patterns: string[];
-            always: string[];
-            metadata: Record<string, unknown>;
-          },
-        ]
-      | undefined;
-    if (!externalCall) throw new Error('external_directory ask was not called');
-    const external = externalCall[0];
+    const external = getAskInput(ctx, 1);
     const pattern = `${outside.replace(/\\/g, '/')}/*`;
-    expect(external.permission).toBe('external_directory');
-    expect(external.patterns).toEqual([pattern]);
-    expect(external.always).toEqual([pattern]);
-    expect(external.metadata.filepath).toBe(outside);
-    expect(external.metadata.parentDir).toBe(outside);
+    expect(external).toEqual({
+      permission: 'external_directory',
+      patterns: [pattern],
+      always: [pattern],
+      metadata: {
+        filepath: outside,
+        parentDir: outside,
+        follow_symlinks: false,
+        may_traverse_outside_worktree: false,
+      },
+    });
   });
 
   test('rejects unsupported symlink traversal before filesystem permissions', async () => {
@@ -216,6 +302,7 @@ describe('tools/glob/tool', () => {
       tool.execute({ pattern: '*.ts', follow_symlinks: true }, ctx as any),
     ).rejects.toThrow(/follow_symlinks:true is unsupported/);
     expect(run).not.toHaveBeenCalled();
+    expect(ctx.ask).not.toHaveBeenCalled();
     expect(
       ctx.ask.mock.calls.some(
         (call) =>
@@ -249,9 +336,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: outside }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [{ permission: string }]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
   });
 
@@ -271,9 +356,7 @@ describe('tools/glob/tool', () => {
     ).rejects.toThrow(/Search path does not exist/);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [{ permission: string }]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
   });
 
@@ -357,11 +440,7 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: 'linked' }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const external = (
-      ctx.ask.mock.calls[1] as unknown as [
-        { permission: string; metadata: Record<string, unknown> },
-      ]
-    )[0];
+    const external = getAskInput(ctx, 1);
     expect(external.permission).toBe('external_directory');
     expect(external.metadata.filepath).toBe(outside);
   });
@@ -381,9 +460,11 @@ describe('tools/glob/tool', () => {
     const ctx = createExecutionContext(repoDir);
 
     await expect(
-      tool.execute(
-        { pattern: '*.ts', path: 'src', timeout_ms: 10 },
-        ctx as any,
+      within(
+        tool.execute(
+          { pattern: '*.ts', path: 'src', timeout_ms: 10 },
+          ctx as any,
+        ),
       ),
     ).rejects.toThrow(/deadline|aborted/i);
     expect(run).not.toHaveBeenCalled();
@@ -419,11 +500,15 @@ describe('tools/glob/tool', () => {
     );
     const ctx = createExecutionContext(repoDir);
 
-    const result = await tool.execute(
-      { pattern: '*.ts', path: 'src', timeout_ms: 50 },
-      ctx as any,
+    const result = await within(
+      tool.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: 50 },
+        ctx as any,
+      ),
     );
 
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(receivedSignal?.aborted).toBe(true);
     expect(result).toEqual({
       title: '*.ts',
@@ -439,10 +524,12 @@ describe('tools/glob/tool', () => {
   test('waits for bounded runner cleanup after the execution deadline', async () => {
     const repoDir = temps.createRepo();
     let receivedSignal: AbortSignal | undefined;
+    const started = Promise.withResolvers<void>();
     const run: GlobRunner = mock(
       async (input, signal) =>
         new Promise<GlobSearchResult>((resolve) => {
           receivedSignal = signal;
+          started.resolve();
           signal.addEventListener(
             'abort',
             () => {
@@ -472,12 +559,19 @@ describe('tools/glob/tool', () => {
       { run, resolveCli: resolveSystem },
     );
     const ctx = createExecutionContext(repoDir);
-
-    const result = await tool.execute(
+    jest.useFakeTimers();
+    const pending = tool.execute(
       { pattern: '*.ts', path: 'src', timeout_ms: 20 },
       ctx as any,
     );
-
+    await started.promise;
+    jest.advanceTimersByTime(20);
+    await Promise.resolve();
+    jest.advanceTimersByTime(1100);
+    jest.useRealTimers();
+    const result = await within(pending);
+    expect(result).toBeDefined();
+    if (!result) return;
     expect(receivedSignal?.aborted).toBe(true);
     expect(result).toEqual({
       title: '*.ts',
@@ -523,13 +617,20 @@ describe('tools/glob/tool', () => {
     await tool.execute({ pattern: '*.ts', path: 'src' }, ctx as any);
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
-    const install = (
-      ctx.ask.mock.calls[1] as unknown as [
-        { permission: string; metadata: Record<string, unknown> },
-      ]
-    )[0];
+    const install = getAskInput(ctx, 1);
     expect(install.permission).toBe('install_ripgrep');
     expect(install.metadata.action).toBe('auto_install_ripgrep');
+    const cacheDir = permissionPath(getRipgrepCacheDir());
+    expect(install).toEqual({
+      permission: 'install_ripgrep',
+      patterns: [cacheDir],
+      always: [cacheDir],
+      metadata: {
+        tool: 'glob',
+        action: 'auto_install_ripgrep',
+        cache_dir: cacheDir,
+      },
+    });
   });
 
   test('supports ask implementations that return Effect', async () => {
@@ -571,5 +672,13 @@ describe('tools/glob/tool', () => {
       metadata: expect.objectContaining({ count: 1 }),
     });
     expect(calls).toBe(1);
+    await expect(
+      resolveOpenCodeEffect(Effect.fail(new Error('effect failed'))),
+    ).rejects.toThrow('effect failed');
+  });
+
+  test('normalizes Windows permission separators without altering POSIX paths', () => {
+    expect(permissionPath('C:\\src\\cache', 'win32')).toBe('C:/src/cache');
+    expect(permissionPath('C:\\src\\cache', 'linux')).toBe('C:\\src\\cache');
   });
 });

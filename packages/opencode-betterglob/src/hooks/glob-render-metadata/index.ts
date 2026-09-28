@@ -74,24 +74,26 @@ export function createGlobRenderMetadataHook() {
       const metadata: Record<string, unknown> = hadMetadata
         ? (output.metadata as Record<string, unknown>)
         : {};
-      const parsed = parseGlobOutputSummary(output.output);
-
       // Heuristic text parsing only fills genuinely absent fields: a file
       // name containing newlines can mimic a status note, so authoritative
       // plugin metadata is never second-guessed by line counting.
-      if (typeof metadata.search_truncated !== 'boolean') {
-        metadata.search_truncated = parsed.truncated;
+      if (
+        typeof metadata.search_truncated !== 'boolean' ||
+        typeof metadata.count !== 'number'
+      ) {
+        const parsed = parseGlobOutputSummary(output.output);
+        if (typeof metadata.search_truncated !== 'boolean') {
+          metadata.search_truncated = parsed.truncated;
+        }
+        if (typeof metadata.count !== 'number') metadata.count = parsed.count;
       }
-      if (typeof metadata.count !== 'number') metadata.count = parsed.count;
       if (!hadMetadata) {
-        metadata.truncated = parsed.truncated;
+        metadata.truncated = metadata.search_truncated;
         output.metadata = metadata;
       } else {
         // Presentation flag only: host truncation OR search truncation.
         metadata.truncated =
-          Boolean(metadata.truncated) ||
-          metadata.search_truncated === true ||
-          (!hadMetadata && parsed.truncated);
+          Boolean(metadata.truncated) || metadata.search_truncated === true;
       }
 
       if (

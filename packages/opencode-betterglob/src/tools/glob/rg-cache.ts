@@ -1,17 +1,18 @@
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { crossSpawn, isMissingExecutableError } from '../../utils/compat';
-import { waitForProcessOutputWithAbortGrace } from '../../utils/process-output';
-import { isSupervisorError } from '../../utils/process-supervisor';
+import { throwIfAborted } from '../../utils/abort';
 import {
-  computeSha256,
+  isMissingExecutableError,
+  runProcess,
+} from '../../utils/process-output';
+import { isSupervisorError } from '../../utils/process-supervisor';
+import { validatedStamps } from '../../utils/stamped-probe';
+import {
   computeSha256Async,
+  fileStamp,
   InvalidCachedBinaryError,
   MAX_CACHE_METADATA_BYTES,
   readRegularFile,
-  readRegularFileSync,
-  throwIfAborted,
 } from './install-io';
 
 export interface InstalledRipgrepMetadata {
@@ -20,6 +21,13 @@ export interface InstalledRipgrepMetadata {
   archiveSha256: string;
   binarySha256: string;
 }
+
+const cacheStamp = async (binary: string, metadata: string) => {
+  const stamps = await Promise.all([fileStamp(binary), fileStamp(metadata)]);
+  return stamps[0] && stamps[1]
+    ? `${binary}:${stamps[0]}:${metadata}:${stamps[1]}`
+    : undefined;
+};
 
 function isInstalledRipgrepMetadata(
   value: unknown,
@@ -61,25 +69,6 @@ export function getRipgrepBinaryName(): string {
   return process.platform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-export function getInstalledRipgrepPath(
-  _options: { repair?: boolean } = {},
-): string | null {
-  const binary = join(getRipgrepCacheDir(), getRipgrepBinaryName());
-  if (!existsSync(binary)) return null;
-
-  try {
-    validateCachedBinary(binary);
-    return binary;
-  } catch {
-    // Non-destructive by default: a mid-publication cache (binary renamed,
-    // metadata not yet visible) must not trigger deletion by readers. Only
-    // the async publisher, held under the install lock, may purge. The
-    // synchronous compatibility option is retained as a safe no-op because
-    // it cannot acquire that lock without blocking.
-    return null;
-  }
-}
-
 export async function getInstalledRipgrepPathAsync(
   signal?: AbortSignal,
 ): Promise<string | null> {
@@ -94,21 +83,6 @@ export async function getInstalledRipgrepPathAsync(
     if (error instanceof InvalidCachedBinaryError) return null;
     throw error;
   }
-}
-
-function readInstalledMetadata(): InstalledRipgrepMetadata {
-  const parsed: unknown = JSON.parse(
-    readRegularFileSync(
-      getRipgrepMetadataPath(),
-      MAX_CACHE_METADATA_BYTES,
-    ).toString('utf8'),
-  );
-  if (!isInstalledRipgrepMetadata(parsed)) {
-    throw new InvalidCachedBinaryError(
-      'Cached ripgrep metadata has an invalid structure.',
-    );
-  }
-  return parsed;
 }
 
 async function readInstalledMetadataAsync(
@@ -139,24 +113,15 @@ async function readInstalledMetadataAsync(
   }
 }
 
-function validateCachedBinary(binary: string): void {
-  const metadata = readInstalledMetadata();
-  if (computeSha256(binary) !== metadata.binarySha256) {
-    throw new Error('Cached ripgrep binary failed SHA-256 verification.');
-  }
-
-  // The synchronous compatibility probe verifies cache integrity only. The
-  // execution path uses getInstalledRipgrepPathAsync(), which also validates
-  // that the executable identifies itself as ripgrep without blocking the
-  // event loop.
-}
-
 export async function validateCachedBinaryAsync(
   binary: string,
   signal?: AbortSignal,
   metadataPath = getRipgrepMetadataPath(),
 ): Promise<void> {
   throwIfAborted(signal);
+  const stamp = await cacheStamp(binary, metadataPath);
+  throwIfAborted(signal);
+  if (stamp && validatedStamps.has(`managed:${stamp}`)) return;
   const metadata = await readInstalledMetadataAsync(signal, metadataPath);
   if ((await computeSha256Async(binary, signal)) !== metadata.binarySha256) {
     throw new InvalidCachedBinaryError(
@@ -165,6 +130,30 @@ export async function validateCachedBinaryAsync(
   }
 
   await validateInstalledBinaryAsync(binary, signal);
+  if (stamp) validatedStamps.add(`managed:${stamp}`);
+}
+
+export async function probeRipgrepVersion(
+  binary: string,
+  signal?: AbortSignal,
+): Promise<{ valid: boolean; exitCode: number; aborted: boolean }> {
+  const result = await runProcess(
+    [binary, '--version'],
+    {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      killGraceMs: 250,
+      postCloseDrainMs: 250,
+    },
+    signal,
+  );
+  return {
+    valid:
+      result.exitCode === 0 &&
+      `${result.stdout}\n${result.stderr}`.toLowerCase().includes('ripgrep'),
+    exitCode: result.exitCode,
+    aborted: result.aborted,
+  };
 }
 
 export async function validateInstalledBinaryAsync(
@@ -172,23 +161,9 @@ export async function validateInstalledBinaryAsync(
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  const proc = crossSpawn([binary, '--version'], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    detached: process.platform !== 'win32',
-    killProcessGroup: process.platform !== 'win32',
-  });
-  const stdoutPromise = proc.stdout();
-  const stderrPromise = proc.stderr();
-  let result: Awaited<ReturnType<typeof waitForProcessOutputWithAbortGrace>>;
+  let result: Awaited<ReturnType<typeof probeRipgrepVersion>>;
   try {
-    result = await waitForProcessOutputWithAbortGrace(
-      proc,
-      stderrPromise,
-      signal,
-      stdoutPromise,
-      { killGraceMs: 250, postCloseDrainMs: 250 },
-    );
+    result = await probeRipgrepVersion(binary, signal);
   } catch (error) {
     throwIfAborted(signal);
     if (isSupervisorError(error)) throw error;
@@ -208,8 +183,7 @@ export async function validateInstalledBinaryAsync(
     );
   }
 
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (!output.includes('ripgrep')) {
+  if (!result.valid) {
     throw new InvalidCachedBinaryError(
       'Installed binary did not identify itself as ripgrep.',
     );

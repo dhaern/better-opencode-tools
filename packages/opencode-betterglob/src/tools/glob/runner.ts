@@ -1,35 +1,25 @@
-import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { AbortWaitError } from '../../utils/abort';
 import {
-  DEFAULT_CLEANUP_TIMEOUT_MS,
-  DEFAULT_KILL_GRACE_MS,
-  spawnSupervised,
-} from '../../utils/process-supervisor';
-import { AbortWaitError, resolveGlobCliWithAutoInstall } from './resolver';
+  adaptSupervisedSearch,
+  adaptWindowsSearch,
+  cleanupBudget,
+  DEFAULT_SEARCH_KILL_GRACE_MS,
+  type ManagedSearch,
+  toErrorMessage,
+  waitForManagedCleanup,
+  watchSearchCompletion,
+} from '../../utils/process-output';
+import { spawnSupervised } from '../../utils/process-supervisor';
+import { resolveGlobCliWithAutoInstall } from './resolver';
 import { buildRgCommand } from './rg-args';
 import {
   collectMatchedPaths,
   emptyResult,
   sliceLimit,
-  toErrorMessage,
   watchStderr,
 } from './runner-output';
-import {
-  adaptSupervisedSearch,
-  DEFAULT_CLEANUP_WAIT_MS,
-  type ManagedSearch,
-  POST_EXIT_DRAIN_MS,
-  type SearchExit,
-  waitForManagedCleanup,
-} from './supervised-search';
 import type { GlobRunner } from './types';
-
-export { collectMatchedPaths } from './runner-output';
-export {
-  adaptSupervisedSearch,
-  DEFAULT_CLEANUP_WAIT_MS,
-  type ManagedSearch,
-  POST_EXIT_DRAIN_MS,
-} from './supervised-search';
 
 interface SpawnOptions {
   cwd: string;
@@ -38,45 +28,28 @@ interface SpawnOptions {
   postExitDrainMs?: number;
 }
 
-interface RunnerDeps {
+export interface RunnerDeps {
   resolve: typeof resolveGlobCliWithAutoInstall;
-  spawn: (
-    cmd: string,
-    args: string[],
-    opts: SpawnOptions,
-  ) => ChildProcess | ManagedSearch;
+  spawn: (cmd: string, args: string[], opts: SpawnOptions) => ManagedSearch;
   killGraceMs?: number;
   postExitDrainMs?: number;
   // Final-result budget after an early stop, independent of the search timeout.
   cleanupWaitMs?: number;
 }
 
-type Done =
-  | {
-      type: 'close';
-      code: number | null;
-      signal: NodeJS.Signals | null;
-      error?: string;
-    }
-  | {
-      type: 'error';
-      error: unknown;
-    };
+const isTimeoutReason = (signal: AbortSignal) =>
+  signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
 
-function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
-  try {
-    proc?.kill(signal);
-  } catch {
-    // Process may have exited.
-  }
-}
-
-export function createRipgrepRunner(
-  deps: RunnerDeps = {
+export function createDefaultRunnerDeps(): RunnerDeps {
+  return {
+    killGraceMs: DEFAULT_SEARCH_KILL_GRACE_MS,
     resolve: resolveGlobCliWithAutoInstall,
     spawn: (cmd, args, options) =>
       process.platform === 'win32'
-        ? nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio })
+        ? adaptWindowsSearch(
+            nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio }),
+          )
         : adaptSupervisedSearch(
             spawnSupervised([cmd, ...args], {
               cwd: options.cwd,
@@ -87,87 +60,58 @@ export function createRipgrepRunner(
             }),
             { postExitDrainMs: options.postExitDrainMs },
           ),
-  },
+  };
+}
+
+export function createRipgrepRunner(
+  deps: RunnerDeps = createDefaultRunnerDeps(),
 ): GlobRunner {
   return async (input, signal) => {
     const state = { timedOut: false, cancelled: false, limitReached: false };
+    let command: string[] | undefined;
+    const currentCommand = () => (command ??= buildRgCommand(input));
+    const interruptedResult = () =>
+      emptyResult(input, currentCommand(), {
+        incomplete: true,
+        timedOut: state.timedOut,
+        cancelled: state.cancelled,
+        exitCode: INTERRUPT_EXIT_CODES[state.cancelled ? 'cancel' : 'timeout'],
+      });
     const controller = new AbortController();
-    let proc: ChildProcess | undefined;
+    let search: ManagedSearch | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
     let removeAbort = () => undefined;
     let stopStdout: () => void = () => undefined;
     let stopStderr: () => void = () => undefined;
     let clearDone: () => void = () => undefined;
-    let clearReaderErrors: () => void = () => undefined;
-    let managedStop: (() => void) | undefined;
-    let managedExit: (() => SearchExit | undefined) | undefined;
-    let managedCompleted: Promise<SearchExit> | undefined;
-    let childExited = false;
     let stopping = false;
     let stopRequestedAt: number | undefined;
-    const clearKill = () => {
-      clearTimeout(killTimer);
-      killTimer = undefined;
-    };
 
     if (signal.aborted) {
-      const timedOut =
-        signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
-      return emptyResult(input, buildRgCommand(input), {
-        incomplete: true,
-        timedOut,
-        cancelled: !timedOut,
-        exitCode: timedOut ? 124 : 130,
-      });
+      state.timedOut = isTimeoutReason(signal);
+      state.cancelled = !state.timedOut;
+      return interruptedResult();
     }
 
     const stop = () => {
-      if (!proc || stopping) return;
+      if (!search || stopping) return;
       stopping = true;
       stopRequestedAt = performance.now();
-
-      if (managedStop) {
-        managedStop();
-        return;
-      }
-      // Raw injected ChildProcesses have no group-ownership capability.
-      // Never infer one from detached or pid, especially after exit/close.
-      if (childExited) return;
-      if (process.platform === 'win32') {
-        kill(proc);
-        return;
-      }
-
-      kill(proc, 'SIGTERM');
-      if (!killTimer) {
-        killTimer = setTimeout(() => {
-          if (!childExited) kill(proc, 'SIGKILL');
-          clearKill();
-          clearDone();
-        }, deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
-        killTimer.unref?.();
-      }
+      search.stop();
     };
 
-    let finishCancel: ((value: 'cancel') => void) | undefined;
-    const cancelResult = new Promise<'cancel'>((resolve) => {
-      finishCancel = resolve;
-    });
-    let finishTimeout: ((value: 'timeout') => void) | undefined;
-    const timeoutResult = new Promise<'timeout'>((resolve) => {
-      finishTimeout = resolve;
+    let finishInterrupt!: (value: 'cancel' | 'timeout') => void;
+    const interruptResult = new Promise<'cancel' | 'timeout'>((resolve) => {
+      finishInterrupt = resolve;
     });
 
     const onAbort = () => {
-      const timedOut =
-        signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+      const timedOut = isTimeoutReason(signal);
       state.timedOut ||= timedOut;
       state.cancelled ||= !timedOut;
       controller.abort();
       stop();
-      if (timedOut) finishTimeout?.('timeout');
-      else finishCancel?.('cancel');
+      finishInterrupt(timedOut ? 'timeout' : 'cancel');
     };
 
     signal.addEventListener('abort', onAbort, { once: true });
@@ -181,31 +125,23 @@ export function createRipgrepRunner(
       state.timedOut = true;
       controller.abort();
       stop();
-      finishTimeout?.('timeout');
+      finishInterrupt('timeout');
     }, input.timeoutMs);
     timeout.unref?.();
-
-    let command = buildRgCommand(input);
 
     try {
       const resolved = await Promise.race([
         deps
-          .resolve({}, controller.signal, {
+          .resolve(undefined, controller.signal, {
             allowAutoInstall: input.allowAutoInstall === true,
           })
           .then((cli) => ({ type: 'cli' as const, cli }))
           .catch((error) => ({ type: 'resolve-error' as const, error })),
-        cancelResult,
-        timeoutResult,
+        interruptResult,
       ]);
 
       if (resolved === 'cancel' || resolved === 'timeout') {
-        return emptyResult(input, command, {
-          incomplete: true,
-          timedOut: state.timedOut,
-          cancelled: state.cancelled,
-          exitCode: state.cancelled ? 130 : 124,
-        });
+        return interruptedResult();
       }
 
       if (resolved.type === 'resolve-error') {
@@ -213,15 +149,10 @@ export function createRipgrepRunner(
           resolved.error instanceof AbortWaitError ||
           controller.signal.aborted
         ) {
-          return emptyResult(input, command, {
-            incomplete: true,
-            timedOut: state.timedOut,
-            cancelled: state.cancelled,
-            exitCode: state.cancelled ? 130 : 124,
-          });
+          return interruptedResult();
         }
 
-        return emptyResult(input, command, {
+        return emptyResult(input, currentCommand(), {
           exitCode: 1,
           error: toErrorMessage(resolved.error),
         });
@@ -232,43 +163,24 @@ export function createRipgrepRunner(
       command = buildRgCommand(input, cli.path);
       try {
         const [cmd, ...args] = command;
-        // The CLI promise can win the race before abort is delivered, while
-        // this continuation is still queued. Recheck at the spawn boundary.
+        // Recheck at spawn: the CLI race may settle before abort is delivered.
         if (signal.aborted || controller.signal.aborted) {
-          return emptyResult(input, command, {
-            incomplete: true,
-            timedOut: state.timedOut,
-            cancelled: state.cancelled,
-            exitCode: state.cancelled ? 130 : 124,
-          });
+          return interruptedResult();
         }
-        const spawned = deps.spawn(cmd, args, {
+        search = deps.spawn(cmd, args, {
           stdio: ['ignore', 'pipe', 'pipe'],
           cwd: input.searchPath,
           killGraceMs: deps.killGraceMs,
           postExitDrainMs: deps.postExitDrainMs,
         });
-        if ('child' in spawned) {
-          proc = spawned.child;
-          managedStop = spawned.stop;
-          managedExit = spawned.readExit;
-          // Normalize rejection before subscribing or racing: early-stop
-          // winners must not orphan a rejected completion promise.
-          managedCompleted = spawned.completed.catch((error) => ({
-            ...(spawned.readExit() ?? { code: null, signal: null }),
-            error: `Supervisor cleanup unconfirmed: ${toErrorMessage(error)}`,
-          }));
-        } else {
-          proc = spawned;
-        }
       } catch (error) {
-        return emptyResult(input, command, {
+        return emptyResult(input, currentCommand(), {
           exitCode: 1,
           error: toErrorMessage(error),
         });
       }
 
-      const child = proc;
+      const child = search.child;
 
       let finishLimit: ((value: 'limit') => void) | undefined;
       const limitResult = new Promise<'limit'>((resolve) => {
@@ -287,155 +199,66 @@ export function createRipgrepRunner(
       stopStdout = stdout.stop;
       stopStderr = stderr.stop;
 
-      const done = new Promise<Done>((resolve) => {
-        let settled = false;
-        const settle = (value: Done) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        };
-        const onExit = () => {
-          childExited = true;
-          clearKill();
-        };
-        const onClose = (
-          code: number | null,
-          closeSignal: NodeJS.Signals | null,
-        ) => {
-          // The sentinel owns escalation independently of the direct child.
-          // Closing this child must never cause signalling a saved PGID.
-          onExit();
-          if (managedCompleted) return;
-          clearDone();
-          settle({ type: 'close', code, signal: closeSignal });
-        };
-        const onError = (error: unknown) => {
-          if (settled) return;
-          // A stream/child error must START termination, not skip it:
-          // SIGTERM now, SIGKILL after the grace period.
-          stop();
-          if (managedCompleted) return;
-          settle({ type: 'error', error });
-        };
-
-        child.once('close', onClose);
-        child.once('exit', onExit);
-        child.on('error', onError);
-        // Stream errors (EPIPE, ECONNRESET on the pipe, ...) must funnel
-        // into the same settlement; otherwise they become unhandled
-        // 'error' events that crash the plugin process.
-        child.stdout?.on('error', onError);
-        child.stderr?.on('error', onError);
-        clearReaderErrors = () => {
-          child.stdout?.removeListener('error', onError);
-          child.stderr?.removeListener('error', onError);
-        };
-        clearDone = () => {
-          child.removeListener('close', onClose);
-          child.removeListener('exit', onExit);
-          child.removeListener('error', onError);
-          clearReaderErrors();
-        };
-        void managedCompleted?.then((exit) => {
-          clearDone();
-          settle({ type: 'close', ...exit });
-        });
-      });
+      const completion = watchSearchCompletion(search, stop);
+      clearDone = completion.clear;
 
       // Also handle a synchronous abort from an injected spawn implementation.
       if (controller.signal.aborted) stop();
 
       const ended = await Promise.race([
-        done,
-        timeoutResult,
-        cancelResult,
+        completion.done,
+        interruptResult,
         limitResult,
       ]);
-      const earlyStop =
-        ended === 'timeout' || ended === 'cancel' || ended === 'limit';
-      let finalExit = !earlyStop && ended.type === 'close' ? ended : undefined;
+      const earlyStop = typeof ended === 'string';
+      let finalExit = !earlyStop ? ended : undefined;
       let cleanupError: string | undefined;
-      if (earlyStop && managedCompleted) {
+      if (earlyStop) {
         // Search has ended. Do not let its deadline reclassify a limit stop
         // while we wait for the independently bounded cleanup protocol.
         clearTimeout(timeout);
         removeAbort();
-        const defaultBudget =
-          (deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS) +
-          DEFAULT_CLEANUP_TIMEOUT_MS +
-          (deps.postExitDrainMs ?? POST_EXIT_DRAIN_MS);
-        const requestedBudget = deps.cleanupWaitMs ?? defaultBudget;
-        const budget = Number.isFinite(requestedBudget)
-          ? Math.max(0, Math.min(requestedBudget, 2_147_483_647))
-          : DEFAULT_CLEANUP_WAIT_MS;
+        const budget = cleanupBudget({
+          killGraceMs: deps.killGraceMs,
+          postCloseDrainMs: deps.postExitDrainMs,
+          cleanupWaitMs: deps.cleanupWaitMs,
+        });
         const remaining = Math.max(
           0,
           budget - (performance.now() - (stopRequestedAt ?? performance.now())),
         );
         const cleanup = await waitForManagedCleanup(
-          managedCompleted,
+          search.completed,
           remaining,
         );
-        if (cleanup) finalExit = { type: 'close', ...cleanup };
+        if (cleanup) finalExit = cleanup;
         else {
           cleanupError =
-            'Supervisor cleanup unconfirmed: cleanup wait deadline exceeded';
+            'Search cleanup unconfirmed: cleanup wait deadline exceeded';
         }
-        clearDone();
       }
-      const incomplete =
-        state.timedOut ||
-        state.cancelled ||
-        ended === 'timeout' ||
-        ended === 'cancel';
+      const incomplete = state.timedOut || state.cancelled;
       const output = stdout.read();
       const err = stderr.read();
       const result = sliceLimit(input, output);
-      if (
-        ended !== 'timeout' &&
-        ended !== 'cancel' &&
-        ended !== 'limit' &&
-        ended.type !== 'error'
-      ) {
-        clearDone();
-      }
-
-      const exitCode =
-        ended === 'timeout'
-          ? (finalExit?.code ?? managedExit?.()?.code ?? child.exitCode ?? 124)
-          : ended === 'cancel'
-            ? (finalExit?.code ??
-              managedExit?.()?.code ??
-              child.exitCode ??
-              130)
-            : ended === 'limit'
-              ? (finalExit?.code ??
-                managedExit?.()?.code ??
-                child.exitCode ??
-                0)
-              : ended.type === 'close'
-                ? (ended.code ?? 1)
-                : 1;
+      const exitCode = earlyStop
+        ? (finalExit?.code ??
+          search.readExit()?.code ??
+          INTERRUPT_EXIT_CODES[ended])
+        : (ended.code ?? 1);
       const interrupted =
         state.timedOut || state.cancelled || state.limitReached;
       const exitError =
         cleanupError ??
         finalExit?.error ??
-        (!earlyStop && ended.type === 'error'
-          ? toErrorMessage(ended.error)
-          : !interrupted && finalExit?.signal
-            ? `rg terminated by signal ${finalExit.signal}`
-            : undefined);
+        (!interrupted && finalExit?.signal
+          ? `rg terminated by signal ${finalExit.signal}`
+          : undefined);
 
       // Native parity: exit 2 with rows already collected is a partial
       // success (e.g. a permission-denied subtree), not a hard failure.
       const partialByExitCode =
-        ended !== 'cancel' &&
-        ended !== 'timeout' &&
-        ended !== 'limit' &&
-        ended.type === 'close' &&
-        ended.code === 2 &&
-        result.length > 0;
+        !earlyStop && ended.code === 2 && result.length > 0;
       const failed =
         Boolean(exitError) ||
         (!interrupted &&
@@ -463,19 +286,17 @@ export function createRipgrepRunner(
           : {}),
       };
     } catch (error) {
-      return emptyResult(input, command, {
+      return emptyResult(input, currentCommand(), {
         exitCode: 1,
         error: toErrorMessage(error),
       });
     } finally {
       clearTimeout(timeout);
       removeAbort();
-      clearReaderErrors();
+      clearDone();
       stopStdout();
       stopStderr();
-      // Readers have their own error guards through destruction. Their run
-      // listeners are not needed while background termination finishes.
-      // Child listeners remain until close or the bounded escalation timer.
+      // Reader guards survive destruction; child listeners last until close/escalation.
     }
   };
 }

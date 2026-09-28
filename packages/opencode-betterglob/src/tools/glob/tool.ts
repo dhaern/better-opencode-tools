@@ -3,12 +3,9 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import { runOpenCodeSideEffect } from '../../utils/opencode-effects';
-import {
-  GLOB_DESCRIPTION,
-  GLOB_TOOL_ID,
-  UNSUPPORTED_FOLLOW_SYMLINKS_ERROR,
-} from './constants';
+import { raceSignal } from '../../utils/abort';
+import { runOpenCodeSideEffect } from '../../utils/tool-context';
+import { GLOB_DESCRIPTION, GLOB_TOOL_ID } from './constants';
 import { formatGlobResult } from './format';
 import { normalizeGlobInputAsync, resolveGlobScope } from './normalize';
 import { type ResolvedGlobCli, resolveGlobCliAsync } from './resolver';
@@ -22,14 +19,13 @@ import {
   failureMetadata,
   resultMetadata,
   title,
-} from './tool-context';
+} from './tool-adapter';
 import {
   AutoClock,
   abortReason,
+  RUNNER_ABORT_GRACE_MS,
   raceAbort,
-  runWithDeadline,
   TIMEOUT_ERROR_MESSAGE,
-  timeoutBudget,
   withHumanPause,
 } from './tool-deadline';
 import type { GlobRunner, GlobToolInput, NormalizedGlobInput } from './types';
@@ -48,21 +44,18 @@ export function createGlobTool(
   const run = options.run ?? runRipgrep;
   const resolveCli =
     options.resolveCli ??
-    ((signal?: AbortSignal) => resolveGlobCliAsync({}, signal));
-  const argsSchema = globArgsSchema as Parameters<typeof tool>[0]['args'];
-
+    ((signal?: AbortSignal) => resolveGlobCliAsync(undefined, signal));
   return tool({
     description: GLOB_DESCRIPTION,
-    args: argsSchema,
+    args: globArgsSchema,
     async execute(args, ctx) {
+      // Keep the plugin schema boundary explicit; inferring it via satisfies
+      // exposes non-portable plugin types (TS2742) in declaration output.
       const raw = args as unknown as GlobToolInput;
       let input: NormalizedGlobInput | undefined;
       let stage: 'normalize' | 'permission' | 'execution' = 'normalize';
 
       try {
-        if (raw.follow_symlinks === true) {
-          throw new Error(UNSUPPORTED_FOLLOW_SYMLINKS_ERROR);
-        }
         const scope = resolveGlobScope(raw, ctx, pluginCtx);
         stage = 'permission';
 
@@ -74,8 +67,6 @@ export function createGlobTool(
                 patterns: [raw.pattern],
                 always: ['*'],
                 metadata: {
-                  pattern: raw.pattern,
-                  path: raw.path,
                   ...baseMetadata(raw, input),
                 },
               }),
@@ -83,7 +74,7 @@ export function createGlobTool(
           ctx.abort,
         );
 
-        const clock = new AutoClock(timeoutBudget(raw.timeout_ms));
+        const clock = new AutoClock(scope.timeoutMs);
         clock.start();
         const phaseSignal = AbortSignal.any([
           ctx.abort,
@@ -94,7 +85,6 @@ export function createGlobTool(
           directory: scope.cwd,
           worktree: scope.worktreeRoot,
           searchPath: scope.resolvedPath,
-          followSymlinks: false,
         };
         try {
           await withHumanPause(clock, phaseSignal, () =>
@@ -103,7 +93,7 @@ export function createGlobTool(
 
           stage = 'normalize';
           const normalizedInput = await raceAbort(
-            () => normalizeGlobInputAsync(raw, ctx, pluginCtx),
+            () => normalizeGlobInputAsync(raw, ctx, pluginCtx, scope),
             phaseSignal,
           );
           input = normalizedInput;
@@ -117,7 +107,6 @@ export function createGlobTool(
                 directory: normalizedInput.cwd,
                 worktree: normalizedInput.worktree,
                 searchPath: normalizedInput.searchPath,
-                followSymlinks: false,
               }),
             );
           }
@@ -135,16 +124,7 @@ export function createGlobTool(
             input = { ...normalizedInput, allowAutoInstall: true };
           }
 
-          const remaining = clock.remainingMs();
-          if (remaining <= 0 || clock.controller.signal.aborted) {
-            throw new Error(TIMEOUT_ERROR_MESSAGE);
-          }
-
-          stage = 'execution';
           const executionInput = input;
-          if (!executionInput) {
-            throw new Error('glob search normalization produced no input.');
-          }
           // Preparation consumed the clock's budget. Pause it before entering
           // the runner: the runner owns the search deadline, and its bounded
           // cleanup phase must not be mistaken for additional automatic work.
@@ -156,26 +136,19 @@ export function createGlobTool(
           if (executionRemaining <= 0) {
             throw new Error(TIMEOUT_ERROR_MESSAGE);
           }
-          const executionDeadline = new AbortController();
+          const executionClock = new AutoClock(executionRemaining);
+          executionClock.start();
           const executionSignal = AbortSignal.any([
             ctx.abort,
-            executionDeadline.signal,
+            executionClock.controller.signal,
           ]);
-          const executionTimer = setTimeout(
-            () => {
-              const error = new Error(TIMEOUT_ERROR_MESSAGE);
-              error.name = 'TimeoutError';
-              executionDeadline.abort(error);
-            },
-            Math.max(1, Math.floor(executionRemaining)),
-          );
-          executionTimer.unref?.();
 
           try {
+            stage = 'execution';
             // The runner's deadline covers its async resolver and rg process;
             // cap it by the remaining automatic budget. runWithDeadline then
             // waits long enough to receive the runner's bounded cleanup result.
-            const result = await runWithDeadline(
+            const result = await raceSignal(
               () =>
                 run(
                   {
@@ -185,6 +158,7 @@ export function createGlobTool(
                   executionSignal,
                 ),
               executionSignal,
+              { graceMs: RUNNER_ABORT_GRACE_MS, reason: abortReason },
             );
             const output = formatGlobResult(executionInput, result);
             const metadata = resultMetadata(raw, executionInput, result);
@@ -195,7 +169,7 @@ export function createGlobTool(
             // here instead of overwriting it with an empty object.
             return { title: title(raw, executionInput), output, metadata };
           } finally {
-            clearTimeout(executionTimer);
+            executionClock.dispose();
           }
         } finally {
           clock.dispose();

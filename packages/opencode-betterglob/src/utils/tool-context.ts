@@ -1,19 +1,15 @@
-import { Effect } from 'effect';
+import type { Effect } from 'effect';
 
-export type MaybeEffect<T> = T | Promise<T> | Effect.Effect<T>;
-
-export function isMissingInstanceRefError(error: unknown): boolean {
-  return (
-    error instanceof Error && error.message.includes('InstanceRef not provided')
-  );
-}
+export type MaybeEffect<T> = T | Promise<T> | Effect.Effect<T, unknown>;
 
 export async function resolveOpenCodeEffect<T>(
   value: MaybeEffect<T>,
 ): Promise<T> {
-  if (!Effect.isEffect(value)) return Promise.resolve(value);
-
-  return Effect.runPromise(value);
+  if (typeof value !== 'object' || value === null) return value as T;
+  if ('then' in value && typeof value.then === 'function')
+    return (await value) as T;
+  const { Effect: runtime } = await import('effect');
+  return runtime.isEffect(value) ? runtime.runPromise(value) : (value as T);
 }
 
 export async function runOpenCodeSideEffect<T>(

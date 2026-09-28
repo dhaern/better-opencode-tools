@@ -1,13 +1,7 @@
+import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { destroyReader, watchCappedStream } from '../../utils/process-output';
 import type { GlobSearchResult, NormalizedGlobInput } from './types';
-
-export function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// Diagnostic cap mirroring the native core-ripgrep adapter (8 KiB). The
-// stream keeps being drained so a chatty child cannot block on a full pipe.
-const STDERR_CAP_BYTES = 8 * 1024;
 
 export function sliceLimit(
   input: NormalizedGlobInput,
@@ -69,48 +63,12 @@ function watchReader(
     stream.removeListener('data', onData);
     const reader = stream as DestroyableReadable;
     if (reader.closed || !reader.destroy) onClose();
-    else reader.destroy();
+    else destroyReader(reader as ChildProcess['stdout']);
   };
 }
 
 export function watchStderr(stream: NodeJS.ReadableStream | null): StderrWatch {
-  if (!stream) {
-    return {
-      read: () => '',
-      stop: () => undefined,
-    };
-  }
-
-  let buffer = Buffer.alloc(0);
-  let truncated = false;
-  const chunks: Buffer[] = [];
-  let retained = 0;
-  const onData = (chunk: Buffer | string) => {
-    const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    if (retained >= STDERR_CAP_BYTES) {
-      truncated = true;
-      return;
-    }
-    if (retained + data.length > STDERR_CAP_BYTES) {
-      chunks.push(data.subarray(0, STDERR_CAP_BYTES - retained));
-      retained = STDERR_CAP_BYTES;
-      truncated = true;
-      return;
-    }
-    chunks.push(data);
-    retained += data.length;
-  };
-
-  const stop = watchReader(stream, onData);
-
-  return {
-    read: () => {
-      buffer = Buffer.concat(chunks);
-      const text = buffer.toString('utf-8');
-      return truncated ? `${text}\n[stderr truncated at 8192 bytes]` : text;
-    },
-    stop,
-  };
+  return watchCappedStream(stream as ChildProcess['stdout'], 'stderr');
 }
 
 // rg emits NUL-delimited relative paths (--null). Records are split on the
@@ -150,9 +108,8 @@ export function collectMatchedPaths(
 
     const data =
       typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
-    let searchable = Buffer.concat(
-      pending.length === 0 ? [data] : [pending, data],
-    );
+    let searchable =
+      pending.length === 0 ? data : Buffer.concat([pending, data]);
     pending = Buffer.alloc(0);
 
     let separator = searchable.indexOf(0);
@@ -173,7 +130,7 @@ export function collectMatchedPaths(
     // terminates every record; a leftover fragment means the process was
     // cut mid-write (abort/timeout/limit), and publishing it would invent
     // paths that may not exist.
-    read: () => [...files],
+    read: () => files,
     stop,
   };
 }

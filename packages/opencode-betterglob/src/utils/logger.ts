@@ -9,13 +9,6 @@ const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 let logFile: string | null = null;
 let initialization: Promise<void> | null = null;
 
-function getLogDir(): string {
-  return (
-    process.env.OPENCODE_LOG_DIR ??
-    path.join(os.homedir(), '.local/share/opencode')
-  );
-}
-
 async function cleanupOldLogs(dir: string): Promise<void> {
   try {
     const entries = await fs.readdir(dir);
@@ -39,7 +32,9 @@ async function cleanupOldLogs(dir: string): Promise<void> {
 }
 
 export function initLogger(sessionId: string): void {
-  const dir = getLogDir();
+  const dir =
+    process.env.OPENCODE_LOG_DIR ??
+    path.join(os.homedir(), '.local/share/opencode');
   logFile = path.join(dir, `${LOG_PREFIX}${sessionId}${LOG_SUFFIX}`);
   initialization = null;
 }

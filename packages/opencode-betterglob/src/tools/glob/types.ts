@@ -24,7 +24,6 @@ export interface NormalizedGlobInput {
   sortBy: GlobSortMode;
   sortOrder: GlobSortOrder;
   hidden: boolean;
-  followSymlinks: boolean;
   timeoutMs: number;
   cwd: string;
   worktree: string;
