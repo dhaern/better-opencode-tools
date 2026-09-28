@@ -69,9 +69,7 @@ function stable(
       .replaceAll(root, '<ROOT>')
       .replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
   const files =
-    order === 'none'
-      ? [...result.files].sort(comparePathBytes)
-      : result.files;
+    order === 'none' ? [...result.files].sort(comparePathBytes) : result.files;
   return {
     backend: result.backend,
     mode: result.outputMode,

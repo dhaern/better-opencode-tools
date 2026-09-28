@@ -13,6 +13,47 @@ import { createRepoContext, createTempTracker } from './test-helpers';
 describe('tools/grep/fallback', () => {
   const temps = createTempTracker();
 
+  test('GNU grep fallback clears inherited LANGUAGE while forcing a UTF-8 locale', async () => {
+    const repoDir = temps.createRepo();
+    const dir = temps.createDir('bettergrep-locale');
+    const marker = path.join(dir, 'locale');
+    const wrapper = path.join(dir, 'grep-wrapper.sh');
+    writeFileSync(
+      wrapper,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        "  printf 'grep (GNU grep) 3.11\\n'",
+        '  exit 0',
+        'fi',
+        `printf '%s|%s\\n' "$LC_ALL" "\${LANGUAGE-<unset>}" > ${JSON.stringify(marker)}`,
+        'exit 1',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'needle', path: path.join(repoDir, 'src', 'example.ts') },
+      createRepoContext(repoDir) as never,
+    );
+    const previousLcAll = process.env.LC_ALL;
+    const previousLanguage = process.env.LANGUAGE;
+    try {
+      process.env.LC_ALL = 'C';
+      process.env.LANGUAGE = 'es';
+      await executeGrepFallback(input, new AbortController().signal, {
+        path: wrapper,
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      });
+      expect(readFileSync(marker, 'utf8')).toBe('C.UTF-8|\n');
+    } finally {
+      if (previousLcAll === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = previousLcAll;
+      if (previousLanguage === undefined) delete process.env.LANGUAGE;
+      else process.env.LANGUAGE = previousLanguage;
+    }
+  });
+
   test.each([
     {
       name: 'exit1 with empty stdout means no matches',

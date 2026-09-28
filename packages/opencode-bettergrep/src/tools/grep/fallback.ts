@@ -44,7 +44,9 @@ export async function executeGrepFallback(
   return executeMode(input, signal, cli, {
     command,
     warnings,
-    env: { ...process.env, LC_ALL: 'C.UTF-8' },
+    // C.UTF-8 can fall back to C (including on musl); on glibc <2.39,
+    // LANGUAGE can override LC_ALL for messages, so clear it explicitly.
+    env: { ...process.env, LC_ALL: 'C.UTF-8', LANGUAGE: '' },
     init: () => ({
       parsed: {
         files: [] as GrepFileMatch[],
