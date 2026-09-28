@@ -2,10 +2,10 @@ import { CONTEXT_BUFFER_MULTIPLIER } from './constants';
 import { decodeRgPayload } from './json-stream';
 import {
   buildPathFromBytes,
-  getDisplayPath,
+  capRawLine,
   normalizeDisplayText,
-  resolveAbsolutePath,
 } from './path-utils';
+import { appendContextLine, createFileMatch } from './result-utils';
 import type {
   GrepContextLine,
   GrepFileMatch,
@@ -44,46 +44,13 @@ function trimLineEnd(text: string | undefined): string {
     return '';
   }
 
-  const normalized = normalizeDisplayText(text);
+  const normalized = normalizeDisplayText(capRawLine(text));
   return normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
-}
-
-function pushUniqueLineKeepingLast(
-  target: GrepContextLine[],
-  line: GrepContextLine,
-  maxItems: number,
-): void {
-  const last = target[target.length - 1];
-  if (last && last.lineNumber === line.lineNumber && last.text === line.text) {
-    return;
-  }
-
-  target.push(line);
-
-  if (target.length > maxItems) {
-    target.splice(0, target.length - maxItems);
-  }
-}
-
-function pushUniqueLineKeepingFirst(
-  target: GrepContextLine[],
-  line: GrepContextLine,
-  maxItems: number,
-): void {
-  const last = target[target.length - 1];
-  if (last && last.lineNumber === line.lineNumber && last.text === line.text) {
-    return;
-  }
-
-  if (target.length >= maxItems) {
-    return;
-  }
-
-  target.push(line);
 }
 
 export class GrepAggregator {
   private readonly files = new Map<string, InternalFileState>();
+  private readonly pathInfoCache = new Map<string, ResolvedPathInfo>();
   private totalMatches = 0;
   private limitReached = false;
   private acceptingMatches = true;
@@ -206,13 +173,15 @@ export class GrepAggregator {
       return;
     }
 
-    pushUniqueLineKeepingFirst(
+    appendContextLine(
       lastMatch.after,
       {
         lineNumber: event.data.line_number,
         text: trimLineEnd(decodeRgPayload(event.data.lines)),
       },
       this.input.afterContext,
+      true,
+      true,
     );
 
     if (lastMatch.after.length >= this.input.afterContext) {
@@ -247,10 +216,12 @@ export class GrepAggregator {
         this.input.beforeContext * CONTEXT_BUFFER_MULTIPLIER,
       );
 
-      pushUniqueLineKeepingLast(
+      appendContextLine(
         fileState.beforeBuffer,
         contextLine,
         bufferSize,
+        false,
+        true,
       );
     }
 
@@ -260,10 +231,12 @@ export class GrepAggregator {
       this.input.afterContext > 0 &&
       contextLine.lineNumber > lastMatch.lineNumber
     ) {
-      pushUniqueLineKeepingFirst(
+      appendContextLine(
         lastMatch.after,
         contextLine,
         this.input.afterContext,
+        true,
+        true,
       );
 
       if (
@@ -311,13 +284,13 @@ export class GrepAggregator {
     let fileState = this.files.get(pathInfo.pathKey);
     if (!fileState) {
       fileState = {
-        file: pathInfo.file,
-        absolutePath: pathInfo.absolutePath,
-        replayPath: pathInfo.replayPath,
-        nonUtf8Path: pathInfo.nonUtf8Path,
-        pathKey: pathInfo.pathKey,
-        matchCount: 0,
-        matches: [],
+        ...createFileMatch({
+          file: pathInfo.file,
+          absolutePath: pathInfo.absolutePath,
+          replayPath: pathInfo.replayPath,
+          nonUtf8Path: pathInfo.nonUtf8Path,
+          pathKey: pathInfo.pathKey,
+        }),
         beforeBuffer: [],
       };
       this.files.set(pathInfo.pathKey, fileState);
@@ -332,32 +305,32 @@ export class GrepAggregator {
       | RgContextEvent['data']['path']
       | RgEndEvent['data']['path'],
   ): ResolvedPathInfo {
-    if (payload?.bytes) {
-      const pathInfo = buildPathFromBytes(
-        Buffer.from(payload.bytes, 'base64'),
-        this.input.cwd,
-        this.input.worktree,
-      );
-      return {
-        absolutePath: pathInfo.absolutePath,
-        file: pathInfo.displayPath,
-        pathKey: pathInfo.pathKey,
-        replayPath: pathInfo.replayPath,
-        nonUtf8Path: pathInfo.nonUtf8Path,
-      };
-    }
+    // Every event of a file repeats its path payload: resolve once per
+    // distinct file instead of once per match and context line.
+    const cacheKey =
+      payload?.bytes != null
+        ? `b:${payload.bytes}`
+        : `t:${payload?.text ?? ''}`;
+    const cached = this.pathInfoCache.get(cacheKey);
+    if (cached) return cached;
 
-    const absolutePath = this.resolveAbsolutePath(payload?.text ?? '');
-    return {
-      absolutePath,
-      file: getDisplayPath(absolutePath, this.input.worktree),
-      pathKey: `utf8:${absolutePath}`,
-      replayPath: absolutePath,
-      nonUtf8Path: false,
+    // Both payload shapes funnel through the single bytes factory: the text
+    // branch is exactly its UTF-8 case.
+    const pathInfo = buildPathFromBytes(
+      payload?.bytes
+        ? Buffer.from(payload.bytes, 'base64')
+        : Buffer.from(payload?.text ?? '', 'utf8'),
+      this.input.cwd,
+      this.input.worktree,
+    );
+    const resolved: ResolvedPathInfo = {
+      absolutePath: pathInfo.absolutePath,
+      file: pathInfo.displayPath,
+      pathKey: pathInfo.pathKey,
+      replayPath: pathInfo.replayPath,
+      nonUtf8Path: pathInfo.nonUtf8Path,
     };
-  }
-
-  private resolveAbsolutePath(filePath: string): string {
-    return resolveAbsolutePath(filePath, this.input.cwd);
+    this.pathInfoCache.set(cacheKey, resolved);
+    return resolved;
   }
 }

@@ -1,4 +1,5 @@
 import type {
+  GrepContextLine,
   GrepFileMatch,
   GrepMatchKind,
   GrepSearchResult,
@@ -40,6 +41,73 @@ export function createEmptyResult(
     stderr: '',
     warnings: [],
   };
+}
+
+export interface FileMatchInfo {
+  file: string;
+  absolutePath: string;
+  replayPath?: string;
+  nonUtf8Path?: boolean;
+  pathKey?: string;
+}
+
+/**
+ * Single file-match factory for every result model (ripgrep, GNU fallback,
+ * mtime discovery). Optional fields stay absent when undefined so each
+ * backend keeps its exact observable shape.
+ */
+export function createFileMatch(info: FileMatchInfo): GrepFileMatch {
+  return {
+    file: info.file,
+    absolutePath: info.absolutePath,
+    ...(info.replayPath !== undefined ? { replayPath: info.replayPath } : {}),
+    ...(info.nonUtf8Path !== undefined
+      ? { nonUtf8Path: info.nonUtf8Path }
+      : {}),
+    ...(info.pathKey !== undefined ? { pathKey: info.pathKey } : {}),
+    matchCount: 0,
+    matches: [],
+  };
+}
+
+/**
+ * Bounded context-line buffer shared by the ripgrep and GNU fallback result
+ * models. keepFirst retains the earliest lines (trailing `after` context);
+ * otherwise the latest lines are retained (rolling `before` context).
+ */
+export function appendContextLine(
+  target: GrepContextLine[],
+  line: GrepContextLine,
+  maxItems: number,
+  keepFirst: boolean,
+  dedupeAdjacent: boolean,
+): void {
+  if (maxItems <= 0) {
+    return;
+  }
+
+  const last = target[target.length - 1];
+  if (
+    dedupeAdjacent &&
+    last &&
+    last.lineNumber === line.lineNumber &&
+    last.text === line.text
+  ) {
+    return;
+  }
+
+  if (keepFirst) {
+    if (target.length >= maxItems) {
+      return;
+    }
+    target.push(line);
+    return;
+  }
+
+  target.push(line);
+  if (target.length > maxItems) {
+    target.splice(0, target.length - maxItems);
+  }
 }
 
 export function hasVisibleResults(
@@ -141,30 +209,6 @@ export function finalizeMtimeContentResult(
     totalMatches: visibleMatches,
     totalFiles: limitedFiles.length,
     matchKind: 'match',
-    truncated: baseResult.truncated || limitReached,
-    limitReached,
-  };
-}
-
-export function finalizeMtimeSimpleResult(
-  input: NormalizedGrepInput,
-  files: GrepFileMatch[],
-  baseResult: GrepSearchResult,
-  moreDueToLimit: boolean,
-): GrepSearchResult {
-  const limitedFiles = files.slice(0, input.maxResults);
-  const totalMatches =
-    input.outputMode === 'count'
-      ? countOccurrences(limitedFiles)
-      : limitedFiles.length;
-  const limitReached = baseResult.limitReached || moreDueToLimit;
-
-  return {
-    ...baseResult,
-    files: limitedFiles,
-    totalMatches,
-    totalFiles: limitedFiles.length,
-    matchKind: getMatchKind(input.outputMode),
     truncated: baseResult.truncated || limitReached,
     limitReached,
   };

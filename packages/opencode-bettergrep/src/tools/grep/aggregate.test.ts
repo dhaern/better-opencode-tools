@@ -11,6 +11,37 @@ import { createTempTracker, createTextStream } from './test-helpers';
 describe('tools/grep/aggregate', () => {
   const temps = createTempTracker();
 
+  test('retains at most 4004 raw units in match and context text', () => {
+    const repo = temps.createRepo();
+    const aggregator = new GrepAggregator({
+      cwd: repo,
+      worktree: repo,
+      maxResults: 2,
+      beforeContext: 1,
+      afterContext: 1,
+    });
+    const path = { text: 'src/example.ts' };
+    const lines = { text: `needle${'x'.repeat(10_000)}\n` };
+    aggregator.consume({
+      type: 'context',
+      data: { path, lines, line_number: 1 },
+    });
+    aggregator.consume({
+      type: 'match',
+      data: { path, lines, line_number: 2, submatches: [] },
+    });
+    aggregator.consume({
+      type: 'context',
+      data: { path, lines, line_number: 3 },
+    });
+    const match = aggregator.snapshot().files[0]?.matches[0];
+    expect([
+      match?.lineText.length,
+      match?.before[0]?.text.length,
+      match?.after[0]?.text.length,
+    ]).toEqual([4004, 4004, 4004]);
+  });
+
   test('aggregates asymmetric before/after context independently', () => {
     const repoDir = temps.createRepo();
     const aggregator = new GrepAggregator({

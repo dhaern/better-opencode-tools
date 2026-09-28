@@ -46,15 +46,15 @@
     "format": "biome format src package.json README.md biome.json tsconfig.json --write"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.29",
-    "effect": "4.0.0-beta.74",
-    "which": "^6.0.1"
+    "@opencode-ai/plugin": "1.18.32",
+    "effect": "4.0.0-beta.83",
+    "which": "^7.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.11",
-    "@types/node": "^24.6.1",
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^24.19.0",
     "@types/which": "^3.0.4",
-    "bun-types": "1.3.12",
-    "typescript": "^5.9.3"
+    "bun-types": "1.4.2",
+    "typescript": "^7.0.2"
   }
 }

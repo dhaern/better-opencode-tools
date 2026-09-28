@@ -1,8 +1,18 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  openSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
-import { executeFilesMode } from './direct';
+import which from 'which';
+import { executeFileListMode } from './direct';
 import { normalizeGrepInput } from './normalize';
 import { runRipgrep } from './runner';
 import { createGlobalAbortState, setAbortKind } from './runtime';
@@ -11,6 +21,141 @@ import type { GrepToolInput } from './types';
 
 describe('tools/grep/runner', () => {
   const temps = createTempTracker();
+
+  test('invalidates the memoized probe after an ENOENT execution failure', async () => {
+    const repoDir = temps.createRepo();
+    const wrapperDir = temps.createDir('bettergrep-spawn-failure');
+    const calls = path.join(wrapperDir, 'probes');
+    const binary = path.join(wrapperDir, 'rg');
+    writeFileSync(
+      binary,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        `  printf 'probe\\n' >> "${calls}"`,
+        "  printf 'ripgrep 15.2.0\\n'",
+        '  exit 0',
+        'fi',
+        "printf 'spawn failed: ENOENT\\n' >&2",
+        'exit 2',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repoDir, fixed_strings: true },
+      createRepoContext(repoDir) as any,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = `${wrapperDir}${path.delimiter}${previousPath ?? ''}`;
+      const first = await runRipgrep(input, new AbortController().signal);
+      const second = await runRipgrep(input, new AbortController().signal);
+      expect(first.error).toContain('ENOENT');
+      expect(second.error).toContain('ENOENT');
+      expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(2);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test('re-probes an mtime CLI after its executable permission is removed', async () => {
+    const repo = temps.createRepo();
+    const dir = temps.createDir('bettergrep-chmod');
+    const binary = path.join(dir, 'rg');
+    writeFileSync(
+      binary,
+      `#!/bin/sh\nexec ${JSON.stringify(which.sync('rg', { nothrow: false }))} "$@"\n`,
+      { mode: 0o755 },
+    );
+    symlinkSync(which.sync('grep', { nothrow: false }), path.join(dir, 'grep'));
+    const input = normalizeGrepInput(
+      {
+        pattern: 'createTool',
+        path: repo,
+        sort_by: 'mtime',
+        fixed_strings: true,
+      },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = dir;
+      const first = await runRipgrep(input, new AbortController().signal);
+      expect(first.totalMatches).toBeGreaterThan(0);
+      expect(first.error).toBeUndefined();
+      chmodSync(binary, 0o644);
+      const second = await runRipgrep(input, new AbortController().signal);
+      expect(second.backend).toBe('grep');
+      expect(second.totalMatches).toBeGreaterThan(0);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test('resolved absolute rg path is retained in the returned command', async () => {
+    const repo = temps.createRepo();
+    const dir = temps.createDir('bettergrep-absolute-rg');
+    const binary = path.join(dir, 'rg');
+    writeFileSync(
+      binary,
+      `#!/bin/sh\nexec ${JSON.stringify(which.sync('rg', { nothrow: false }))} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repo, fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = dir;
+      const result = await runRipgrep(input, new AbortController().signal);
+      expect(result.error).toBeUndefined();
+      expect(result.command?.[0]).toBe(binary);
+      expect(result.totalMatches).toBeGreaterThan(0);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test('synchronous transient GNU grep spawn failure retains the resolved backend', async () => {
+    const repo = temps.createRepo();
+    const binDir = temps.createDir('bettergrep-busy-grep');
+    const cacheDir = temps.createDir('bettergrep-busy-cache');
+    const binary = path.join(binDir, 'grep');
+    copyFileSync(which.sync('grep', { nothrow: false }), binary);
+    chmodSync(binary, 0o755);
+    const input = normalizeGrepInput(
+      { pattern: 'createTool', path: repo, fixed_strings: true },
+      createRepoContext(repo) as never,
+    );
+    const previousPath = process.env.PATH;
+    const previousCache = process.env.XDG_CACHE_HOME;
+    const previousFetch = globalThis.fetch;
+    let writer: number | undefined;
+    try {
+      process.env.PATH = binDir;
+      process.env.XDG_CACHE_HOME = cacheDir;
+      globalThis.fetch = Object.assign(
+        async () => {
+          throw new Error('offline auto-install');
+        },
+        { preconnect: previousFetch.preconnect },
+      );
+      const first = await runRipgrep(input, new AbortController().signal);
+      expect(first.backend).toBe('grep');
+      expect(first.error).toBeUndefined();
+      writer = openSync(binary, 'r+');
+
+      const result = await runRipgrep(input, new AbortController().signal);
+      expect(result.error).toContain('ETXTBSY');
+      expect(result.backend).toBe('grep');
+    } finally {
+      if (writer !== undefined) closeSync(writer);
+      process.env.PATH = previousPath;
+      process.env.XDG_CACHE_HOME = previousCache;
+      globalThis.fetch = previousFetch;
+    }
+  });
 
   function createNormalized(
     input: GrepToolInput,
@@ -294,7 +439,7 @@ describe('tools/grep/runner', () => {
     run();
   });
 
-  test('executeFilesMode treats pre-aborted timeout signals as timed out', async () => {
+  test('executeFileListMode treats pre-aborted timeout signals as timed out', async () => {
     const { normalized } = createNormalized({
       pattern: 'createTool',
       path: 'src',
@@ -304,7 +449,7 @@ describe('tools/grep/runner', () => {
     setAbortKind(controller.signal, 'timeout');
     controller.abort();
 
-    const result = await executeFilesMode(normalized, controller.signal, {
+    const result = await executeFileListMode(normalized, controller.signal, {
       path: 'rg',
       backend: 'rg',
       source: 'system-rg',

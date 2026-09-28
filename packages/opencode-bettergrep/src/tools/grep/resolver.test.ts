@@ -1,11 +1,82 @@
 /// <reference types="bun-types" />
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, jest, mock, test } from 'bun:test';
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { probeExecutable } from './cli-probe';
-import { resolveGrepCli, resolveGrepCliWithAutoInstall } from './resolver';
+import {
+  invalidateGrepCliResolverCache,
+  resolveGrepCli,
+  resolveGrepCliWithAutoInstall,
+} from './resolver';
+import { setAbortKind } from './runtime';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/resolver', () => {
-  createTempTracker({ resetResolver: true });
+  const temps = createTempTracker({ resetResolver: true });
+
+  test('memo reuses a valid probe per deps, then invalidates on stat, PATH, and deps changes', async () => {
+    const dir = temps.createDir('bettergrep-probe-memo');
+    const binary = path.join(dir, 'rg-stub');
+    const calls = path.join(dir, 'calls');
+    const script = (tag: string) =>
+      `#!/bin/sh\nprintf 'hit\\n' >> "${calls}"\nprintf 'ripgrep ${tag}\\n'\n`;
+    writeFileSync(binary, script('v1'), { mode: 0o755 });
+    const deps = {
+      findExecutable: (name: string) => (name === 'rg' ? binary : null),
+    };
+    const run = () => resolveGrepCliWithAutoInstall(deps);
+    const count = () => readFileSync(calls, 'utf8').trim().split('\n').length;
+
+    expect((await run()).path).toBe(binary);
+    expect((await run()).path).toBe(binary);
+    expect(count()).toBe(1);
+
+    writeFileSync(binary, script('v222222'), { mode: 0o755 });
+    utimesSync(
+      binary,
+      new Date('2020-01-01T00:00:00Z'),
+      new Date('2020-01-01T00:00:00Z'),
+    );
+    await run();
+    expect(count()).toBe(2);
+
+    const previousPath = process.env.PATH;
+    const previousCache = process.env.XDG_CACHE_HOME;
+    try {
+      process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`;
+      await run();
+      expect(count()).toBe(3);
+      process.env.XDG_CACHE_HOME = dir;
+      await run();
+      expect(count()).toBe(4);
+    } finally {
+      process.env.PATH = previousPath;
+      process.env.XDG_CACHE_HOME = previousCache;
+    }
+    await run();
+    expect(count()).toBe(5);
+    await resolveGrepCliWithAutoInstall({ ...deps });
+    expect(count()).toBe(6);
+  });
+
+  test('GNU memo survives rejected rg until it changes', async () => {
+    const rg = path.join(temps.createDir('bettergrep-rejected-rg'), 'rg');
+    writeFileSync(rg, '');
+    const isSupportedRipgrep = mock(() => readFileSync(rg, 'utf8') === 'rg');
+    const deps = {
+      findExecutable: (name: string) => (name === 'rg' ? rg : process.execPath),
+      getInstalledRipgrepPath: () => null,
+      isSupportedGrep: () => true,
+      isSupportedRipgrep,
+      installLatestStableRipgrep: () => Promise.reject(Error('offline')),
+    };
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+    expect(isSupportedRipgrep).toHaveBeenCalledTimes(1);
+    writeFileSync(rg, 'rg');
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('rg');
+  });
 
   test.each([
     {
@@ -123,6 +194,59 @@ describe('tools/grep/resolver', () => {
     expect(result.timedOut).toBe(true);
   });
 
+  test('probeExecutable times out with inherited pipes still open', async () => {
+    const spawn = (() => ({
+      proc: { stdout: new PassThrough(), stderr: new PassThrough() },
+      exited: new Promise<number>(() => {}),
+      kill: () => true,
+      exitCode: null,
+    })) as never;
+    const result = await probeExecutable('stub', [], undefined, 20, spawn);
+    expect(result.timedOut).toBe(true);
+  });
+
+  test('probeExecutable timeout uses one deadline with a stub process and fake timers', async () => {
+    jest.useFakeTimers();
+    try {
+      let resolveExit!: (code: number) => void;
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      const empty = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        });
+      const kill = mock(() => {
+        resolveExit(1);
+        return true;
+      });
+      const proc = {
+        proc: { stdout: empty(), stderr: empty() },
+        exited,
+        kill,
+        get exitCode() {
+          return null;
+        },
+      };
+      const pending = probeExecutable(
+        'stub',
+        ['--version'],
+        undefined,
+        500,
+        () => proc as never,
+      );
+      jest.advanceTimersByTime(499);
+      expect(kill).toHaveBeenCalledTimes(0);
+      jest.advanceTimersByTime(1);
+      expect((await pending).timedOut).toBe(true);
+      expect(kill).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test('probeExecutable aborts a running probe without leaving it pending', async () => {
     const controller = new AbortController();
     const pending = probeExecutable(
@@ -150,7 +274,6 @@ describe('tools/grep/resolver', () => {
         name === 'grep' ? '/usr/bin/grep' : null,
       getInstalledRipgrepPath: () => installedPath,
       installLatestStableRipgrep: installLatest,
-      logger: () => undefined,
     };
 
     const first = await resolveGrepCliWithAutoInstall(resolverDeps);
@@ -166,15 +289,12 @@ describe('tools/grep/resolver', () => {
   });
 
   test('resolveGrepCliWithAutoInstall falls back to system grep when install fails', async () => {
-    const logger = mock(() => undefined);
-
     const cli = await resolveGrepCliWithAutoInstall({
       findExecutable: (name) => (name === 'grep' ? '/usr/bin/grep' : null),
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: async () => {
         throw new Error('network down');
       },
-      logger,
     });
 
     expect(cli).toEqual({
@@ -182,7 +302,161 @@ describe('tools/grep/resolver', () => {
       backend: 'grep',
       source: 'system-gnu-grep',
     });
-    expect(logger.mock.calls).toHaveLength(1);
+  });
+
+  test('failed install with GNU grep retries only after the negative-cache TTL', async () => {
+    jest.useFakeTimers();
+    try {
+      const install = mock(async () => {
+        throw new Error('offline');
+      });
+      const rgProbe = mock(() => false);
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'rg' ? process.execPath : '/usr/bin/grep',
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        isSupportedRipgrep: rgProbe,
+        installLatestStableRipgrep: install,
+      };
+      for (let index = 0; index < 3; index++) {
+        expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe(
+          'grep',
+        );
+      }
+      expect(install).toHaveBeenCalledTimes(1);
+      expect(rgProbe).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(600_001);
+      expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+      expect(install).toHaveBeenCalledTimes(2);
+      expect(rgProbe).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  async function attemptsAfterAbortingInstall(
+    reason: 'runner-timeout' | 'public-timeout' | 'cancel',
+  ): Promise<number> {
+    jest.useFakeTimers();
+    try {
+      let attempts = 0;
+      let started!: () => void;
+      const installed = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'grep' ? '/usr/bin/grep' : null,
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        installLatestStableRipgrep: (signal?: AbortSignal) => {
+          attempts += 1;
+          if (attempts > 1) return Promise.reject(new Error('offline'));
+          started();
+          return new Promise<string>((_, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => reject(new Error('aborted')),
+              { once: true },
+            );
+          });
+        },
+      };
+      const controller = new AbortController();
+      const first = resolveGrepCliWithAutoInstall(deps, controller.signal);
+      await installed;
+      if (reason === 'runner-timeout')
+        setAbortKind(controller.signal, 'timeout');
+      controller.abort(
+        reason === 'public-timeout'
+          ? new DOMException('deadline', 'TimeoutError')
+          : undefined,
+      );
+      await expect(first).rejects.toThrow(
+        /cancelled before execution started/i,
+      );
+      await Promise.resolve();
+      expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+      return attempts;
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+
+  test('runner timeout with GNU grep memoizes the failed install', async () => {
+    expect(await attemptsAfterAbortingInstall('runner-timeout')).toBe(1);
+  });
+
+  test('public TimeoutError with GNU grep memoizes the failed install', async () => {
+    expect(await attemptsAfterAbortingInstall('public-timeout')).toBe(1);
+  });
+
+  test('user cancellation with GNU grep permits another install attempt', async () => {
+    expect(await attemptsAfterAbortingInstall('cancel')).toBe(2);
+  });
+
+  test('explicit invalidation permits an immediate retry of a failed install', async () => {
+    const install = mock(async () => {
+      throw new Error('offline');
+    });
+    const deps = {
+      findExecutable: (name: string) =>
+        name === 'grep' ? '/usr/bin/grep' : null,
+      getInstalledRipgrepPath: () => null,
+      isSupportedGrep: () => true,
+      installLatestStableRipgrep: install,
+    };
+    await resolveGrepCliWithAutoInstall(deps);
+    invalidateGrepCliResolverCache();
+    await resolveGrepCliWithAutoInstall(deps);
+    expect(install).toHaveBeenCalledTimes(2);
+  });
+
+  test('hung installer has its own deadline and falls back to GNU grep', async () => {
+    jest.useFakeTimers();
+    try {
+      let started!: () => void;
+      const startedPromise = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let installSignal: AbortSignal | undefined;
+      const deps = {
+        findExecutable: (name: string) =>
+          name === 'grep' ? '/usr/bin/grep' : null,
+        getInstalledRipgrepPath: () => null,
+        isSupportedGrep: () => true,
+        installLatestStableRipgrep: (signal?: AbortSignal) => {
+          installSignal = signal;
+          started();
+          return new Promise<string>(() => {});
+        },
+      };
+      const pending = resolveGrepCliWithAutoInstall(deps);
+      await startedPromise;
+      jest.advanceTimersByTime(30_000);
+      expect(installSignal?.aborted).toBe(true);
+      expect((await pending).backend).toBe('grep');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('without GNU grep a failed install is retried on every call', async () => {
+    const install = mock(async () => {
+      throw new Error('offline');
+    });
+    const deps = {
+      findExecutable: () => null,
+      getInstalledRipgrepPath: () => null,
+      installLatestStableRipgrep: install,
+    };
+    for (let index = 0; index < 2; index++) {
+      await expect(resolveGrepCliWithAutoInstall(deps)).rejects.toThrow(
+        'offline',
+      );
+    }
+    expect(install).toHaveBeenCalledTimes(2);
   });
 
   test('resolveGrepCliWithAutoInstall does not cache aborts as permanent install failures', async () => {
@@ -197,7 +471,6 @@ describe('tools/grep/resolver', () => {
           installLatestStableRipgrep: async () => {
             throw new Error('should not reach installer when already aborted');
           },
-          logger: () => undefined,
         },
         controller.signal,
       ),
@@ -207,7 +480,6 @@ describe('tools/grep/resolver', () => {
       findExecutable: () => null,
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: async () => '/tmp/managed-rg',
-      logger: () => undefined,
     });
 
     expect(cli).toEqual({
@@ -240,7 +512,6 @@ describe('tools/grep/resolver', () => {
           });
           return '/tmp/unreachable';
         },
-        logger: () => undefined,
       },
       controller.signal,
     );
@@ -258,7 +529,6 @@ describe('tools/grep/resolver', () => {
         attempts += 1;
         return '/tmp/managed-rg';
       },
-      logger: () => undefined,
     });
 
     expect(attempts).toBe(2);
@@ -297,7 +567,6 @@ describe('tools/grep/resolver', () => {
       findExecutable: () => null,
       getInstalledRipgrepPath: () => null,
       installLatestStableRipgrep: installLatest,
-      logger: () => undefined,
     };
 
     const firstWaiter = resolveGrepCliWithAutoInstall(
@@ -327,64 +596,67 @@ describe('tools/grep/resolver', () => {
   });
 
   test('resolveGrepCliWithAutoInstall aborts the shared install when the last waiter cancels', async () => {
-    let installSignal: AbortSignal | undefined;
-    let markStarted: (() => void) | undefined;
-    let markAborted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const aborted = new Promise<void>((resolve) => {
-      markAborted = resolve;
-    });
-    const controller = new AbortController();
+    jest.useFakeTimers();
+    try {
+      let installSignal: AbortSignal | undefined;
+      let markStarted: (() => void) | undefined;
+      let markAborted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const aborted = new Promise<void>((resolve) => {
+        markAborted = resolve;
+      });
+      const controller = new AbortController();
 
-    const firstAttempt = resolveGrepCliWithAutoInstall(
-      {
+      const firstAttempt = resolveGrepCliWithAutoInstall(
+        {
+          findExecutable: () => null,
+          getInstalledRipgrepPath: () => null,
+          installLatestStableRipgrep: async (signal?: AbortSignal) => {
+            installSignal = signal;
+            markStarted?.();
+            await new Promise<never>((_, reject) => {
+              signal?.addEventListener(
+                'abort',
+                () => {
+                  markAborted?.();
+                  const error = new Error('aborted');
+                  error.name = 'AbortError';
+                  reject(error);
+                },
+                { once: true },
+              );
+            });
+            return '/tmp/unreachable';
+          },
+        },
+        controller.signal,
+      );
+
+      await started;
+      controller.abort();
+
+      await expect(firstAttempt).rejects.toThrow(
+        /cancelled before execution started/i,
+      );
+      expect(installSignal?.aborted).toBe(true);
+      await aborted;
+
+      const retry = await resolveGrepCliWithAutoInstall({
         findExecutable: () => null,
         getInstalledRipgrepPath: () => null,
-        installLatestStableRipgrep: async (signal?: AbortSignal) => {
-          installSignal = signal;
-          markStarted?.();
-          await new Promise<never>((_, reject) => {
-            signal?.addEventListener(
-              'abort',
-              () => {
-                markAborted?.();
-                const error = new Error('aborted');
-                error.name = 'AbortError';
-                reject(error);
-              },
-              { once: true },
-            );
-          });
-          return '/tmp/unreachable';
-        },
-        logger: () => undefined,
-      },
-      controller.signal,
-    );
+        installLatestStableRipgrep: async () => '/tmp/managed-rg',
+      });
 
-    await started;
-    controller.abort();
-
-    await expect(firstAttempt).rejects.toThrow(
-      /cancelled before execution started/i,
-    );
-    await aborted;
-    expect(installSignal?.aborted).toBe(true);
-
-    const retry = await resolveGrepCliWithAutoInstall({
-      findExecutable: () => null,
-      getInstalledRipgrepPath: () => null,
-      installLatestStableRipgrep: async () => '/tmp/managed-rg',
-      logger: () => undefined,
-    });
-
-    expect(retry).toEqual({
-      path: '/tmp/managed-rg',
-      backend: 'rg',
-      source: 'managed-rg',
-    });
+      expect(retry).toEqual({
+        path: '/tmp/managed-rg',
+        backend: 'rg',
+        source: 'managed-rg',
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('resolveGrepCliWithAutoInstall throws a clear error when rg and grep are unavailable', async () => {
@@ -395,7 +667,6 @@ describe('tools/grep/resolver', () => {
         installLatestStableRipgrep: async () => {
           throw new Error('network down');
         },
-        logger: () => undefined,
       }),
     ).rejects.toThrow(/Neither ripgrep \(rg\) nor GNU grep is available\./);
   });
@@ -411,7 +682,6 @@ describe('tools/grep/resolver', () => {
           attempts += 1;
           throw new Error(`network down ${attempts}`);
         },
-        logger: () => undefined,
       }),
     ).rejects.toThrow(/network down 1/);
 
@@ -422,7 +692,6 @@ describe('tools/grep/resolver', () => {
         attempts += 1;
         return '/tmp/managed-rg';
       },
-      logger: () => undefined,
     });
 
     expect(attempts).toBe(2);

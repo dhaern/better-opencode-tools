@@ -1,11 +1,6 @@
 import { GrepAggregator } from './aggregate';
-import {
-  consumeNullCountPairsBytes,
-  consumeNullItemsBytes,
-  consumeRgJsonStream,
-  readTextStream,
-} from './json-stream';
-import { buildPathFromBytes } from './path-utils';
+import { collectFileEntries, finishFileListMode } from './fallback-results';
+import { consumeRgJsonStream, readTextStream } from './json-stream';
 import type { ResolvedGrepCli } from './resolver';
 import {
   applySuccessfulStderr,
@@ -34,80 +29,26 @@ import type {
   NormalizedGrepInput,
 } from './types';
 
-interface ContentState {
-  aggregator: GrepAggregator;
-  killedForLimit: boolean;
+function classifySpawnError(
+  result: GrepSearchResult,
+  error: unknown,
+  cli: ResolvedGrepCli,
+): GrepSearchResult {
+  const friendly = createFriendlySpawnError(error, cli);
+  if (!friendly && isTransientFailure(error))
+    throw new RetryableRipgrepError(toErrorMessage(error));
+  return { ...result, error: friendly ?? toErrorMessage(error) };
 }
 
-interface CountState {
-  files: GrepFileMatch[];
-  totalMatches: number;
-  limitReached: boolean;
-}
-
-interface FilesState {
-  files: GrepFileMatch[];
-  limitReached: boolean;
-  seen: Set<string>;
-}
-
-function buildFileMatch(
-  filePath: Uint8Array,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-  matchCount: number,
-): GrepFileMatch | undefined {
-  if (filePath.length === 0) {
-    return undefined;
-  }
-
-  const pathInfo = buildPathFromBytes(filePath, input.cwd, input.worktree);
-  return {
-    file: pathInfo.displayPath,
-    absolutePath: pathInfo.absolutePath,
-    replayPath: pathInfo.replayPath,
-    nonUtf8Path: pathInfo.nonUtf8Path,
-    pathKey: pathInfo.pathKey,
-    matchCount,
-    matches: [],
-  };
-}
-
-function parseCountRecordBytes(
-  filePath: Uint8Array,
-  countText: string,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-): GrepFileMatch | undefined {
-  if (!/^\d+$/.test(countText)) {
-    return undefined;
-  }
-
-  const count = Number.parseInt(countText, 10);
-  if (!Number.isFinite(count)) {
-    return undefined;
-  }
-
-  return buildFileMatch(filePath, input, count);
-}
-
-function buildFileMatchFromBytes(
-  filePath: Uint8Array,
-  input: Pick<NormalizedGrepInput, 'cwd' | 'worktree'>,
-): GrepFileMatch | undefined {
-  return buildFileMatch(filePath, input, 1);
-}
-
-function simpleIsStopped(
-  state: { limitReached: boolean },
-  termination: TerminationState,
-): boolean {
-  return termination.timedOut || termination.cancelled || state.limitReached;
-}
-
-async function executeMode<TState>(
+export async function executeMode<TState>(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
   options: {
+    command?: string[];
+    env?: NodeJS.ProcessEnv;
+    warnings?: string[];
+    spawn?: typeof spawnRipgrep;
     init: () => TState;
     consumeStdout: (
       stdout: NodeJS.ReadableStream | ReadableStream<Uint8Array> | undefined,
@@ -117,17 +58,27 @@ async function executeMode<TState>(
     buildResult: (
       baseResult: GrepSearchResult,
       state: TState,
-      termination: TerminationState,
-      exitCode: number,
-      stderr: string,
     ) => GrepSearchResult;
-    isStopped: (state: TState, termination: TerminationState) => boolean;
-  },
+  } & (
+    | {
+        isStopped: (state: TState, termination: TerminationState) => boolean;
+        finalizeResult?: never;
+      }
+    | {
+        isStopped?: never;
+        finalizeResult: (
+          result: GrepSearchResult,
+          stdoutError: unknown,
+          exitError: unknown,
+        ) => GrepSearchResult;
+      }
+  ),
 ): Promise<GrepSearchResult> {
-  const command = buildRgCommand(input, cli.path);
+  const command = options.command ?? buildRgCommand(input, cli.path);
   const baseResult: GrepSearchResult = {
     ...createEmptyResult(input, command),
-    backend: 'rg',
+    backend: cli.backend,
+    warnings: options.warnings ?? [],
   };
 
   if (signal.aborted) {
@@ -141,27 +92,9 @@ async function executeMode<TState>(
 
   let proc: GrepProcess;
   try {
-    proc = spawnRipgrep(command, input.cwd);
+    proc = (options.spawn ?? spawnRipgrep)(command, input.cwd, options.env);
   } catch (error) {
-    const friendlyMessage = createFriendlySpawnError(error, cli);
-    if (friendlyMessage) {
-      return {
-        ...baseResult,
-        error: friendlyMessage,
-      };
-    }
-
-    if (isTransientFailure(error)) {
-      throw new RetryableRipgrepError(toErrorMessage(error));
-    }
-
-    return {
-      ...baseResult,
-      error:
-        error instanceof Error
-          ? error.message
-          : `Failed to spawn ${cli.backend}`,
-    };
+    return classifySpawnError(baseResult, error, cli);
   }
 
   const state = options.init();
@@ -176,21 +109,20 @@ async function executeMode<TState>(
     // before stdout finishes, and the rejection must have a handler attached.
     const exitPromise = waitForExitAndStderr(proc, stderrPromise);
 
-    let stdoutError: unknown;
-    try {
-      await stdoutPromise;
-    } catch (error) {
-      stdoutError = error;
-    }
+    const captureError = (error: unknown) => error;
+    const [stdoutError, { exitCode, stderr, error: exitError }] =
+      await Promise.all([
+        stdoutPromise.then(() => undefined, captureError),
+        exitPromise,
+      ]);
+    baseResult.timedOut = termination.state.timedOut;
+    baseResult.cancelled = termination.state.cancelled;
+    baseResult.exitCode = exitCode;
+    baseResult.stderr = stderr.trim();
+    const result = options.buildResult(baseResult, state);
 
-    const { exitCode, stderr, error: exitError } = await exitPromise;
-    const result = options.buildResult(
-      baseResult,
-      state,
-      termination.state,
-      exitCode,
-      stderr.trim(),
-    );
+    if (options.finalizeResult)
+      return options.finalizeResult(result, stdoutError, exitError);
 
     if (stdoutError && !options.isStopped(state, termination.state)) {
       if (isTransientFailure(stdoutError)) {
@@ -215,8 +147,7 @@ async function executeMode<TState>(
     applySuccessfulStderr(result, result.stderr, exitCode);
 
     if (exitError && !options.isStopped(state, termination.state)) {
-      result.error = exitError;
-      return result;
+      return classifySpawnError(result, exitError, cli);
     }
 
     if (options.isStopped(state, termination.state)) {
@@ -243,9 +174,11 @@ export async function executeContentLikeMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
-    init: (): ContentState => ({
+    command,
+    init: () => ({
       aggregator: new GrepAggregator({
         cwd: input.cwd,
         worktree: input.worktree,
@@ -267,7 +200,7 @@ export async function executeContentLikeMode(
 
         return true;
       }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => {
+    buildResult: (baseResult, state) => {
       const snapshot = state.aggregator.snapshot();
       return {
         ...baseResult,
@@ -275,13 +208,9 @@ export async function executeContentLikeMode(
         truncated:
           snapshot.limitReached ||
           state.killedForLimit ||
-          termination.timedOut ||
-          termination.cancelled,
+          baseResult.timedOut ||
+          baseResult.cancelled,
         limitReached: snapshot.limitReached || state.killedForLimit,
-        timedOut: termination.timedOut,
-        cancelled: termination.cancelled,
-        exitCode,
-        stderr,
         summary: snapshot.summary,
         warnings: [],
       };
@@ -294,105 +223,43 @@ export async function executeContentLikeMode(
   });
 }
 
-export async function executeCountMode(
+export async function executeFileListMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
   return executeMode(input, signal, cli, {
-    init: (): CountState => ({
-      files: [],
-      totalMatches: 0,
+    command,
+    init: () => ({
+      files: [] as GrepFileMatch[],
       limitReached: false,
     }),
-    consumeStdout: async (stdout, proc, state) =>
-      consumeNullCountPairsBytes(stdout, (filePath, countText) => {
-        const file = parseCountRecordBytes(filePath, countText, input);
-        if (!file) {
-          return true;
-        }
-
-        if (file.matchCount === 0) {
-          return true;
-        }
-
-        state.files.push(file);
-        state.totalMatches += file.matchCount;
-
-        if (state.files.length >= input.maxResults) {
-          state.limitReached = true;
-          killProcess(proc);
-          return false;
-        }
-
-        return true;
-      }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => ({
-      ...baseResult,
-      files: state.files,
-      totalMatches: state.totalMatches,
-      totalFiles: state.files.length,
-      truncated:
-        state.limitReached || termination.timedOut || termination.cancelled,
-      limitReached: state.limitReached,
-      timedOut: termination.timedOut,
-      cancelled: termination.cancelled,
-      exitCode,
-      stderr,
-      warnings: [],
-    }),
-    isStopped: simpleIsStopped,
+    consumeStdout: async (stdout, proc, state) => {
+      // ripgrep pre-sorts, so the shared file-list consumer needs no admission.
+      const collected = await collectFileEntries(
+        proc,
+        { ...input, sortBy: 'none' },
+        stdout,
+        input.outputMode === 'count' ? 'count' : 'files',
+      );
+      state.files = collected.files;
+      state.limitReached = collected.limitReached;
+    },
+    buildResult: (baseResult, state) =>
+      finishFileListMode(baseResult, state.files, input, state.limitReached),
+    isStopped: (state, termination) =>
+      termination.timedOut || termination.cancelled || state.limitReached,
   });
 }
 
-export async function executeFilesMode(
+export function executeDirectMode(
   input: NormalizedGrepInput,
   signal: AbortSignal,
   cli: ResolvedGrepCli,
+  command?: string[],
 ): Promise<GrepSearchResult> {
-  return executeMode(input, signal, cli, {
-    init: (): FilesState => ({
-      files: [],
-      limitReached: false,
-      seen: new Set<string>(),
-    }),
-    consumeStdout: async (stdout, proc, state) =>
-      consumeNullItemsBytes(stdout, (filePath) => {
-        const file = buildFileMatchFromBytes(filePath, input);
-        if (!file) {
-          return true;
-        }
-
-        const seenKey = file.pathKey ?? file.absolutePath;
-        if (state.seen.has(seenKey)) {
-          return true;
-        }
-
-        state.seen.add(seenKey);
-        state.files.push(file);
-
-        if (state.files.length >= input.maxResults) {
-          state.limitReached = true;
-          killProcess(proc);
-          return false;
-        }
-
-        return true;
-      }),
-    buildResult: (baseResult, state, termination, exitCode, stderr) => ({
-      ...baseResult,
-      files: state.files,
-      totalMatches: state.files.length,
-      totalFiles: state.files.length,
-      truncated:
-        state.limitReached || termination.timedOut || termination.cancelled,
-      limitReached: state.limitReached,
-      timedOut: termination.timedOut,
-      cancelled: termination.cancelled,
-      exitCode,
-      stderr,
-      warnings: [],
-    }),
-    isStopped: simpleIsStopped,
-  });
+  return input.outputMode === 'content'
+    ? executeContentLikeMode(input, signal, cli, command)
+    : executeFileListMode(input, signal, cli, command);
 }
