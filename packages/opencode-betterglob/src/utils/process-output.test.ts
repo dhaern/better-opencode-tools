@@ -500,12 +500,36 @@ describe.skipIf(process.platform === 'win32')(
         await ready(child.proc);
         controller.abort();
         expect((await child.exited).code).toBe(0);
+        await new Promise<void>((resolve) => setImmediate(resolve));
         expect(cleaned).toBe(false);
+        expect(child.proc.signalCode).toBeNull();
         expect(await pending).toMatchObject({ aborted: true, exitCode: 0 });
         expect(cleaned).toBe(true);
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
         await child.stop(0);
+      }
+    });
+
+    test('a pending release does not shorten the termination grace after stop', async () => {
+      const child = spawnSupervised(
+        [
+          node,
+          '-e',
+          'process.on("SIGTERM", () => process.exit(0)); process.stdout.write("READY\\n"); setInterval(() => {}, 1000)',
+        ],
+        { killGraceMs: 150 },
+      );
+      try {
+        await ready(child.proc);
+        void child.release();
+        const started = performance.now();
+        void child.stop();
+        await child.closed;
+        expect(performance.now() - started).toBeGreaterThan(50);
+        expect(child.proc.signalCode).toBe('SIGKILL');
+      } finally {
+        await child.stop(0).catch(() => undefined);
       }
     });
 

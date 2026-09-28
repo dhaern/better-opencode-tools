@@ -84,6 +84,23 @@ function isAlive(pid: number | undefined): boolean {
 describe('tools/glob/runner spawn failures', () => {
   const temps = createTempTracker();
 
+  test('cancelled raw child without an exit status retains exit code 130', async () => {
+    const child = fakeChild();
+    const controller = new AbortController();
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: () => child,
+      killGraceMs: 0,
+    });
+    const input = await normalizeSearchInput({}, temps.createRepo());
+    const pending = run(input, controller.signal);
+    await nextTurn();
+    controller.abort();
+    const result = await pending;
+    expect(result.cancelled).toBe(true);
+    expect(result.exitCode).toBe(130);
+  });
+
   test.each(
     (['limit', 'abort', 'timeout'] as const).flatMap((ending) =>
       (['reject', 'error', 'confirmed'] as const).map((cleanup) => ({
