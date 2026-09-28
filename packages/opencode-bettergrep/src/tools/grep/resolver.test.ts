@@ -60,17 +60,21 @@ describe('tools/grep/resolver', () => {
     expect(count()).toBe(6);
   });
 
-  test('GNU memo yields to newly available system rg', async () => {
-    let rg: string | null = null;
+  test('GNU memo survives rejected rg until it changes', async () => {
+    const rg = path.join(temps.createDir('bettergrep-rejected-rg'), 'rg');
+    writeFileSync(rg, '');
+    const isSupportedRipgrep = mock(() => readFileSync(rg, 'utf8') === 'rg');
     const deps = {
       findExecutable: (name: string) => (name === 'rg' ? rg : process.execPath),
       getInstalledRipgrepPath: () => null,
       isSupportedGrep: () => true,
-      isSupportedRipgrep: () => true,
+      isSupportedRipgrep,
       installLatestStableRipgrep: () => Promise.reject(Error('offline')),
     };
     expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
-    rg = process.execPath;
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+    expect(isSupportedRipgrep).toHaveBeenCalledTimes(1);
+    writeFileSync(rg, 'rg');
     expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('rg');
   });
 

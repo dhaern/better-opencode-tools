@@ -44,6 +44,7 @@ interface MemoizedCli {
   pathEnv: string | undefined;
   cacheDir: string;
   stamp: string;
+  rgStamp?: string;
 }
 let cliMemo = new WeakMap<GrepResolverDependencies, MemoizedCli>();
 export const AUTO_INSTALL_RETRY_AFTER_MS = 10 * 60_000;
@@ -64,6 +65,7 @@ function statStamp(binaryPath: string): string | undefined {
 function rememberCli(
   deps: GrepResolverDependencies,
   cli: ResolvedGrepCli,
+  rgStamp?: string,
 ): ResolvedGrepCli {
   if (cli.source !== 'missing-rg') {
     const stamp = statStamp(cli.path);
@@ -71,6 +73,7 @@ function rememberCli(
       cliMemo.set(deps, {
         cli,
         stamp,
+        rgStamp,
         pathEnv: process.env.PATH,
         cacheDir: getRipgrepCacheDir(),
       });
@@ -158,12 +161,13 @@ async function resolveAsync(
   const findExecutable = deps.findExecutable ?? defaultFindExecutable;
   const memo = cliMemo.get(deps);
   if (memo) {
-    // Let a newly available system rg supersede the GNU fallback.
+    // GNU stays memoized only while the rejected rg candidate is unchanged.
     if (
       memo.pathEnv === process.env.PATH &&
       memo.cacheDir === getRipgrepCacheDir() &&
       statStamp(memo.cli.path) === memo.stamp &&
-      (memo.cli.backend === 'rg' || !findExecutable(RG_BINARY))
+      (memo.cli.backend === 'rg' ||
+        memo.rgStamp === statStamp(findExecutable(RG_BINARY) ?? ''))
     ) {
       return memo.cli;
     }
@@ -191,7 +195,11 @@ async function resolveAsync(
     systemGrep &&
     (await supportsBinary(systemGrep, 'grep', deps.isSupportedGrep, signal))
   ) {
-    return rememberCli(deps, resolvedCli(systemGrep, 'system-gnu-grep'));
+    return rememberCli(
+      deps,
+      resolvedCli(systemGrep, 'system-gnu-grep'),
+      statStamp(systemRg ?? ''),
+    );
   }
 
   return resolvedCli(RG_BINARY, 'missing-rg');
