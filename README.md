@@ -15,6 +15,14 @@ runtime behavior behind them.
 | [`opencode-bettergrep`](./packages/opencode-bettergrep) | `grep` | Advanced local search with `ripgrep`, fallback handling, rich filters, and hard-kill timeouts. |
 | [`opencode-betterread`](./packages/opencode-betterread) | `read` | Real plugin replacement for file/directory/notebook reading with stricter permissions and robust output budgeting. |
 
+## 🆕 Release 1.0.0
+
+- All three plugins move from 0.3.1 to 1.0.0 with smaller production code and no features removed (`bettergrep` −11.5 %, `betterread` −26.9 %, `betterglob` −18 %).
+- `betterread` follows the host `tool_output` budget and prints a continuation footer instead of letting the host cut output silently; `effect` loads lazily.
+- `bettergrep`/`betterglob` sort deterministically by path bytes; the GNU fallback keeps English parsing under any locale and its memo expires after 10 minutes, so a transient ripgrep failure recovers on its own.
+- `betterglob` stops truncated searches in about 0.3 s and loads `which`/`proper-lockfile` lazily.
+- All packages are aligned to OpenCode `1.18.32`, `effect` beta.83, TypeScript 7.0.2, and Biome 2.5.14.
+
 ## 🆕 Release 0.3.1
 
 - `bettergrep`/`betterglob`: rg now runs with `--no-mmap`, so a search no longer aborts when a file is truncated while another process edits it. On many-small-files trees this is also cheaper than mmap; large single-file searches may be slightly slower.
@@ -26,7 +34,7 @@ runtime behavior behind them.
 - `bettergrep`: deterministic top-K admission with context preservation, LF rejection in literal search, binary-match truncation, GNU grep fallback hardened under `LC_ALL=C.UTF-8`.
 - `betterread`: descriptor-safe reads with single-handle ownership and streaming-abort race fixes.
 - Codebase modularized per phase 3 review: oversized modules split into focused units with identical public surface.
-- All packages are aligned to OpenCode `1.18.29`.
+- All packages are aligned to OpenCode `1.18.32`.
 
 ## 🚀 Why use these instead of the native tools?
 
