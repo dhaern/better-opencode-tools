@@ -165,6 +165,23 @@ describe.skipIf(process.platform === 'win32')(
       await expect(within(pending)).rejects.toBe(cleanup);
       expect(isSupervisorError(cleanup)).toBe(true);
     });
+
+    test.each([
+      'supervised',
+      'direct',
+    ] as const)('maps a signal-only %s exit to failure', async (mode) => {
+      const options = mode === 'direct' ? { killProcessGroup: false } : {};
+      await expect(
+        within(
+          runProcess([node, '-e', "process.kill(process.pid, 'SIGKILL')"], {
+            killGraceMs: 250,
+            postCloseDrainMs: 250,
+            ...options,
+          }),
+        ),
+      ).resolves.toMatchObject({ exitCode: 1, aborted: false });
+    });
+
     test('rejects bare supervisor death even after a successful taskExit', async () => {
       const child = spawnSupervised([node, '-e', 'process.exit(0)']);
       expect((await child.exited).code).toBe(0);
