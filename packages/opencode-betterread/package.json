@@ -49,8 +49,8 @@
     "format": "biome format src package.json README.md biome.json tsconfig.json --write"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.29",
-    "effect": "4.0.0-beta.74"
+    "@opencode-ai/plugin": "1.18.32",
+    "effect": "4.0.0-beta.83"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.11",
