@@ -4,25 +4,8 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeGlobInputAsync } from './normalize';
 import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
-import { createRepoContext, createTempTracker } from './test-helpers';
+import { createRepoContext, createTempTracker, within } from './test-helpers';
 import type { GlobToolInput } from './types';
-
-async function within<T>(
-  pending: Promise<T>,
-  ms = 2500,
-): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 describe('tools/glob/runner', () => {
   const temps = createTempTracker();

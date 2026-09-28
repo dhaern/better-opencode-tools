@@ -137,7 +137,6 @@ function adaptDirectSearch(
 ): ManagedSearch {
   let exit: SearchExit | undefined;
   let failure: unknown;
-  let taskCode: number | null = null;
   let stopped = false;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -151,19 +150,16 @@ function adaptDirectSearch(
     clearTimeout(drainTimer);
     child.removeListener('error', onError);
     exit = {
-      code: code ?? taskCode ?? child.exitCode ?? 1,
+      code: code ?? 1,
       signal,
       failure,
       error: failure === undefined ? undefined : toErrorMessage(failure),
     };
-    destroyReader(child.stdout);
-    destroyReader(child.stderr);
     completed.resolve(exit);
   };
   child.on('error', onError);
   child.once('close', finish);
-  child.once('exit', (code) => {
-    taskCode = code;
+  child.once('exit', () => {
     drainTimer = startOutputDrain(
       child,
       options.postCloseDrainMs ?? POST_EXIT_DRAIN_MS,
@@ -228,7 +224,6 @@ async function collectProcess(
 ): Promise<ProcessResult> {
   const child = search.child;
   const text = { stdout: '', stderr: '' };
-  let failure: unknown;
   let aborted = signal?.aborted === true;
   let stopStarted: number | undefined;
   const stopped = Promise.withResolvers<void>();
@@ -239,9 +234,8 @@ async function collectProcess(
     stopped.resolve();
   };
   const readers = (['stdout', 'stderr'] as const).map((label) =>
-    watchCappedStream(child[label], label, (value, error) => {
+    watchCappedStream(child[label], label, (value) => {
       text[label] = value;
-      if (error !== undefined) failure ??= error;
     }),
   );
   const completion = watchSearchCompletion(search, stop);
@@ -273,7 +267,7 @@ async function collectProcess(
       : await completion.done;
     if (!exit)
       throw new CleanupUnconfirmedError('cleanup wait deadline exceeded');
-    const original = failure ?? exit.failure;
+    const original = exit.failure;
     if (original !== undefined)
       throw original instanceof Error ? original : new Error(String(original));
     return { exitCode: exit.code ?? 1, ...text, aborted };
@@ -353,8 +347,6 @@ export interface ManagedSearch {
   completed: Promise<SearchExit>;
 }
 
-export type SearchDone = SearchExit;
-
 // Windows has no private POSIX supervisor. Only a transport close confirms
 // completion, and stop is the ChildProcess capability (never a saved PID).
 export function adaptWindowsSearch(child: ChildProcess): ManagedSearch {
@@ -385,7 +377,7 @@ export function watchSearchCompletion(
   search: ManagedSearch,
   stop: () => void,
 ): {
-  done: Promise<SearchDone>;
+  done: Promise<SearchExit>;
   clear: () => void;
 } {
   const child = search.child;
@@ -403,20 +395,13 @@ export function watchSearchCompletion(
   child.stdout?.on('error', onError);
   child.stderr?.on('error', onError);
   const done = search.completed
-    .then(
-      (exit) => ({
-        ...exit,
-        error:
-          exit.error ??
-          (failure === undefined ? undefined : toErrorMessage(failure)),
-        failure: exit.failure ?? failure,
-      }),
-      (error: unknown) => ({
-        ...(search.readExit() ?? { code: null, signal: null }),
-        error: toErrorMessage(error),
-        failure: error,
-      }),
-    )
+    .then((exit) => ({
+      ...exit,
+      error:
+        exit.error ??
+        (failure === undefined ? undefined : toErrorMessage(failure)),
+      failure: exit.failure ?? failure,
+    }))
     .finally(clear);
   return { done, clear };
 }
@@ -561,9 +546,6 @@ export function adaptSupervisedSearch(
         error === undefined
           ? 'Supervisor cleanup unconfirmed'
           : toErrorMessage(error) || 'Supervisor cleanup unconfirmed';
-    } else if (!released && !stopped) {
-      cleanupError =
-        'Supervisor exited before cleanup was requested; cleanup unconfirmed';
     }
     if (!exit) {
       exit = {

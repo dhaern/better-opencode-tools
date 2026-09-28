@@ -19,7 +19,7 @@ import {
 import { normalizeGlobInputAsync } from './normalize';
 import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { collectMatchedPaths } from './runner-output';
-import { createRepoContext, createTempTracker } from './test-helpers';
+import { createRepoContext, createTempTracker, within } from './test-helpers';
 
 function spawnTestSearch(
   cmd: string,
@@ -80,23 +80,6 @@ const fakeResolve = async () =>
   ({ path: 'injected-rg', backend: 'rg', source: 'system-rg' }) as const;
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-async function within<T>(
-  pending: Promise<T>,
-  ms = 2000,
-): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function normalizeSearchInput(
   args: Partial<Parameters<typeof normalizeGlobInputAsync>[0]>,
@@ -412,7 +395,7 @@ describe('tools/glob/runner spawn failures', () => {
     'limit',
     'abort',
     'timeout',
-  ] as const)('bounds stalled cleanup after %s and consumes its late rejection', async (ending) => {
+  ] as const)('bounds stalled cleanup after %s and ignores late completion', async (ending) => {
     const child = fakeChild();
     const completion =
       Promise.withResolvers<Awaited<ManagedSearch['completed']>>();
@@ -451,7 +434,7 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result.cancelled).toBe(ending === 'abort');
     expect(result.timedOut).toBe(ending === 'timeout');
     expect(child.listenerCount('error')).toBe(0);
-    completion.reject(new Error('late cleanup failure'));
+    completion.resolve({ code: 0, signal: null });
     await nextTurn();
     expect(result.error).toContain('cleanup wait deadline exceeded');
   });
@@ -843,7 +826,9 @@ describe('tools/glob/runner spawn failures', () => {
       });
       const input = await normalizeSearchInput({ timeout_ms: 3000 }, repoDir);
       try {
-        const result = await run(input, new AbortController().signal);
+        const pending = within(run(input, new AbortController().signal));
+        await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+        const result = await pending;
         expect(descendant).toBeDefined();
         expect(result.files).toEqual([`${repoDir}/src/${descendant}.ts`]);
         expect(result.exitCode).toBe(0);

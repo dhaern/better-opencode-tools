@@ -39,6 +39,19 @@ export async function until(
   }
 }
 
+export function within<T>(pending: Promise<T>, ms = 2_500): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    pending,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Test promise did not settle within ${ms} ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export function createTempTracker(options: { resetResolver?: boolean } = {}) {
   const dirs: string[] = [];
 

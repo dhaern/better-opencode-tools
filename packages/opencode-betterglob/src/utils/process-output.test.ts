@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, watch } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
+import { within } from '../tools/glob/test-helpers';
 import { RUNNER_ABORT_GRACE_MS } from '../tools/glob/tool-deadline';
 import {
   DEFAULT_SEARCH_KILL_GRACE_MS,
@@ -18,23 +19,11 @@ import {
 import {
   CleanupUnconfirmedError,
   DEFAULT_CLEANUP_TIMEOUT_MS,
+  isSupervisorError,
   type SupervisedProcess,
   SupervisorRuntimeError,
   spawnSupervised as spawnOwner,
 } from './process-supervisor';
-
-function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Test promise did not settle within ${ms} ms`)),
-        ms,
-      );
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
 
 async function reaped(pid: number): Promise<boolean> {
   const deadline = performance.now() + 1_000;
@@ -154,6 +143,27 @@ describe.skipIf(process.platform === 'win32')(
       await expect(
         within(runProcess(['injected-task'], {}, undefined, () => owner)),
       ).rejects.toBe(cause);
+    });
+
+    test('retains the typed cleanup failure after a successful task exit', async () => {
+      const child = new EventEmitter() as ChildProcess;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      const cleanup = new CleanupUnconfirmedError('cleanup failed');
+      const owner: SupervisedProcess = {
+        proc: child,
+        exited: Promise.resolve({ code: 0, signal: null }),
+        closed: Promise.reject(cleanup),
+        exitCode: 0,
+        stop: async () => undefined,
+        release: async () => undefined,
+      };
+      const pending = runProcess(['injected-task'], {}, undefined, () => owner);
+      child.stdout.emit('end');
+      child.stderr.emit('end');
+
+      await expect(within(pending)).rejects.toBe(cleanup);
+      expect(isSupervisorError(cleanup)).toBe(true);
     });
     test('rejects bare supervisor death even after a successful taskExit', async () => {
       const child = spawnSupervised([node, '-e', 'process.exit(0)']);
@@ -558,7 +568,9 @@ describe.skipIf(process.platform === 'win32')(
       );
       try {
         expect((await child.exited).code).toBe(0);
-        expect((await pending).stdout).toBe('partial');
+        await expect(within(pending)).resolves.toMatchObject({
+          stdout: 'partial',
+        });
         await child.closed;
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
@@ -587,7 +599,7 @@ describe.skipIf(process.platform === 'win32')(
         child.proc[stream]?.emit('error', error);
         // Error observers were installed synchronously at process creation.
         await new Promise<void>((resolve) => setImmediate(resolve));
-        await expect(pending).rejects.toBe(error);
+        await expect(within(pending)).rejects.toBe(error);
         expect(child.proc.signalCode).toBe('SIGKILL');
       } finally {
         await child.stop(0);

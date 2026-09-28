@@ -8,7 +8,11 @@ import { resolveOpenCodeEffect } from '../../utils/tool-context';
 import { DEFAULT_GLOB_LIMIT, DEFAULT_GLOB_TIMEOUT_MS } from './constants';
 import { MAX_TIMEOUT_MS } from './normalize';
 import { getRipgrepCacheDir } from './rg-cache';
-import { createExecutionContext, createTempTracker } from './test-helpers';
+import {
+  createExecutionContext,
+  createTempTracker,
+  within,
+} from './test-helpers';
 import { createGlobTool } from './tool';
 import { permissionPath } from './tool-adapter';
 import type { GlobRunner, GlobSearchResult } from './types';
@@ -21,23 +25,6 @@ describe('tools/glob/tool', () => {
     backend: 'rg' as const,
     source: 'system-rg' as const,
   });
-
-  async function within<T>(
-    pending: Promise<T>,
-    ms = 2_500,
-  ): Promise<T | undefined> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        pending,
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), ms);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
 
   function getAskInput(
     ctx: ReturnType<typeof createExecutionContext>,
@@ -173,6 +160,55 @@ describe('tools/glob/tool', () => {
     ).rejects.toThrow(/timeout_ms must not exceed/);
     expect(ctx.ask).not.toHaveBeenCalled();
     expect(getMetadataInput(ctx).metadata.error_stage).toBe('normalize');
+  });
+
+  test('keeps normalization stage when a CPU-bound resolver exhausts the deadline', async () => {
+    const repoDir = temps.createRepo();
+    const ctx = createExecutionContext(repoDir);
+    const run: GlobRunner = mock(async () => {
+      throw new Error('runner must not be called');
+    });
+    const glob = createGlobTool(
+      { directory: repoDir, worktree: repoDir, client: {} } as any,
+      {
+        run,
+        resolveCli: () => {
+          const until = performance.now() + 80;
+          while (performance.now() < until) {}
+          return resolveSystem();
+        },
+      },
+    );
+
+    await expect(
+      glob.execute(
+        { pattern: '*.ts', path: 'src', timeout_ms: 20 },
+        ctx as any,
+      ),
+    ).rejects.toThrow();
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('normalize');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test('classifies a rejected permission prompt as permission failure', async () => {
+    const repoDir = temps.createRepo();
+    const ctx = createExecutionContext(repoDir);
+    ctx.ask.mockImplementation(async () => {
+      throw new Error('permission refused');
+    });
+    const run: GlobRunner = mock(async () => {
+      throw new Error('runner must not be called');
+    });
+    const glob = createGlobTool(
+      { directory: repoDir, worktree: repoDir, client: {} } as any,
+      { run, resolveCli: resolveSystem },
+    );
+
+    await expect(
+      glob.execute({ pattern: '*.ts', path: 'src' }, ctx as any),
+    ).rejects.toThrow('permission refused');
+    expect(getMetadataInput(ctx).metadata.error_stage).toBe('permission');
+    expect(run).not.toHaveBeenCalled();
   });
 
   test('does not let metadata failure break successful glob output', async () => {
