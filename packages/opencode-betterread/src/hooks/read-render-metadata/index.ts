@@ -1,5 +1,7 @@
 interface ToolExecuteAfterInput {
   tool: string;
+  sessionID?: string;
+  callID?: string;
   args?: {
     filePath?: unknown;
   };
@@ -24,7 +26,9 @@ function sanitize(value: string, maxLength = 160): string {
 function lastRenderedLineNumber(output: string): number | undefined {
   let last: number | undefined;
   for (const line of output.split('\n')) {
-    const match = /^(\d+): /u.exec(line) ?? /^(\d+):$/u.exec(line);
+    // Rendered lines always carry a space after the colon ("N: ..."), so a
+    // bare end-of-line alternative could never match.
+    const match = /^(\d+): /u.exec(line);
     if (match) {
       const value = Number(match[1]);
       if (Number.isSafeInteger(value) && value > (last ?? 0)) last = value;

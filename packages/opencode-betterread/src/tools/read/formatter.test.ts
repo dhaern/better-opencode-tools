@@ -1,11 +1,14 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
-import { buildTextMetadata } from './enhanced-metadata';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { ATTACHMENT_DATA_URL_NOTE, MAX_OUTPUT_BYTES } from './constants';
+import { executeRead } from './engine';
 import {
+  buildTextMetadata,
   formatImageInfoResult,
   formatPdfResult,
-  formatTextResult,
   renderTextResult,
 } from './formatter';
 
@@ -17,7 +20,7 @@ function lastRenderedLineNumber(output: string): number | undefined {
 
 describe('formatTextResult', () => {
   test('preserves blank lines and trailing whitespace inside the content block', () => {
-    const output = formatTextResult({
+    const output = renderTextResult({
       kind: 'text',
       path: '/tmp/sample.txt',
       content: 'alpha\n\n  beta  \n',
@@ -27,8 +30,7 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
-    });
+    }).output;
 
     expect(output).toContain(
       '<content>\n2: alpha\n3: \n4:   beta  \n5: \n</content>',
@@ -37,7 +39,7 @@ describe('formatTextResult', () => {
   });
 
   test('escapes structural path fields without escaping file content', () => {
-    const output = formatTextResult({
+    const output = renderTextResult({
       kind: 'text',
       path: '/tmp/<unsafe>&name\nfile.txt',
       content: '<literal>&content',
@@ -47,8 +49,7 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
-    });
+    }).output;
 
     expect(output).toContain(
       '<path>/tmp/&lt;unsafe&gt;&amp;name\\nfile.txt</path>',
@@ -57,7 +58,7 @@ describe('formatTextResult', () => {
   });
 
   test('renders an exact single blank line window without collapsing the content block', () => {
-    const output = formatTextResult({
+    const output = renderTextResult({
       kind: 'text',
       path: '/tmp/blank.txt',
       content: '',
@@ -67,8 +68,7 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
-    });
+    }).output;
 
     expect(output).toContain('<content>\n4: \n</content>');
     expect(output).toContain('(End of file - showing lines 4-4 of 4)');
@@ -78,7 +78,7 @@ describe('formatTextResult', () => {
     const line = 'x'.repeat(120);
     const content = Array.from({ length: 4096 }, () => line).join('\n');
 
-    const output = formatTextResult({
+    const output = renderTextResult({
       kind: 'text',
       path: '/tmp/large.txt',
       content,
@@ -88,8 +88,7 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
-    });
+    }).output;
 
     expect(Buffer.byteLength(output, 'utf8')).toBeLessThanOrEqual(
       MAX_OUTPUT_BYTES,
@@ -109,11 +108,14 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     };
 
     const rendered = renderTextResult(result);
-    const metadata = buildTextMetadata({ filePath: result.path }, result);
+    const metadata = buildTextMetadata(
+      { filePath: result.path },
+      result,
+      rendered,
+    );
     const lastLine = lastRenderedLineNumber(rendered.output);
 
     if (lastLine === undefined) {
@@ -136,11 +138,14 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: false,
       hasMore: false,
-      mtimeMs: 0,
     };
 
     const rendered = renderTextResult(result);
-    const metadata = buildTextMetadata({ filePath: result.path }, result);
+    const metadata = buildTextMetadata(
+      { filePath: result.path },
+      result,
+      rendered,
+    );
 
     expect(rendered.truncated).toBe(true);
     expect(rendered.hasMore).toBe(true);
@@ -160,17 +165,67 @@ describe('formatTextResult', () => {
       truncatedByBytes: false,
       truncatedByLineLength: true,
       hasMore: false,
-      mtimeMs: 0,
     };
 
-    const output = formatTextResult(result);
-    const metadata = buildTextMetadata({ filePath: result.path }, result);
+    const rendered = renderTextResult(result);
+    const output = rendered.output;
+    const metadata = buildTextMetadata(
+      { filePath: result.path },
+      result,
+      rendered,
+    );
 
     expect(output).toContain('(End of file - showing lines 1-1 of 1)');
     expect(output).toContain('truncated to 4096 characters');
     expect(metadata.truncated).toBe(true);
     expect(metadata.truncated_by_line_length).toBe(true);
     expect(metadata.has_more).toBe(false);
+  });
+
+  test('does not report a truncated line removed by the final output cap', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'betterread-h2-'));
+    const filePath = path.join(directory, 'long.txt');
+    try {
+      writeFileSync(
+        filePath,
+        `${Array.from({ length: 2071 }, (_, index) => 'x'.repeat(index < 200 ? 119 : 118)).join('\n')}\n${'x'.repeat(4097)}`,
+      );
+      const result = await executeRead({
+        args: { filePath, limit: 16384 },
+        directory,
+      });
+      expect(result.output).toContain('2071: ');
+      expect(result.output.includes('2072: ')).toBe(false);
+      expect(result.output.includes('One or more lines were truncated')).toBe(
+        false,
+      );
+      expect(result.metadata.truncated_by_line_length).toBe(false);
+      expect(result.metadata.has_more).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('reports a truncated line at the last emitted line, not the first removed line', () => {
+    const result = {
+      kind: 'text' as const,
+      path: '/tmp/edge.txt',
+      content: `${'x'.repeat(116)}\n${'y'.repeat(4096)}…`,
+      startLine: 1,
+      endLine: 2,
+      totalLines: 2,
+      truncatedByBytes: false,
+      truncatedByLineLength: true,
+      firstTruncatedLine: 2,
+      hasMore: false,
+    };
+    const rendered = renderTextResult(result);
+    expect(rendered.endLine).toBe(2);
+    expect(rendered.truncatedByLineLength).toBe(true);
+    expect(rendered.output).toContain('One or more lines were truncated');
+    const beyond = renderTextResult({ ...result, firstTruncatedLine: 3 });
+    expect(beyond.truncatedByLineLength).toBe(false);
+    expect(beyond.output).not.toContain('One or more lines were truncated');
   });
 });
 
@@ -196,11 +251,10 @@ describe('formatPdfResult', () => {
       kind: 'pdf',
       path: '/tmp/sample.pdf',
       pageCount: 2,
-      mtimeMs: 0,
     });
 
     expect(output).toContain('<page_count>2</page_count>');
-    expect(output).toContain(ATTACHMENT_UNAVAILABLE_NOTE);
+    expect(output).toContain(ATTACHMENT_DATA_URL_NOTE);
     expect(output).not.toContain('<pages>');
   });
 
@@ -208,7 +262,6 @@ describe('formatPdfResult', () => {
     const output = formatPdfResult({
       kind: 'pdf',
       path: '/tmp/<unsafe>&file.pdf',
-      mtimeMs: 0,
     });
 
     expect(output).toContain('<path>/tmp/&lt;unsafe&gt;&amp;file.pdf</path>');

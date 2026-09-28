@@ -1,25 +1,22 @@
-import { opendir, realpath, stat } from 'node:fs/promises';
+import { opendir, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MAX_SIMILAR_PATHS } from './constants';
+
+const MAX_SIMILAR_PATH_SCAN_ENTRIES = 256;
 
 export function resolveReadPath(filePath: string, directory: string): string {
   const expanded = filePath.startsWith('~/')
     ? path.join(os.homedir(), filePath.slice(2))
     : filePath;
-
   return path.normalize(
     path.isAbsolute(expanded) ? expanded : path.resolve(directory, expanded),
   );
 }
 
 export function isMissingPathError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error.code === 'ENOENT' || error.code === 'ENOTDIR')
-  );
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 async function safeRealpath(targetPath: string): Promise<string | undefined> {
@@ -31,100 +28,54 @@ async function safeRealpath(targetPath: string): Promise<string | undefined> {
   }
 }
 
-function canonicalMissingPath(
-  targetPath: string,
-  accessPath: string,
-): {
-  accessPath: string;
-  realPath?: string;
-} {
-  return accessPath === targetPath
-    ? { accessPath }
-    : { accessPath, realPath: accessPath };
-}
-
+// Canonical path used for every filesystem access. For a missing target the
+// nearest existing ancestor is canonicalized and the unresolved suffix is
+// kept, so child paths of a file stay invalid instead of collapsing onto it.
 export async function resolveAccessPath(targetPath: string): Promise<{
   accessPath: string;
   realPath?: string;
 }> {
   const realPath = await safeRealpath(targetPath);
-  if (realPath) {
-    return {
-      accessPath: realPath,
-      realPath,
-    };
-  }
+  if (realPath) return { accessPath: realPath, realPath };
 
   const suffix: string[] = [];
   let currentPath = targetPath;
-
-  while (true) {
-    try {
-      await stat(currentPath);
-      const currentRealPath = await safeRealpath(currentPath);
-      if (currentRealPath) {
-        // Preserve the unresolved suffix so file/child paths stay invalid instead
-        // of collapsing to the existing file ancestor.
-        return canonicalMissingPath(
-          targetPath,
-          path.join(currentRealPath, ...suffix),
-        );
-      }
-    } catch (error) {
-      if (!isMissingPathError(error)) throw error;
-    }
-
+  for (;;) {
     const parentPath = path.dirname(currentPath);
-    if (parentPath === currentPath) {
-      return {
-        accessPath: targetPath,
-      };
-    }
-
+    if (parentPath === currentPath) return { accessPath: targetPath };
     suffix.unshift(path.basename(currentPath));
     currentPath = parentPath;
+    const currentRealPath = await safeRealpath(currentPath);
+    if (currentRealPath) {
+      const accessPath = path.join(currentRealPath, ...suffix);
+      return accessPath === targetPath
+        ? { accessPath }
+        : { accessPath, realPath: accessPath };
+    }
   }
 }
 
-const MAX_SIMILAR_PATH_SCAN_ENTRIES = 256;
-
-export async function listSimilarPaths(
-  targetPath: string,
-  limit: number = MAX_SIMILAR_PATHS,
-): Promise<string[]> {
+export async function listSimilarPaths(targetPath: string): Promise<string[]> {
   const parent = path.dirname(targetPath);
-  const base = path.basename(targetPath).toLowerCase();
-  const needle = base.slice(0, 3);
-  const resultLimit = Math.min(
-    MAX_SIMILAR_PATHS,
-    Math.max(0, Math.floor(limit)),
-  );
-
-  if (resultLimit <= 0) return [];
-  if (parent === targetPath || base.length === 0 || base === path.sep)
+  const needle = path.basename(targetPath).toLowerCase().slice(0, 3);
+  // A basename never contains the path separator, so `needle` (sliced from
+  // it) cannot equal the separator either.
+  if (parent === targetPath || needle.length === 0) {
     return [];
-  if (needle.length === 0) return [];
-
+  }
   try {
-    const parentStat = await stat(parent);
-    if (!parentStat.isDirectory()) return [];
     const directory = await opendir(parent);
-
     try {
       const matches: string[] = [];
-      let inspectedEntries = 0;
-
-      while (inspectedEntries < MAX_SIMILAR_PATH_SCAN_ENTRIES) {
+      for (let inspected = 0; inspected < MAX_SIMILAR_PATH_SCAN_ENTRIES; ) {
         const entry = await directory.read();
         if (!entry) break;
-
-        inspectedEntries += 1;
+        inspected += 1;
         if (entry.name.toLowerCase().includes(needle)) {
           matches.push(path.join(parent, entry.name));
-          if (matches.length >= resultLimit) break;
+          if (matches.length >= MAX_SIMILAR_PATHS) break;
         }
       }
-
       return matches;
     } finally {
       await directory.close();

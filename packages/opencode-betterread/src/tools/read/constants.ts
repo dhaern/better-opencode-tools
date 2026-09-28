@@ -15,7 +15,8 @@ export const MAX_PARSED_NOTEBOOK_BYTES = MAX_OUTPUT_BYTES * 4;
 export const MAX_SIMILAR_PATHS = 5;
 export const PDF_COMMAND_TIMEOUT_MS = 15000;
 export const READ_TOOL_ID = 'read';
-export const ATTACHMENT_UNAVAILABLE_NOTE =
+export const OUTPUT_CAPPED_NOTE = '(Output capped by byte budget.)';
+export const ATTACHMENT_DATA_URL_NOTE =
   'File attachments are delivered as base64 data URLs for provider compatibility.';
 export const READ_DESCRIPTION = `Read a file or directory from the local filesystem. If the path does not exist, an error is returned.
 

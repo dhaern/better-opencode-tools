@@ -1,13 +1,23 @@
 import type { Dirent } from 'node:fs';
 import { opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { buildDirectoryFooter, buildDirectoryOutput } from './directory-output';
-import { getDirectoryLimit } from './limits';
-import { fitsOutputBudget } from './output-budget';
-import { escapeStructuredSingleLineValue } from './structured-escape';
+import {
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_CHARS,
+  OUTPUT_CAPPED_NOTE,
+} from './constants';
+import {
+  escapeDirectoryEntry,
+  escapeStructuredSingleLineValue,
+  escapeStructuredTagValue,
+} from './formatter';
+import type { ReadOutputLimits } from './limits';
+import { getDirectoryLimit, LEGACY_OUTPUT_LIMITS } from './limits';
 import type { DirectoryReadResult } from './types';
 
 const MAX_DIRECTORY_SCAN_ENTRIES = 65_536;
+// Bound concurrent symlink stats so wide windows do not flood the thread pool.
+const STAT_BATCH_SIZE = 256;
 
 type ScannedDirectoryEntry = {
   name: string;
@@ -22,6 +32,8 @@ type DirectoryScanResult = {
 
 type ReadDirectoryOptions = {
   scanDirectoryEntries?: (resolvedPath: string) => Promise<DirectoryScanResult>;
+  displayPath?: string;
+  outputLimits?: ReadOutputLimits;
 };
 
 function directoryPaginationLimitMessage(resolvedPath: string): string {
@@ -39,41 +51,20 @@ async function scanDirectoryEntries(
   signal?.throwIfAborted();
   const directory = await opendir(resolvedPath);
   const entries: ScannedDirectoryEntry[] = [];
-
+  let totalEntriesKnown = true;
   try {
     while (entries.length < MAX_DIRECTORY_SCAN_ENTRIES) {
-      // Cooperative cancellation: a scan aborted by the user stops instead
-      // of walking up to 65k entries with the signal already fired.
       signal?.throwIfAborted();
       const entry = await directory.read();
-      if (!entry) {
-        return {
-          entries,
-          totalEntries: entries.length,
-          totalEntriesKnown: true,
-        };
-      }
-
+      if (!entry) break;
       entries.push({ name: entry.name, dirent: entry });
     }
-
-    const nextEntry = await directory.read();
-    if (nextEntry) {
-      return {
-        entries,
-        totalEntries: entries.length,
-        totalEntriesKnown: false,
-      };
-    }
-
-    return {
-      entries,
-      totalEntries: entries.length,
-      totalEntriesKnown: true,
-    };
+    if (entries.length === MAX_DIRECTORY_SCAN_ENTRIES)
+      totalEntriesKnown = !(await directory.read());
   } finally {
     await directory.close();
   }
+  return { entries, totalEntries: entries.length, totalEntriesKnown };
 }
 
 // Trailing "/" for real directories and for symlinks that resolve to a
@@ -82,13 +73,10 @@ async function scanDirectoryEntries(
 async function formatDirectoryEntry(
   resolvedPath: string,
   entry: ScannedDirectoryEntry,
-  signal?: AbortSignal,
 ): Promise<string> {
-  signal?.throwIfAborted();
   if (entry.dirent.isDirectory()) return `${entry.name}/`;
   if (entry.dirent.isSymbolicLink()) {
     try {
-      signal?.throwIfAborted();
       if ((await stat(path.join(resolvedPath, entry.name))).isDirectory()) {
         return `${entry.name}/`;
       }
@@ -99,41 +87,120 @@ async function formatDirectoryEntry(
   return entry.name;
 }
 
-// Largest prefix of `entries` whose rendered output still fits the byte/char
-// budget, found by binary search instead of rebuilding the output once per
-// dropped entry (which is quadratic on large directories). The full page is
-// first checked with its real footer flags; the truncation note is only
-// budgeted once an actual cut is needed.
+type DirectoryFooterInput = {
+  offset: number;
+  entriesCount: number;
+  totalEntries: number;
+  totalEntriesKnown?: boolean;
+  hasMore: boolean;
+  truncatedByBytes: boolean;
+};
+
+export function buildDirectoryFooter(input: DirectoryFooterInput): string {
+  const known = input.totalEntriesKnown ?? true;
+  if (
+    input.entriesCount === 0 &&
+    known &&
+    input.offset > Math.max(input.totalEntries, 1)
+  ) {
+    return `(Offset ${input.offset} is out of range for this directory (${input.totalEntries} entries))`;
+  }
+  if (known && !input.hasMore) {
+    return `(End of directory - ${input.totalEntries} entries)`;
+  }
+  const range = `${input.offset}-${input.offset + input.entriesCount - 1}`;
+  const message = known
+    ? `(Showing entries ${range} of ${input.totalEntries}. Use offset=${input.offset + input.entriesCount} to continue.)`
+    : input.entriesCount === 0
+      ? `(No entries returned from a bounded directory scan of at least ${input.totalEntries} entries. Exact pagination beyond the first window is not supported; use a more specific path.)`
+      : `(Showing entries ${range} of at least ${input.totalEntries} from a bounded directory scan. Exact pagination beyond the first window is not supported; use a more specific path.)`;
+  return input.truncatedByBytes ? `${message}\n${OUTPUT_CAPPED_NOTE}` : message;
+}
+
+export function buildDirectoryOutput(
+  displayPath: string,
+  entries: string[],
+  footer: string,
+  escapedEntries = entries.map(escapeDirectoryEntry),
+): string {
+  return [
+    `<path>${escapeStructuredTagValue(displayPath)}</path>`,
+    '<type>directory</type>',
+    '<entries>',
+    escapedEntries.join('\n'),
+    '</entries>',
+    footer,
+  ].join('\n');
+}
+
+export function formatDirectoryResult(result: DirectoryReadResult): string {
+  if (result.formattedOutput !== undefined) return result.formattedOutput;
+  return buildDirectoryOutput(
+    result.path,
+    result.entries,
+    buildDirectoryFooter({
+      offset: result.offset,
+      entriesCount: result.entries.length,
+      totalEntries: result.totalEntries,
+      totalEntriesKnown: result.totalEntriesKnown,
+      hasMore: result.hasMore,
+      truncatedByBytes: result.truncatedByBytes,
+    }),
+  );
+}
+
+// Measure each escaped entry once. The full page uses its actual footer flags;
+// a shortened page uses the exact footer and truncation note for its count.
 function budgetedDirectoryEntries(
   normalizedPath: string,
   entries: string[],
   buildFooter: (entriesCount: number, truncatedByBytes: boolean) => string,
-): { selected: string[]; truncatedByBytes: boolean } {
-  const build = (count: number, truncatedByBytes: boolean): string =>
-    buildDirectoryOutput(
-      normalizedPath,
-      entries.slice(0, count),
-      buildFooter(count, truncatedByBytes),
-    );
-
-  if (entries.length === 0 || fitsOutputBudget(build(entries.length, false))) {
-    return { selected: entries, truncatedByBytes: false };
-  }
-  if (!fitsOutputBudget(build(0, true))) {
-    return { selected: [], truncatedByBytes: true };
-  }
-
-  let low = 0;
-  let high = entries.length;
-  while (low + 1 < high) {
-    const mid = low + ((high - low) >> 1);
-    if (fitsOutputBudget(build(mid, true))) {
-      low = mid;
+  outputLimits: ReadOutputLimits,
+): { selected: string[]; truncatedByBytes: boolean; formattedOutput: string } {
+  const frame = `<path>${escapeStructuredTagValue(normalizedPath)}</path>\n<type>directory</type>\n<entries>\n\n</entries>\n`;
+  let chars = frame.length;
+  let bytes = Buffer.byteLength(frame, 'utf8');
+  const maxBytes = Math.min(MAX_OUTPUT_BYTES, outputLimits.maxBytes);
+  const fits = (footer: string, count: number): boolean =>
+    chars + footer.length <= MAX_OUTPUT_CHARS &&
+    bytes + footer.length <= maxBytes &&
+    5 + Math.max(1, count) + (footer.includes('\n') ? 1 : 0) <=
+      outputLimits.maxLines;
+  let selectedCount = 0;
+  let checking = fits(buildFooter(0, true), 0);
+  const escapedEntries: string[] = [];
+  for (const entry of entries) {
+    const escaped = escapeDirectoryEntry(entry);
+    chars += escaped.length + (escapedEntries.length === 0 ? 0 : 1);
+    bytes +=
+      Buffer.byteLength(escaped, 'utf8') +
+      (escapedEntries.length === 0 ? 0 : 1);
+    escapedEntries.push(escaped);
+    if (
+      checking &&
+      fits(buildFooter(escapedEntries.length, true), escapedEntries.length)
+    ) {
+      selectedCount = escapedEntries.length;
     } else {
-      high = mid;
+      checking = false;
     }
   }
-  return { selected: entries.slice(0, low), truncatedByBytes: true };
+  const truncatedByBytes =
+    entries.length > 0 &&
+    !fits(buildFooter(entries.length, false), entries.length);
+  const selected = truncatedByBytes ? entries.slice(0, selectedCount) : entries;
+  return {
+    selected,
+    truncatedByBytes,
+    formattedOutput: buildDirectoryOutput(
+      normalizedPath,
+      selected,
+      buildFooter(selected.length, truncatedByBytes),
+      truncatedByBytes
+        ? escapedEntries.slice(0, selectedCount)
+        : escapedEntries,
+    ),
+  };
 }
 
 export async function readDirectory(
@@ -144,7 +211,11 @@ export async function readDirectory(
   signal?: AbortSignal,
 ): Promise<DirectoryReadResult> {
   signal?.throwIfAborted();
-  const directoryLimit = getDirectoryLimit(limit);
+  const outputLimits = options.outputLimits ?? LEGACY_OUTPUT_LIMITS;
+  const directoryLimit = Math.min(
+    getDirectoryLimit(limit),
+    outputLimits.maxLines,
+  );
   const startIndex = Math.max(offset - 1, 0);
   const scan = await (options.scanDirectoryEntries ?? scanDirectoryEntries)(
     resolvedPath,
@@ -156,42 +227,48 @@ export async function readDirectory(
     throw new Error(directoryPaginationLimitMessage(resolvedPath));
   }
 
+  // UTF-16 code units: matches LC_ALL=C for UTF-8 except astrals vs U+E000–U+FFFF.
+  // Invalid UTF-8 filenames decode with U+FFFD.
   const sortedEntries = scan.entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   );
   const visibleDirents = sortedEntries.slice(
     startIndex,
     startIndex + directoryLimit,
   );
   const visible: string[] = [];
-  for (const entry of visibleDirents) {
+  for (let index = 0; index < visibleDirents.length; index += STAT_BATCH_SIZE) {
     signal?.throwIfAborted();
-    visible.push(await formatDirectoryEntry(resolvedPath, entry, signal));
+    visible.push(
+      ...(await Promise.all(
+        visibleDirents
+          .slice(index, index + STAT_BATCH_SIZE)
+          .map((entry) => formatDirectoryEntry(resolvedPath, entry)),
+      )),
+    );
   }
   signal?.throwIfAborted();
-  const normalizedPath = path.normalize(resolvedPath);
-
-  const { selected, truncatedByBytes } = budgetedDirectoryEntries(
-    normalizedPath,
-    visible,
-    (entriesCount, truncated) =>
-      buildDirectoryFooter({
-        offset,
-        entriesCount,
-        totalEntries: scan.totalEntries,
-        totalEntriesKnown: scan.totalEntriesKnown,
-        hasMore:
-          truncated ||
-          !scan.totalEntriesKnown ||
-          startIndex + entriesCount < sortedEntries.length,
-        truncatedByBytes: truncated,
-      }),
-  );
-
-  const hasMore =
-    truncatedByBytes ||
+  const normalizedPath = path.normalize(options.displayPath ?? resolvedPath);
+  const hasMore = (count: number, truncated: boolean): boolean =>
+    truncated ||
     !scan.totalEntriesKnown ||
-    startIndex + selected.length < sortedEntries.length;
+    startIndex + count < scan.entries.length;
+
+  const { selected, truncatedByBytes, formattedOutput } =
+    budgetedDirectoryEntries(
+      normalizedPath,
+      visible,
+      (entriesCount, truncated) =>
+        buildDirectoryFooter({
+          offset,
+          entriesCount,
+          totalEntries: scan.totalEntries,
+          totalEntriesKnown: scan.totalEntriesKnown,
+          hasMore: hasMore(entriesCount, truncated),
+          truncatedByBytes: truncated,
+        }),
+      outputLimits,
+    );
 
   return {
     kind: 'directory',
@@ -201,7 +278,8 @@ export async function readDirectory(
     limit: directoryLimit,
     totalEntries: scan.totalEntries,
     totalEntriesKnown: scan.totalEntriesKnown,
-    hasMore,
+    hasMore: hasMore(selected.length, truncatedByBytes),
     truncatedByBytes,
+    formattedOutput,
   };
 }

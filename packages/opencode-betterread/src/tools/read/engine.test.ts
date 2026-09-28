@@ -1,11 +1,24 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readBoundedBytes } from './attachments';
-import { ATTACHMENT_UNAVAILABLE_NOTE, MAX_OUTPUT_BYTES } from './constants';
+import { imageDimensions, readBoundedBytes } from './attachments';
+import {
+  ATTACHMENT_DATA_URL_NOTE,
+  FAST_PATH_MAX_BYTES,
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_CHARS,
+} from './constants';
 import { executeRead, inspectReadTarget } from './engine';
 
 const tempDirs: string[] = [];
@@ -14,6 +27,23 @@ const tinyPng = Buffer.from([
   0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02,
   0x00, 0x00, 0x00,
 ]);
+
+function jpegWithSofAt(position: number): Buffer {
+  const jpeg = Buffer.alloc(position + 19);
+  jpeg[0] = 0xff;
+  jpeg[1] = 0xd8;
+  jpeg[2] = 0xff;
+  jpeg[3] = 0xe1;
+  jpeg.writeUInt16BE(position - 4, 4);
+  jpeg[position] = 0xff;
+  jpeg[position + 1] = 0xc0;
+  jpeg.writeUInt16BE(17, position + 2);
+  jpeg[position + 4] = 8;
+  jpeg.writeUInt16BE(2, position + 5);
+  jpeg.writeUInt16BE(3, position + 7);
+  jpeg[position + 9] = 3;
+  return jpeg;
+}
 
 async function createWorkspace(): Promise<string> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'betterread-engine-'));
@@ -30,6 +60,307 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('stops attachment reads immediately when aborted during the first read', async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    const handle = {
+      read: async (buffer: Buffer, offset: number) => {
+        reads += 1;
+        if (reads === 1) controller.abort();
+        const bytesRead = reads < 4 ? 1 : 0;
+        if (bytesRead) buffer[offset] = 0x61;
+        return { buffer, bytesRead };
+      },
+    } as any;
+    const error = await readBoundedBytes(handle, 100, controller.signal).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(reads).toBe(1);
+    expect(error).toMatchObject({ name: 'AbortError' });
+  });
+
+  test('closes each verified descriptor after repeated reads on Linux', async () => {
+    if (process.platform !== 'linux') return;
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'fd.txt');
+    await writeFile(filePath, 'sample\n');
+    const before = (await readdir('/proc/self/fd')).length;
+    for (let index = 0; index < 20; index += 1) {
+      await executeRead({ args: { filePath }, directory });
+    }
+    const after = (await readdir('/proc/self/fd')).length;
+    expect(after - before).toBe(0);
+  });
+
+  test('counts all lines of an exactly 1 MiB file even for a one-line window', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'exact-1m.txt');
+    const bytes = Buffer.concat([
+      Buffer.alloc(FAST_PATH_MAX_BYTES - 2, 0x61),
+      Buffer.from('\nb'),
+    ]);
+    expect(bytes.length).toBe(FAST_PATH_MAX_BYTES);
+    await writeFile(filePath, bytes);
+    const result = await executeRead({
+      args: { filePath, limit: 1 },
+      directory,
+    });
+    expect(result.metadata.total_lines).toBe(2);
+    expect(result.metadata.has_more).toBe(true);
+  });
+
+  test('allows an attachment size hint equal to the cap without rejecting it', async () => {
+    const payload = Buffer.from('0123456789');
+    let reads = 0;
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        reads += 1;
+        const bytesRead = Math.min(
+          length,
+          Math.max(0, payload.length - position),
+        );
+        payload.copy(buffer, offset, position, position + bytesRead);
+        return { buffer, bytesRead };
+      },
+    } as any;
+    expect(
+      await readBoundedBytes(handle, payload.length, undefined, payload.length),
+    ).toEqual(payload);
+    expect(reads).toBeGreaterThan(0);
+  });
+
+  test('shows the requested path for both text and notebooks through a linked directory', async () => {
+    const directory = await createWorkspace();
+    const canonical = path.join(directory, 'canonical');
+    const alias = path.join(directory, 'alias');
+    await mkdir(canonical);
+    await writeFile(path.join(canonical, 'sample.txt'), 'hello\n');
+    await writeFile(
+      path.join(canonical, 'sample.ipynb'),
+      JSON.stringify({ cells: [{ cell_type: 'code', source: ['hello\n'] }] }),
+    );
+    await symlink(canonical, alias, 'dir');
+
+    for (const file of ['sample.txt', 'sample.ipynb']) {
+      const requested = path.join(alias, file);
+      const result = await executeRead({
+        args: { filePath: requested },
+        directory,
+      });
+      expect(result.output.startsWith(`<path>${requested}</path>`)).toBe(true);
+      expect(result.metadata.resolved_path).toBe(requested);
+      expect(result.metadata.real_path).toBe(path.join(canonical, file));
+    }
+  });
+
+  test('grows past a stale attachment size hint and still enforces the cap', async () => {
+    const payload = Buffer.from('0123456789abcdefghijklmn');
+    const handle = {
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        const bytesRead = Math.max(
+          0,
+          Math.min(length, payload.length - position),
+        );
+        payload.copy(buffer, offset, position, position + bytesRead);
+        return { buffer, bytesRead };
+      },
+    } as any;
+
+    expect(await readBoundedBytes(handle, 64, undefined, 4)).toEqual(payload);
+    expect(
+      await readBoundedBytes(handle, payload.length, undefined, 4),
+    ).toEqual(payload);
+    await expect(readBoundedBytes(handle, 10, undefined, 4)).rejects.toThrow(
+      'Embedded attachment exceeds the 10 byte limit',
+    );
+  });
+
+  test('rejects an over-cap size hint without reading', async () => {
+    let reads = 0;
+    const handle = {
+      read: async () => {
+        reads += 1;
+        return { buffer: Buffer.alloc(0), bytesRead: 0 };
+      },
+    } as any;
+
+    await expect(readBoundedBytes(handle, 10, undefined, 11)).rejects.toThrow(
+      'Embedded attachment exceeds the 10 byte limit',
+    );
+    expect(reads).toBe(0);
+  });
+
+  test('reads an attachment of known size with one data read', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'large.png');
+    const bytes = Buffer.concat([tinyPng, Buffer.alloc(3 * 1024 * 1024, 1)]);
+    await writeFile(filePath, bytes);
+    const file = await open(filePath, 'r');
+    let reads = 0;
+    const handle = {
+      read: (...args: Parameters<typeof file.read>) => {
+        reads += 1;
+        return file.read(...args);
+      },
+    } as any;
+
+    try {
+      expect(
+        await readBoundedBytes(
+          handle,
+          20 * 1024 * 1024,
+          undefined,
+          bytes.length,
+        ),
+      ).toEqual(bytes);
+      expect(reads).toBeLessThanOrEqual(3);
+    } finally {
+      await file.close();
+    }
+  });
+
+  test('does not misclassify text with BM or high-bit signatures as images/PDFs', async () => {
+    const directory = await createWorkspace();
+    const cases: [string, Buffer | string][] = [
+      ['bm25.md', 'BM25 ranking notes\n'],
+      ['bmw.md', 'BMW notes on vehicle history\n'],
+      ['latin1-gif.txt', Buffer.from('ÇÉÆ¸¹á text\n', 'latin1')],
+      [
+        'high-gif.txt',
+        Buffer.concat([
+          Buffer.from('GIF89a').map((byte) => byte | 0x80),
+          Buffer.from(' text\n'),
+        ]),
+      ],
+      [
+        'high-pdf.txt',
+        Buffer.concat([
+          Buffer.from('%PDF-').map((byte) => byte | 0x80),
+          Buffer.from(' text\n'),
+        ]),
+      ],
+    ];
+    for (const [name, contents] of cases) {
+      const filePath = path.join(directory, name);
+      await writeFile(filePath, contents);
+      const result = await executeRead({ args: { filePath }, directory });
+      expect(result.metadata.kind).toBe('text');
+      expect(result.attachments).toBeUndefined();
+    }
+    const invalidBmp = Buffer.alloc(58);
+    invalidBmp.write('BM');
+    invalidBmp.writeUInt32LE(24, 14);
+    const filePath = path.join(directory, 'invalid.bmp');
+    await writeFile(filePath, invalidBmp);
+    expect(
+      (await executeRead({ args: { filePath }, directory })).metadata.kind,
+    ).not.toBe('image');
+  });
+
+  test('embeds BMP images with a valid DIB header', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'tiny.bmp');
+    const bmp = Buffer.alloc(58);
+    bmp.write('BM', 0, 'latin1');
+    bmp.writeUInt32LE(40, 14);
+    await writeFile(filePath, bmp);
+
+    const result = await executeRead({ args: { filePath }, directory });
+
+    expect(result.output).toContain('<mime>image/bmp</mime>');
+    expect(result.attachments?.[0]?.url).toBe(
+      `data:image/bmp;base64,${bmp.toString('base64')}`,
+    );
+  });
+
+  test('keeps the largest directory prefix within the output budget', async () => {
+    const directory = await createWorkspace();
+    await Promise.all(
+      Array.from({ length: 1100 }, (_, index) =>
+        writeFile(
+          path.join(
+            directory,
+            `${String(index).padStart(5, '0')}-${'n'.repeat(244)}`,
+          ),
+          '',
+        ),
+      ),
+    );
+    const result = await executeRead({
+      args: { filePath: directory, limit: 16384 },
+      directory,
+    });
+
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(MAX_OUTPUT_CHARS - result.output.length).toBeLessThan(251);
+  });
+
+  test('budgets directory output with the displayed symlink path', async () => {
+    const directory = await createWorkspace();
+    const target = path.join(directory, 'target');
+    await mkdir(target);
+    await Promise.all(
+      Array.from({ length: 1100 }, (_, index) =>
+        writeFile(
+          path.join(
+            target,
+            `${String(index).padStart(5, '0')}-${'n'.repeat(244)}`,
+          ),
+          '',
+        ),
+      ),
+    );
+    const parent = path.join(directory, 'a'.repeat(200), 'b'.repeat(200));
+    await mkdir(parent, { recursive: true });
+    const link = path.join(parent, 'link');
+    await symlink(target, link);
+
+    const result = await executeRead({
+      args: { filePath: link, limit: 16384 },
+      directory,
+    });
+
+    expect(result.output.startsWith(`<path>${link}</path>`)).toBe(true);
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+  });
+
+  test('keeps numbered text lines intact when the output cap is reached', async () => {
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'numbered.txt');
+    await writeFile(
+      filePath,
+      `${Array.from({ length: 1100 }, () => 'a'.repeat(300)).join('\n')}\n`,
+    );
+
+    const result = await executeRead({
+      args: { filePath, limit: 16384 },
+      directory,
+    });
+
+    expect(result.output.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(MAX_OUTPUT_CHARS - result.output.length).toBeLessThan(306);
+    expect(result.metadata.truncated_by_bytes).toBe(true);
+    const numbered = result.output.match(/^\d+: a+$/gm) ?? [];
+    expect(numbered.length).toBeGreaterThan(800);
+    expect(
+      numbered.every(
+        (line, index) => line === `${index + 1}: ${'a'.repeat(300)}`,
+      ),
+    ).toBe(true);
+  });
   test('preserves attachment bytes when a handle returns short reads', async () => {
     const expected = Buffer.from('short attachment payload');
     let reads = 0;
@@ -75,7 +406,7 @@ describe('executeRead', () => {
     expect(inspection.resolvedPath).toBe(missingPath);
     expect(inspection.accessPath).toBe(path.join(outside, 'secrett.txt'));
     expect(inspection.realPath).toBe(path.join(outside, 'secrett.txt'));
-    expect(inspection.similarPaths).toEqual([]);
+    expect(inspection).not.toHaveProperty('similarPaths');
 
     await expect(
       executeRead({ args: { filePath: missingPath }, directory, inspection }),
@@ -156,7 +487,7 @@ describe('executeRead', () => {
     expect(result.output).toContain(linked);
     expect(result.output).toContain('1: alpha');
     expect(result.output).not.toContain('1: beta');
-    expect(result.realPath).toBe(firstTarget);
+    expect(result.metadata.real_path).toBe(firstTarget);
   });
 
   test('rejects special files before attempting to open them', async () => {
@@ -406,6 +737,91 @@ describe('executeRead', () => {
     ]);
   });
 
+  test('reads JPEG SOF0 dimensions after fill bytes and standalone markers', () => {
+    const jpeg = Buffer.from([
+      0xff, 0xd8, 0xff, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xff, 0x01,
+      0xff, 0xd0, 0xff, 0xd7, 0xff, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02,
+      0x00, 0x03, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+      0xff, 0xd9,
+    ]);
+    expect(imageDimensions('image/jpeg', jpeg)).toEqual({
+      width: 3,
+      height: 2,
+    });
+  });
+
+  test.each([65_520, 65_526, 65_527])(
+    'reads JPEG SOF0 at byte %i near the 64 KiB probe boundary',
+    async (position) => {
+      const directory = await createWorkspace();
+      const filePath = path.join(directory, 'edge.jpg');
+      await writeFile(filePath, jpegWithSofAt(position));
+      const result = await executeRead({ args: { filePath }, directory });
+      expect(result.output).toContain('<dimensions>3x2</dimensions>');
+      expect(result.metadata.width).toBe(3);
+      expect(result.metadata.height).toBe(2);
+    },
+  );
+
+  test('omits dimensions if the SOF0 header falls outside the 64 KiB probe', () => {
+    expect(imageDimensions('image/jpeg', jpegWithSofAt(65_534))).toEqual({});
+  });
+
+  test('ignores a JPEG SOF0 with an incomplete segment-length field', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00]),
+      ),
+    ).toEqual({});
+  });
+
+  test('ignores a JPEG SOF0 with incomplete height and width bytes', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([
+          0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00,
+        ]),
+      ),
+    ).toEqual({});
+  });
+
+  test('ignores a JPEG SOF0 whose declared length is too short', () => {
+    expect(
+      imageDimensions(
+        'image/jpeg',
+        Buffer.from([
+          0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0x08, 0x00, 0x05, 0x00, 0x07,
+          0x00,
+        ]),
+      ),
+    ).toEqual({});
+  });
+
+  test('names symlinked image attachments after the requested file', async () => {
+    const directory = await createWorkspace();
+    const canonical = path.join(directory, 'photo.png');
+    const requested = path.join(directory, 'link.png');
+    await writeFile(canonical, tinyPng);
+    await symlink(canonical, requested);
+
+    const result = await executeRead({
+      args: { filePath: requested },
+      directory,
+    });
+    expect(result.output).toContain(`<path>${requested}</path>`);
+    expect(result.metadata.real_path).toBe(canonical);
+    expect(result.attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'image/png',
+        url: `data:image/png;base64,${tinyPng.toString('base64')}`,
+        filename: 'link.png',
+      },
+    ]);
+  });
+
   test('escapes unsafe image summaries and previews', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'tiny\n<unsafe>&.png');
@@ -436,7 +852,7 @@ describe('executeRead', () => {
     });
 
     expect(result.output).toContain('<type>pdf</type>');
-    expect(result.output).toContain(ATTACHMENT_UNAVAILABLE_NOTE);
+    expect(result.output).toContain(ATTACHMENT_DATA_URL_NOTE);
     expect(result.metadata.attachment_support).toBe('embedded');
     expect(result.attachments).toEqual([
       {

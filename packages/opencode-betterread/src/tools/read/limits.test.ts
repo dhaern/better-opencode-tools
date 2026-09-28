@@ -1,6 +1,14 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { normalizeReadArgs } from './limits';
+import { hostOutputLimits, normalizeReadArgs } from './limits';
+
+test('rejects fractional and unsafe host output limits', () => {
+  expect(
+    hostOutputLimits({
+      tool_output: { max_lines: 1.5, max_bytes: 2 ** 53 },
+    }),
+  ).toEqual({ maxLines: 2000, maxBytes: 51_200 });
+});
 
 describe('normalizeReadArgs', () => {
   test('applies defaults and clamps invalid values', () => {

@@ -15,7 +15,6 @@ let boundedScanEntries:
   | {
       name: string;
       dirent: typeof fileDirent;
-      dirLike: boolean;
     }[]
   | undefined;
 
@@ -25,7 +24,6 @@ function getBoundedScanEntries() {
     (_, index) => ({
       name: `entry-${String(BOUNDED_SCAN_ENTRY_COUNT - index - 1).padStart(5, '0')}.txt`,
       dirent: fileDirent,
-      dirLike: false,
     }),
   );
 
@@ -47,6 +45,61 @@ afterEach(async () => {
 });
 
 describe('readDirectory', () => {
+  test('orders names by UTF-16 code units instead of locale collation', async () => {
+    const names = [
+      'éclair',
+      'zeta',
+      'alpha',
+      'Alpha',
+      '_meta',
+      '😀.txt',
+      '（１）.txt',
+    ];
+    const result = await readDirectory('/tmp/byte-order', 1, 10, {
+      scanDirectoryEntries: async () => ({
+        entries: names.map((name) => ({
+          name,
+          dirent: fileDirent,
+        })),
+        totalEntries: names.length,
+        totalEntriesKnown: true,
+      }),
+    });
+
+    expect(result.entries).toEqual([
+      'Alpha',
+      '_meta',
+      'alpha',
+      'zeta',
+      'éclair',
+      '😀.txt',
+      '（１）.txt',
+    ]);
+  });
+
+  test('keeps window order and symlink slashes across stat batches', async () => {
+    const directory = await createTempDirectory();
+    const outside = await createTempDirectory();
+    await Promise.all(
+      Array.from({ length: 600 }, (_, index) =>
+        symlink(
+          outside,
+          path.join(directory, `link-${String(index).padStart(3, '0')}`),
+        ),
+      ),
+    );
+    await writeFile(path.join(directory, 'link-300x'), 'file', 'utf8');
+
+    const result = await readDirectory(directory, 1, 1000);
+
+    expect(result.entries).toHaveLength(601);
+    expect(result.entries[0]).toBe('link-000/');
+    expect(result.entries[301]).toBe('link-300x');
+    expect(result.entries.at(-1)).toBe('link-599/');
+    expect(result.entries.filter((entry) => entry.endsWith('/'))).toHaveLength(
+      600,
+    );
+  });
   test('keeps exact totals for small fully scanned directories', async () => {
     const directory = await createTempDirectory();
     await mkdir(path.join(directory, 'subdir'));

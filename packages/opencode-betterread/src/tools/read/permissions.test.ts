@@ -1,10 +1,12 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
+import { Effect } from 'effect';
 import {
   askReadPermission,
   assertSafePermissionPath,
   isWithinProjectBoundary,
   permissionGlob,
+  runOpenCodeSideEffect,
   selectExternalPermissionTarget,
 } from './permissions';
 
@@ -174,5 +176,36 @@ describe('tools/read/permissions', () => {
       isWithinProjectBoundary(ctx as any, '/workspace/project/file.txt'),
     ).toBe(true);
     expect(isWithinProjectBoundary(ctx as any, '/tmp/outside.txt')).toBe(false);
+  });
+
+  test('propagates OpenCode InstanceRef bridge failures', async () => {
+    await expect(
+      runOpenCodeSideEffect(
+        Effect.fail(new Error('Service not found: InstanceRef not provided')),
+      ),
+    ).rejects.toThrow('InstanceRef not provided');
+  });
+
+  test('does not suppress unrelated Effect failures', async () => {
+    await expect(
+      runOpenCodeSideEffect(Effect.fail(new Error('permission denied'))),
+    ).rejects.toThrow('permission denied');
+  });
+
+  test('loads Effect only for actual Effects, never for Promises or undefined', async () => {
+    const load = mock(async () => import('effect'));
+    await runOpenCodeSideEffect(Promise.resolve(), load);
+    await runOpenCodeSideEffect(undefined, load);
+    await expect(
+      runOpenCodeSideEffect(Promise.reject(new Error('promise denied')), load),
+    ).rejects.toThrow('promise denied');
+    expect(load).not.toHaveBeenCalled();
+
+    await runOpenCodeSideEffect(Effect.succeed(undefined), load);
+    expect(load).toHaveBeenCalledTimes(1);
+    await expect(
+      runOpenCodeSideEffect(Effect.fail(new Error('effect denied')), load),
+    ).rejects.toThrow('effect denied');
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });
