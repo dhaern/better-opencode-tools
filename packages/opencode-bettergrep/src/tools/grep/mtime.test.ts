@@ -250,26 +250,33 @@ test('mtime replay stops at a mid-replay limit', async () => {
   expect(invocations.length).toBe(2);
 });
 
-test('mtime sort warns on deleted files and orders them last', async () => {
-  const missing = createFileMatch({
-    file: 'gone.txt',
-    absolutePath: '/no/such/dir/gone.txt',
-    pathKey: 'utf8:/no/such/dir/gone.txt',
-    replayPath: '/no/such/dir/gone.txt',
-  });
-  const sorted = await sortFilesByMtime(
-    [missing],
-    { sortOrder: 'asc' },
-    new AbortController().signal,
-    Date.now() + 10_000,
-  );
+test.each(['asc', 'desc'] as const)(
+  'mtime sort %s warns on deleted files and orders them last',
+  async (sortOrder) => {
+    const root = temps.createDir('bettergrep-mtime-deleted');
+    const [missing, present] = ['a-gone.txt', 'b-here.txt'].map((name) => {
+      const file = path.join(root, name);
+      return createFileMatch({
+        file: name,
+        absolutePath: file,
+        replayPath: file,
+      });
+    });
+    writeFileSync(present.replayPath as string, 'needle\n');
+    const sorted = await sortFilesByMtime(
+      [missing, present],
+      { sortOrder },
+      new AbortController().signal,
+      Date.now() + 10_000,
+    );
 
-  expect(sorted.files).toEqual([missing]);
-  expect(sorted.timedOut).toBe(false);
-  expect(
-    sorted.warnings.some((warning) => warning.includes('Could not stat')),
-  ).toBe(true);
-});
+    expect(sorted.files).toEqual([present, missing]);
+    expect(sorted.timedOut).toBe(false);
+    expect(
+      sorted.warnings.some((warning) => warning.includes('Could not stat')),
+    ).toBe(true);
+  },
+);
 
 test('mtime replay skips non-replayable paths with a warning', async () => {
   const root = temps.createDir('bettergrep-mtime-nonutf8');
