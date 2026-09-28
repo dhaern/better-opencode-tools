@@ -1,94 +1,72 @@
 # ⚡ opencode-bettergrep
 
-`opencode-bettergrep` is a standalone OpenCode plugin that replaces the built-in
-`grep` tool with a richer local search implementation powered primarily by
-`ripgrep`.
+[![npm](https://img.shields.io/npm/v/opencode-bettergrep)](https://www.npmjs.com/package/opencode-bettergrep)
+[![License: MIT](https://img.shields.io/github/license/dhaern/better-opencode-tools)](https://github.com/dhaern/better-opencode-tools/blob/main/LICENSE)
 
-It is designed for fast codebase exploration while keeping output structured,
-bounded, and useful for AI agents.
+An OpenCode plugin that replaces the built-in `grep` tool. It registers under the
+same tool ID, searches with ripgrep, and adds the filters, limits and timeout
+handling an agent needs when it explores a large repository.
 
-## ✨ Why it is better than the native grep tool
+It is part of [Better OpenCode Tools](https://github.com/dhaern/better-opencode-tools),
+next to `opencode-betterglob` and `opencode-betterread`.
 
-### ⚡ Ripgrep-first performance
-
-The primary path uses `ripgrep`, which is usually much faster than generic text
-search for real repositories.
-
-### 🔎 More search modes
-
-The plugin supports the common search modes agents need while investigating a
-codebase:
-
-- content matches
-- `files_with_matches`
-- count mode
-- fixed-string search
-- regular expressions
-- multiline search
-- PCRE2
-- context lines
-- include/exclude globs
-- file type filters
-- size limits
-- sorting
-
-### 🧯 Robust timeout behavior
-
-Search processes are terminated with a SIGTERM to SIGKILL escalation path, so a
-stubborn child process should not keep running after timeout or cancellation.
-
-### 🧩 Agent-friendly output
-
-Results include file paths, line numbers, context, partial-result notes, and
-metadata that helps agents reason about whether a search was exhaustive.
-
-## 🧠 Technical highlights
-
-- Registers as the exact `grep` tool ID.
-- Resolves or installs `ripgrep` when needed.
-- Includes fallback behavior for environments without ripgrep.
-- Tracks timeout, cancellation, partial output, and stderr notes explicitly.
-- Keeps output bounded and compatible with OpenCode's tool rendering model.
-
-## 📦 Recommended installation (npm)
-
-For normal installs, use npm:
+## 🚀 Install
 
 ```bash
 npm install opencode-bettergrep
 ```
 
-Then register the installed package in your OpenCode config by package name:
-
 ```json
 {
-  "plugin": [
-    "opencode-bettergrep"
-  ]
+  "plugin": ["opencode-bettergrep"]
 }
 ```
 
-## 🛠️ Manual installation from source (alternative)
+To run it from a local checkout, clone the repository, run `bun install` and
+`bun run build`, and point the plugin entry at
+`file:///path/to/better-opencode-tools/packages/opencode-bettergrep`.
 
-Use the source/file flow if you want to run the plugin from a local checkout or
-test local unpublished changes.
+## 🔎 What you can ask for
 
-```bash
-git clone https://github.com/dhaern/better-opencode-tools.git
-cd better-opencode-tools
-bun install
-bun run build
-```
+| Area | Options |
+| --- | --- |
+| Output | `output_mode`: `content`, `files_with_matches` or `count`. |
+| Matching | `fixed_strings`, `case_sensitive`, `smart_case`, `word_regexp`, `invert_match`, `multiline`, `multiline_dotall`, `pcre2`. |
+| Context | `context`, `before_context`, `after_context` (0 to 20 lines). |
+| Scope | `path` or `paths`, `include`, `globs`, `exclude_globs`, `file_type`, `file_types`, `exclude_file_types`, `max_filesize`, `hidden`, `follow_symlinks`. |
+| Limits | `max_results` (500 by default, 5,000 at most), `max_count_per_file`, `timeout_ms` (80 s by default, 140 s at most). |
+| Order | `sort_by`: `none`, `path` or `mtime`, with `sort_order`. |
 
-Add the plugin to your OpenCode config:
+Results list file paths, line numbers and context. When a search was cut short by
+a limit, a timeout or a cancellation, the output says so, so the agent knows
+whether the result was exhaustive.
 
-```json
-{
-  "plugin": [
-    "file:///path/to/better-opencode-tools/packages/opencode-bettergrep"
-  ]
-}
-```
+## 🛡️ How it handles processes
+
+- Every search runs under a deadline. On timeout or cancellation the process gets
+  SIGTERM and then SIGKILL, so a stubborn child does not outlive the call.
+- The probe that checks the ripgrep binary competes against process termination.
+  A probe that times out resolves even if a child process keeps stdio open.
+- When results tie on modification time, they are ordered by raw path bytes. The
+  output does not depend on which worker finished first or on the system locale.
+
+## 🧭 Finding ripgrep
+
+The plugin uses a ripgrep it finds on `PATH`, and installs a managed copy when it
+finds none. If ripgrep cannot be used, it falls back to GNU grep. The fallback
+runs with `LC_ALL=C.UTF-8` and an empty `LANGUAGE`, so its version output parses
+in English even on a machine with a translated locale.
+
+The fallback choice is remembered for 10 minutes. After that the plugin tries
+ripgrep again, so a single failed probe does not keep the session on GNU grep. It
+also tries again as soon as the ripgrep binary on `PATH` changes.
+
+## ⚠️ Known limitations
+
+- The GNU grep fallback is slower and does not support every ripgrep feature.
+- A very large output can still be expensive for the host UI and the model, even
+  when the search process exits quickly. Use `max_results` and the filters to keep
+  results small.
 
 ## 🧪 Development
 
@@ -98,9 +76,3 @@ bun test
 bun run build
 bun run check
 ```
-
-## ⚠️ Known limitations
-
-- Fallback mode is slower and may not support every ripgrep-specific feature.
-- Very large outputs can still be expensive for the host UI/model pipeline even
-  when the search process itself exits quickly.

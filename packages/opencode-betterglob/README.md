@@ -1,87 +1,71 @@
 # 🔍 opencode-betterglob
 
-`opencode-betterglob` is a standalone OpenCode plugin that replaces the built-in
-`glob` tool with a fast `ripgrep`-backed file discovery engine.
+[![npm](https://img.shields.io/npm/v/opencode-betterglob)](https://www.npmjs.com/package/opencode-betterglob)
+[![License: MIT](https://img.shields.io/github/license/dhaern/better-opencode-tools)](https://github.com/dhaern/better-opencode-tools/blob/main/LICENSE)
 
-It keeps the agent-facing behavior simple: return matching file paths, one per
-line, while adding stronger controls around limits, sorting, hidden files,
-timeouts, and large workspaces.
+An OpenCode plugin that replaces the built-in `glob` tool. It registers under the
+same tool ID and returns matching file paths, one per line, using `rg --files`
+for the walk.
 
-## ✨ Why it is better than the native glob tool
+It is part of [Better OpenCode Tools](https://github.com/dhaern/better-opencode-tools),
+next to `opencode-bettergrep` and `opencode-betterread`.
 
-### ⚡ Faster discovery on large repositories
-
-The plugin uses `rg --files` as its backend, which is highly optimized for large
-trees, ignored files, and modern repository layouts.
-
-### 🎛️ More explicit controls
-
-It supports advanced options that make tool calls more predictable:
-
-- `limit`
-- `sort_by`
-- `sort_order`
-- `hidden`
-- `timeout_ms`
-
-### 🧯 Safer defaults
-
-The default result limit is intentionally conservative to avoid flooding the
-conversation with huge path lists. Heavy searches still work, but they are more
-controlled.
-
-### 🧩 Native-compatible output
-
-The output remains plain paths with native-style empty states and timeout notes,
-so agents can use it as a drop-in replacement for the built-in `glob` tool.
-
-## 🧠 Technical highlights
-
-- Registers as the exact `glob` tool ID.
-- Uses NUL-delimited parsing where appropriate for safe path handling.
-- Supports ripgrep auto-resolution and managed install behavior.
-- Handles timeout and cancellation without leaving long-running processes behind.
-- Adds render metadata through a lightweight post-execution hook.
-
-## 📦 Recommended installation (npm)
-
-For normal installs, use npm:
+## 🚀 Install
 
 ```bash
 npm install opencode-betterglob
 ```
 
-Then register the installed package in your OpenCode config by package name:
-
 ```json
 {
-  "plugin": [
-    "opencode-betterglob"
-  ]
+  "plugin": ["opencode-betterglob"]
 }
 ```
 
-## 🛠️ Manual installation from source (alternative)
+To run it from a local checkout, clone the repository, run `bun install` and
+`bun run build`, and point the plugin entry at
+`file:///path/to/better-opencode-tools/packages/opencode-betterglob`.
 
-Use the source/file flow if you want to run the plugin from a local checkout or
-test local unpublished changes.
+## 🎛️ Options
 
-```bash
-git clone https://github.com/dhaern/better-opencode-tools.git
-cd better-opencode-tools
-bun install
-bun run build
-```
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `pattern` | required | The glob to match. |
+| `path` | working directory | Directory to search. |
+| `limit` | 500 | Maximum number of paths returned. |
+| `sort_by` | `mtime` | `mtime`, `path` or `none`. |
+| `sort_order` | none | `asc` or `desc`. |
+| `hidden` | `true` | Include hidden files, still honoring ignore rules. |
+| `timeout_ms` | 80,000 | Deadline for the whole call, including binary resolution and any first install. |
 
-Add the plugin to your OpenCode config:
+The default limit is deliberately low, so a broad pattern does not flood the
+conversation with paths. Raise `limit` when you need more.
 
-```json
-{
-  "plugin": [
-    "file:///path/to/better-opencode-tools/packages/opencode-betterglob"
-  ]
-}
-```
+Output is plain paths with the native tool's empty-result and timeout messages,
+so agents can use it as a drop-in replacement.
+
+## 🛡️ How it handles processes
+
+- The search shares one lifecycle with its cleanup. A search that reaches its
+  limit stops in about 0.3 s, where a generic kill grace would take 5 s.
+- Timeout and cancellation stop the process and do not leave it running.
+- Paths are read NUL-delimited, so unusual file names stay intact.
+- `which` and `proper-lockfile` load only when they are needed. Importing the
+  plugin does not patch host globals.
+
+## ⚠️ Known limitations
+
+- `sort_by: "mtime"` relies on ripgrep's modified-time sorting. On a very broad
+  search, ripgrep may not stream useful partial paths before a timeout.
+- The first run may need network access if the plugin has to download a managed
+  ripgrep binary.
+- On Bun hosts, a working `node` executable must be on `PATH` for POSIX process
+  supervision. Bun's child-process IPC is not used.
+- The first managed ripgrep installation loads `proper-lockfile`, which patches
+  some Node process and fs functions and signal listeners.
+- Symlink traversal is disabled. `follow_symlinks: true` is rejected, because an
+  `rg --follow` process cannot be confined to the destinations authorized before
+  it starts.
 
 ## 🧪 Development
 
@@ -91,19 +75,3 @@ BETTERGLOB_TEST_RG="$(command -v rg)" bun test
 bun run build
 bun run check
 ```
-
-## ⚠️ Known limitations
-
-- `sort_by: "mtime"` depends on ripgrep's modified-time sorting behavior. On
-  very broad searches, ripgrep may not stream useful partial paths before a
-  timeout.
-- First run may need network access if the plugin has to download a managed
-  `ripgrep` binary.
-- On Bun hosts, a working `node` executable must also be available on `PATH`
-  for POSIX process supervision; Bun's child-process IPC is not used.
-- The first managed ripgrep installation loads `proper-lockfile`, which patches
-  some Node process/fs functions and signal listeners. Importing the plugin
-  without installing ripgrep does not load it or apply those patches.
-- Symlink traversal is disabled. `follow_symlinks: true` is rejected because
-  an `rg --follow` process cannot be confined to the destinations authorized
-  before it starts.

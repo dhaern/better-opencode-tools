@@ -1,110 +1,101 @@
 # 📖 opencode-betterread
 
-`opencode-betterread` is a standalone OpenCode plugin that replaces the
-agent-facing built-in `read` tool with a real plugin implementation.
+[![npm](https://img.shields.io/npm/v/opencode-betterread)](https://www.npmjs.com/package/opencode-betterread)
+[![License: MIT](https://img.shields.io/github/license/dhaern/better-opencode-tools)](https://github.com/dhaern/better-opencode-tools/blob/main/LICENSE)
 
-It focuses on predictable file ingestion: numbered text output, robust directory
-pagination, notebook handling, binary detection, explicit permission checks, and
-honest metadata for non-text formats.
+An OpenCode plugin that replaces the built-in `read` tool. It registers under the
+same tool ID and keeps the numbered-line output models are used to, but it keeps
+each read inside the host's output budget and tells the model where to continue.
 
-## ✨ Why it is better than the native read tool
+It is part of [Better OpenCode Tools](https://github.com/dhaern/better-opencode-tools),
+next to `opencode-bettergrep` and `opencode-betterglob`.
 
-### 📄 Better text windows
-
-The plugin preserves numbered line output while adding stronger output budgeting,
-long-line truncation notes, continuation hints, and metadata that reflects the
-final emitted output.
-
-For OpenCode 1.x, the plugin respects `tool_output.max_lines` and
-`tool_output.max_bytes` when configured. Missing or invalid values default to
-2,000 lines and 51,200 bytes. The budget includes the path/type framing,
-continuation footer, and truncation note; the existing 262,144-character and
-524,288-byte safety ceilings still apply. Calling the exported `createReadTool`
-without per-instance read limits uses the same 2,000-line and 51,200-byte
-defaults.
-
-### 📁 Safer directory reads
-
-Directory listings are paginated, sorted, bounded, and explicit about whether the
-total entry count is exact or only partially scanned. Special files and symlink
-edge cases are handled defensively.
-
-### 📓 Notebook support
-
-Small Jupyter notebooks are rendered as readable cell-oriented text. Large or
-malformed notebooks fall back to bounded raw text instead of loading huge files
-into memory blindly.
-
-### 🔐 Plugin-side permission hardening
-
-The tool performs its own `read` and `external_directory` permission checks,
-including symlink-aware access paths and escaped permission patterns.
-
-### 🧯 Defensive filesystem behavior
-
-The implementation rejects special files such as FIFOs, handles missing paths
-with suggestions, resolves symlinks only for entries in the visible window to
-decorate directory links with a trailing `/` (matching the native tool), and
-keeps PDF helper output bounded. File reads open a single verified descriptor
-after the permission ask, so a target swapped mid-flight is rejected instead of
-silently read.
-
-## 🧠 Supported inputs
-
-- text/code files
-- directories
-- Jupyter notebooks (`.ipynb`)
-- PDFs as conservative metadata/text summaries plus embedded attachments
-- images as dimensions/metadata plus embedded attachments
-- binary files as explicit binary placeholders
-- missing paths with safe suggestions when possible
-
-## 📎 Media attachments
-
-Images and PDFs are returned as embedded `data:` base64 attachments, the only
-attachment form the host actually delivers to models (verified against OpenCode
-1.18.x). Embedded attachments are capped at 20 MiB; larger media files are
-reported as an error instead of ballooning memory and provider payloads.
-
-## 📦 Recommended installation (npm)
-
-For normal installs, use npm:
+## 🚀 Install
 
 ```bash
 npm install opencode-betterread
 ```
 
-Then register the installed package in your OpenCode config by package name:
-
 ```json
 {
-  "plugin": [
-    "opencode-betterread"
-  ]
+  "plugin": ["opencode-betterread"]
 }
 ```
 
-## 🛠️ Manual installation from source (alternative)
+To run it from a local checkout, clone the repository, run `bun install` and
+`bun run build`, and point the plugin entry at
+`file:///path/to/better-opencode-tools/packages/opencode-betterread`.
 
-Use the source/file flow if you want to run the plugin from a local checkout or
-test local unpublished changes.
+## 📄 Text output and continuation
 
-```bash
-git clone https://github.com/dhaern/better-opencode-tools.git
-cd better-opencode-tools
-bun install
-bun run build
+Text files come back with numbered lines. When a read hits the budget, the output
+ends with the line to resume from:
+
+```
+(Showing lines 1-1363. Use offset=1364 to continue.)
 ```
 
-Add the plugin to your OpenCode config:
+The host would otherwise cut an oversized result without saying where it stopped,
+and the model would have to guess or read the file again. A single line that is
+larger than the whole budget is reported by number
+(`(Line 12 exceeds budget. Use offset=13 to continue.)`) so the read can move
+past it. Long lines carry a truncation note.
+
+The budget comes from the `tool_output` block of your OpenCode config:
 
 ```json
 {
-  "plugin": [
-    "file:///path/to/better-opencode-tools/packages/opencode-betterread"
-  ]
+  "tool_output": {
+    "max_lines": 4000,
+    "max_bytes": 153600
+  }
 }
 ```
+
+Missing or invalid values fall back to 2,000 lines and 51,200 bytes. The budget
+covers the path and type framing, the continuation footer and any truncation
+note. Two fixed safety ceilings still apply: 262,144 characters and 524,288 bytes.
+Calling the exported `createReadTool` without per-instance limits uses the same
+2,000-line and 51,200-byte defaults.
+
+## 🧠 What it can read
+
+| Input | Result |
+| --- | --- |
+| Text and code | Numbered lines, with offset and limit. |
+| Directories | Sorted, paginated entries. The total is marked as exact or partially scanned. |
+| Jupyter notebooks | Small ones are rendered cell by cell. Large or malformed ones fall back to bounded raw text. |
+| Images | Dimensions and metadata, plus an embedded attachment. |
+| PDFs | A conservative metadata and text summary, plus an embedded attachment. |
+| Binary files | An explicit binary placeholder. |
+| Missing paths | An error with suggestions when there are close matches. |
+
+Directory entries are sorted by UTF-16 code units, so the listing does not depend
+on ICU or on the runtime's locale. Symlinks in the visible window get a trailing
+`/` when they point to a directory, as the native tool does.
+
+Images and PDFs are returned as embedded `data:` base64 attachments, which is the
+only attachment form the host delivers to models (checked against OpenCode
+1.18.x). Attachments are capped at 20 MiB. A larger file is reported as an error
+instead of inflating memory and the provider payload.
+
+## 🔐 Permissions and filesystem safety
+
+- The tool runs its own `read` and `external_directory` permission checks,
+  including symlink-aware paths and escaped permission patterns.
+- File reads open one verified descriptor after the permission prompt, so a target
+  that is swapped in the meantime is rejected and not read.
+- Special files such as FIFOs are rejected.
+- PDF helper output is bounded.
+
+## ⚠️ Known limitations
+
+- Nested `AGENTS.md` auto-loading is not available. The plugin API does not expose
+  the host's instruction resolver, so reading a file inside a subproject does not
+  attach that subproject's `AGENTS.md`. The native tool does.
+- PDF metadata extraction is intentionally conservative.
+- The plugin replaces the agent-facing `read` tool only. It does not patch
+  OpenCode internals.
 
 ## 🧪 Development
 
@@ -114,13 +105,3 @@ bun test
 bun run build
 bun run check
 ```
-
-## ⚠️ Known limitations
-
-- Nested `AGENTS.md` auto-loading: the plugin API does not expose the host's
-  instruction resolver, so reading a file inside a subproject does not
-  auto-attach that subproject's `AGENTS.md` (the native tool does).
-- PDF metadata extraction is intentionally conservative; small PDFs still include
-  their embedded attachment when they fit the 20 MiB source limit.
-- The plugin replaces the agent-facing `read` tool, but it does not patch private
-  OpenCode internals.
