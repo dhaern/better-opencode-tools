@@ -112,9 +112,8 @@ export function collectMatchedPaths(
 
     const data =
       typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
-    let searchable = Buffer.concat(
-      pending.length === 0 ? [data] : [pending, data],
-    );
+    let searchable =
+      pending.length === 0 ? data : Buffer.concat([pending, data]);
     pending = Buffer.alloc(0);
 
     let separator = searchable.indexOf(0);
@@ -135,7 +134,7 @@ export function collectMatchedPaths(
     // terminates every record; a leftover fragment means the process was
     // cut mid-write (abort/timeout/limit), and publishing it would invent
     // paths that may not exist.
-    read: () => [...files],
+    read: () => files,
     stop,
   };
 }

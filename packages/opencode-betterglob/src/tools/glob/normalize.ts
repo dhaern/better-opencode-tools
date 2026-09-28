@@ -149,25 +149,25 @@ export async function normalizeGlobInputAsync(
   args: GlobToolInput,
   context: Pick<ToolContext, 'directory' | 'worktree'>,
   pluginCtx?: Pick<PluginInput, 'directory' | 'worktree'>,
+  resolvedScope?: ResolvedGlobScope,
 ): Promise<NormalizedGlobInput> {
-  const scope = resolveGlobScope(args, context, pluginCtx);
-  let info: Awaited<ReturnType<typeof statAsyncFs>>;
-  try {
-    info = await statAsyncFs(scope.resolvedPath);
-  } catch {
+  const scope = resolvedScope ?? resolveGlobScope(args, context, pluginCtx);
+  const [status, realPath, worktreePath] = await Promise.allSettled([
+    statAsyncFs(scope.resolvedPath),
+    realpathAsync(scope.resolvedPath, scope.requestedPath),
+    realpathAsyncFs(scope.worktreeRoot),
+  ]);
+  if (status.status === 'rejected') {
     throw new Error(`Search path does not exist: ${scope.requestedPath}`);
   }
-
-  const searchPath = await realpathAsync(
-    scope.resolvedPath,
-    scope.requestedPath,
-  );
-  let worktree = scope.worktreeRoot;
-  try {
-    worktree = await realpathAsyncFs(scope.worktreeRoot);
-  } catch {
-    // Preserve the synchronous contract for a missing worktree root.
-  }
+  if (realPath.status === 'rejected') throw realPath.reason;
+  const info = status.value;
+  const searchPath = realPath.value;
+  // Preserve the synchronous contract for a missing worktree root.
+  const worktree =
+    worktreePath.status === 'fulfilled'
+      ? worktreePath.value
+      : scope.worktreeRoot;
 
   if (!info.isDirectory()) {
     throw new Error(`Search path must be a directory: ${scope.requestedPath}`);

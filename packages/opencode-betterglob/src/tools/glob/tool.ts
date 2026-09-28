@@ -96,7 +96,7 @@ export function createGlobTool(
 
           stage = 'normalize';
           const normalizedInput = await raceAbort(
-            () => normalizeGlobInputAsync(raw, ctx, pluginCtx),
+            () => normalizeGlobInputAsync(raw, ctx, pluginCtx, scope),
             phaseSignal,
           );
           input = normalizedInput;

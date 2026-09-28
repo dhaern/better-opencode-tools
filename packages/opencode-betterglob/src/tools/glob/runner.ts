@@ -95,9 +95,10 @@ export function createRipgrepRunner(
 ): GlobRunner {
   return async (input, signal) => {
     const state = { timedOut: false, cancelled: false, limitReached: false };
-    let command = buildRgCommand(input);
+    let command: string[] | undefined;
+    const currentCommand = () => (command ??= buildRgCommand(input));
     const interruptedResult = () =>
-      emptyResult(input, command, {
+      emptyResult(input, currentCommand(), {
         incomplete: true,
         timedOut: state.timedOut,
         cancelled: state.cancelled,
@@ -209,7 +210,7 @@ export function createRipgrepRunner(
           return interruptedResult();
         }
 
-        return emptyResult(input, command, {
+        return emptyResult(input, currentCommand(), {
           exitCode: 1,
           error: toErrorMessage(resolved.error),
         });
@@ -243,7 +244,7 @@ export function createRipgrepRunner(
           proc = spawned;
         }
       } catch (error) {
-        return emptyResult(input, command, {
+        return emptyResult(input, currentCommand(), {
           exitCode: 1,
           error: toErrorMessage(error),
         });
@@ -413,7 +414,7 @@ export function createRipgrepRunner(
           : {}),
       };
     } catch (error) {
-      return emptyResult(input, command, {
+      return emptyResult(input, currentCommand(), {
         exitCode: 1,
         error: toErrorMessage(error),
       });
