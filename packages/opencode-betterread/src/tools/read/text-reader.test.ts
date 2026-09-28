@@ -72,6 +72,32 @@ async function readWindow(
 }
 
 describe('readTextWindow', () => {
+  test('stops reading immediately when aborted during the first read', async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    const handle = {
+      read: async (buffer: Buffer) => {
+        reads += 1;
+        if (reads === 1) controller.abort();
+        const bytesRead = reads < 4 ? 1 : 0;
+        if (bytesRead) buffer[0] = 0x61;
+        return { buffer, bytesRead };
+      },
+    } as any;
+    const error = await readTextWindow(
+      handle,
+      1,
+      10,
+      { size: 4 },
+      controller.signal,
+    ).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(reads).toBe(1);
+    expect(error).toMatchObject({ name: 'AbortError' });
+  });
+
   test('reads a selected window with total lines on fast path', async () => {
     const result = await readWindow('one\ntwo\nthree\nfour\n', 2, 2);
 

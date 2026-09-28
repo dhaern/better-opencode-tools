@@ -1,7 +1,15 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readBoundedBytes } from './attachments';
@@ -35,6 +43,39 @@ afterEach(async () => {
 });
 
 describe('executeRead', () => {
+  test('stops attachment reads immediately when aborted during the first read', async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    const handle = {
+      read: async (buffer: Buffer, offset: number) => {
+        reads += 1;
+        if (reads === 1) controller.abort();
+        const bytesRead = reads < 4 ? 1 : 0;
+        if (bytesRead) buffer[offset] = 0x61;
+        return { buffer, bytesRead };
+      },
+    } as any;
+    const error = await readBoundedBytes(handle, 100, controller.signal).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(reads).toBe(1);
+    expect(error).toMatchObject({ name: 'AbortError' });
+  });
+
+  test('closes each verified descriptor after repeated reads on Linux', async () => {
+    if (process.platform !== 'linux') return;
+    const directory = await createWorkspace();
+    const filePath = path.join(directory, 'fd.txt');
+    await writeFile(filePath, 'sample\n');
+    const before = (await readdir('/proc/self/fd')).length;
+    for (let index = 0; index < 20; index += 1) {
+      await executeRead({ args: { filePath }, directory });
+    }
+    const after = (await readdir('/proc/self/fd')).length;
+    expect(after - before).toBe(0);
+  });
+
   test('counts all lines of an exactly 1 MiB file even for a one-line window', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'exact-1m.txt');
