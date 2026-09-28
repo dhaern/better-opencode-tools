@@ -505,7 +505,7 @@ export async function sortFilesByMtime(
       return left.statFailed ? 1 : -1;
     }
 
-    const delta = left.mtimeMs - right.mtimeMs;
+    const delta = left.statFailed ? 0 : left.mtimeMs - right.mtimeMs;
     if (delta !== 0) {
       return input.sortOrder === 'desc' ? -delta : delta;
     }

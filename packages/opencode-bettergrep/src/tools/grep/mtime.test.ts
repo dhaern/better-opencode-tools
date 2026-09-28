@@ -113,14 +113,21 @@ test.each(['asc', 'desc'] as const)(
           pathKey: `utf8:/virtual/${name}`,
         }),
       );
-      const sorted = await sortFilesByMtime(
-        files,
-        { sortOrder },
-        new AbortController().signal,
-        Date.now() + 10_000,
+      for (const statFile of [
         async () => ({ mtimeMs: 1000 }),
-      );
-      expect(sorted.files.map((file) => file.file)).toEqual(BYTE_ORDER);
+        async () => {
+          throw new Error('stat failed');
+        },
+      ]) {
+        const sorted = await sortFilesByMtime(
+          files,
+          { sortOrder },
+          new AbortController().signal,
+          Date.now() + 10_000,
+          statFile,
+        );
+        expect(sorted.files.map((file) => file.file)).toEqual(BYTE_ORDER);
+      }
     }
   },
 );
