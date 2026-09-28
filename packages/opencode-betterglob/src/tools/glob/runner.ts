@@ -32,7 +32,7 @@ interface SpawnOptions {
   postExitDrainMs?: number;
 }
 
-interface RunnerDeps {
+export interface RunnerDeps {
   resolve: typeof resolveGlobCliWithAutoInstall;
   spawn: (
     cmd: string,
@@ -60,6 +60,7 @@ type Done =
 const isTimeoutReason = (signal: AbortSignal) =>
   signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
 const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
+const SEARCH_KILL_GRACE_MS = 250;
 
 function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
   try {
@@ -69,8 +70,9 @@ function kill(proc: ChildProcess | undefined, signal?: NodeJS.Signals): void {
   }
 }
 
-export function createRipgrepRunner(
-  deps: RunnerDeps = {
+export function createDefaultRunnerDeps(): RunnerDeps {
+  return {
+    killGraceMs: SEARCH_KILL_GRACE_MS,
     resolve: resolveGlobCliWithAutoInstall,
     spawn: (cmd, args, options) =>
       process.platform === 'win32'
@@ -85,7 +87,11 @@ export function createRipgrepRunner(
             }),
             { postExitDrainMs: options.postExitDrainMs },
           ),
-  },
+  };
+}
+
+export function createRipgrepRunner(
+  deps: RunnerDeps = createDefaultRunnerDeps(),
 ): GlobRunner {
   return async (input, signal) => {
     const state = { timedOut: false, cancelled: false, limitReached: false };

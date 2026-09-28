@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { lock } from 'proper-lockfile';
 import { raceSignal, throwIfAborted } from '../../utils/abort';
@@ -11,6 +19,7 @@ import {
 
 // Lock only during publication; release late acquisitions after abort.
 const LOCK_STALE_MS = 60_000;
+const INSTALL_ORPHAN_STALE_MS = 24 * 60 * 60 * 1_000;
 
 async function withInstallLock<T>(
   dir: string,
@@ -108,22 +117,29 @@ export async function publishStagedBinary(
       // fixed-name temporary. New attempts never reuse a predecessor's path.
       const temporaryPrefix = `${basename(metadata)}.tmp`;
       const staleBefore = Date.now() - LOCK_STALE_MS;
+      const installStaleBefore = Date.now() - INSTALL_ORPHAN_STALE_MS;
       for (const entry of await readdir(canonicalDir)) {
         throwIfAborted(lockSignal);
-        if (
+        const metadataTemporary =
           entry === temporaryPrefix ||
           (entry.startsWith(`${temporaryPrefix}-`) &&
-            /^[0-9a-f-]{36}$/.test(entry.slice(temporaryPrefix.length + 1)))
-        ) {
-          const orphan = join(canonicalDir, entry);
-          try {
-            const details = await stat(orphan);
-            if (details.mtimeMs <= staleBefore) {
-              await rm(orphan, { force: true });
-            }
-          } catch {
-            // A concurrent cleanup may have removed it already.
+            /^[0-9a-f-]{36}$/.test(entry.slice(temporaryPrefix.length + 1)));
+        const installTemporary = /^\.install-\d+-[0-9a-z]{1,6}$/.test(entry);
+        if (!metadataTemporary && !installTemporary) continue;
+        const orphan = join(canonicalDir, entry);
+        try {
+          const details = installTemporary
+            ? await lstat(orphan)
+            : await stat(orphan);
+          if (
+            installTemporary
+              ? details.isDirectory() && details.mtimeMs <= installStaleBefore
+              : details.mtimeMs <= staleBefore
+          ) {
+            await rm(orphan, { force: true, recursive: installTemporary });
           }
+        } catch {
+          // A concurrent cleanup may have removed it already.
         }
       }
       throwIfAborted(lockSignal);

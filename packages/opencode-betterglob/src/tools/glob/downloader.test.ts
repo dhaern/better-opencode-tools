@@ -258,6 +258,38 @@ describe('tools/glob/downloader', () => {
   );
 
   testPosix(
+    'removes only install directories older than 24 hours under the lock',
+    async () => {
+      const { binary, metadata } = setupCache();
+      const dir = path.dirname(binary);
+      const input = stage(binary, metadata, 'staged-rg');
+      const stale = path.join(dir, `.install-${Date.now()}-abc123`);
+      const fresh = path.join(dir, '.install-1000000000000-def456');
+      const unrelated = path.join(dir, '.install-unrelated');
+      for (const entry of [stale, fresh, unrelated]) {
+        mkdirSync(entry);
+        writeFileSync(path.join(entry, 'archive'), 'preserve or cleanup');
+      }
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
+      utimesSync(stale, old, old);
+      utimesSync(fresh, recent, recent);
+      utimesSync(unrelated, old, old);
+      input.acquireLock = async (file, options) => {
+        const release = await lock(file, options);
+        expect(existsSync(stale)).toBe(true);
+        expect(existsSync(fresh)).toBe(true);
+        return release;
+      };
+
+      await publishStagedBinary(input);
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+    },
+  );
+
+  testPosix(
     'serializes simultaneous publishers through a directory alias',
     async () => {
       const { binary, metadata } = setupCache();

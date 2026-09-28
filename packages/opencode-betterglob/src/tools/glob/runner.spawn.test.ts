@@ -2,6 +2,8 @@
 import { describe, expect, spyOn, test } from 'bun:test';
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   type SupervisedExit,
@@ -10,7 +12,7 @@ import {
   spawnSupervised,
 } from '../../utils/process-supervisor';
 import { normalizeGlobInputAsync } from './normalize';
-import { createRipgrepRunner } from './runner';
+import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { collectMatchedPaths } from './runner-output';
 import { adaptSupervisedSearch, type ManagedSearch } from './supervised-search';
 import { createRepoContext, createTempTracker, until } from './test-helpers';
@@ -83,6 +85,69 @@ function isAlive(pid: number | undefined): boolean {
 
 describe('tools/glob/runner spawn failures', () => {
   const temps = createTempTracker();
+
+  test.skipIf(process.platform === 'win32')(
+    'default supervisor stops a NUL-writing executable at limit one without a five-second grace',
+    async () => {
+      const dir = temps.createRepo();
+      const executable = path.join(dir, 'fake-rg');
+      writeFileSync(
+        executable,
+        '#!/usr/bin/env node\nprocess.stdout.write("a.ts\\0b.ts\\0c.ts\\0"); setInterval(() => {}, 1000);',
+        { mode: 0o755 },
+      );
+      const run = createRipgrepRunner({
+        ...createDefaultRunnerDeps(),
+        resolve: async () => ({
+          path: executable,
+          backend: 'rg',
+          source: 'system-rg',
+        }),
+      });
+      const input = await normalizeSearchInput(
+        { limit: 1, timeout_ms: 10_000 },
+        dir,
+      );
+      const started = performance.now();
+      const result = await run(input, new AbortController().signal);
+
+      expect(result.files).toEqual([`${dir}/src/a.ts`]);
+      expect(result.truncated).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(performance.now() - started).toBeLessThan(1500);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'default supervisor bounds timeout for a NUL-writing executable that stays alive',
+    async () => {
+      const dir = temps.createRepo();
+      const executable = path.join(dir, 'fake-rg');
+      writeFileSync(
+        executable,
+        '#!/usr/bin/env node\nprocess.stdout.write("a.ts\\0b.ts\\0c.ts\\0"); setInterval(() => {}, 1000);',
+        { mode: 0o755 },
+      );
+      const run = createRipgrepRunner({
+        ...createDefaultRunnerDeps(),
+        resolve: async () => ({
+          path: executable,
+          backend: 'rg',
+          source: 'system-rg',
+        }),
+      });
+      const input = await normalizeSearchInput(
+        { limit: 10, timeout_ms: 150 },
+        dir,
+      );
+      const started = performance.now();
+      const result = await run(input, new AbortController().signal);
+
+      expect(result.timedOut).toBe(true);
+      expect(result.incomplete).toBe(true);
+      expect(performance.now() - started).toBeLessThan(2500);
+    },
+  );
 
   test('cancelled raw child without an exit status retains exit code 130', async () => {
     const child = fakeChild();
@@ -1024,7 +1089,7 @@ describe('tools/glob/runner spawn failures', () => {
     expect(isAlive(child?.pid)).toBe(false);
   });
 
-  test('stops early at limit plus one without waiting for timeout', async () => {
+  test('raw injected ChildProcess stops early at limit plus one without waiting for timeout', async () => {
     const repoDir = temps.createRepo();
     const runRipgrep = createRipgrepRunner({
       resolve: async () => ({

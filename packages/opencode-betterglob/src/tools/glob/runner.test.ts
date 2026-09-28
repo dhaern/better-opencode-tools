@@ -11,13 +11,12 @@ import type { GlobToolInput } from './types';
 describe('tools/glob/runner', () => {
   const temps = createTempTracker();
 
-  // Host integration is explicitly opt-in. Merely importing this suite must
-  // never probe PATH, the real resolver cache, or auto-install ripgrep.
+  // Explicit fixture path: integration must fail rather than silently skip.
+  // Importing this suite still never probes PATH or the resolver cache.
   const rgPath = process.env.BETTERGLOB_TEST_RG;
-  const testWithRg = (rgPath ? test : test.skip) as typeof test;
+  if (!rgPath) throw new Error('Set BETTERGLOB_TEST_RG to run host tests');
   const runSystemRg = createRipgrepRunner({
     resolve: async () => {
-      if (!rgPath) throw new Error('Set BETTERGLOB_TEST_RG to run host tests');
       return { path: rgPath, backend: 'rg', source: 'system-rg' };
     },
     spawn: nodeSpawn,
@@ -36,28 +35,22 @@ describe('tools/glob/runner', () => {
     };
   }
 
-  testWithRg(
-    'parses NUL-delimited paths with names containing newlines',
-    async () => {
-      const repoDir = temps.createRepo();
-      const weird = path.join(repoDir, 'src', 'odd\nname.ts');
-      writeFileSync(weird, 'export const weird = true;\n');
+  test('parses NUL-delimited paths with names containing newlines', async () => {
+    const repoDir = temps.createRepo();
+    const weird = path.join(repoDir, 'src', 'odd\nname.ts');
+    writeFileSync(weird, 'export const weird = true;\n');
 
-      const { normalized } = await createNormalized(
-        { pattern: '*.ts', path: 'src', sort_by: 'path' },
-        repoDir,
-      );
-      const result = await runSystemRg(
-        normalized,
-        new AbortController().signal,
-      );
+    const { normalized } = await createNormalized(
+      { pattern: '*.ts', path: 'src', sort_by: 'path' },
+      repoDir,
+    );
+    const result = await runSystemRg(normalized, new AbortController().signal);
 
-      expect(result.files).toContain(weird);
-      expect(result.error).toBeUndefined();
-    },
-  );
+    expect(result.files).toContain(weird);
+    expect(result.error).toBeUndefined();
+  });
 
-  testWithRg.each([
+  test.each([
     {
       name: 'mtime desc',
       input: { sort_by: 'mtime', sort_order: 'desc' } as const,
@@ -104,7 +97,7 @@ describe('tools/glob/runner', () => {
     expect(result.count).toBe(2);
   });
 
-  testWithRg('returns no files for an unmatched pattern', async () => {
+  test('returns no files for an unmatched pattern', async () => {
     const { normalized } = await createNormalized({
       pattern: '*.missing',
       path: 'src',
@@ -116,7 +109,7 @@ describe('tools/glob/runner', () => {
     expect(result.truncated).toBe(false);
   });
 
-  testWithRg('matches common brace and bracket extension globs', async () => {
+  test('matches common brace and bracket extension globs', async () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, 'src', 'extra.tsx'), 'tsx\n');
     writeFileSync(path.join(repoDir, 'src', 'plain.js'), 'js\n');
@@ -144,36 +137,30 @@ describe('tools/glob/runner', () => {
     ]);
   });
 
-  testWithRg(
-    'delegates matching to rg, where an explicit positive glob overrides gitignore',
-    async () => {
-      // Native parity: OpenCode's glob tool passes --glob=<pattern> straight
-      // to ripgrep, and in rg an explicit positive glob re-includes files
-      // excluded by .gitignore. There is no JavaScript post-filter.
-      const repoDir = temps.createRepo();
-      mkdirSync(path.join(repoDir, '.git'), { recursive: true });
-      writeFileSync(path.join(repoDir, '.gitignore'), 'src/ignored.ts\n');
-      writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'ignored\n');
-      writeFileSync(path.join(repoDir, 'src', 'ok.ts'), 'ok\n');
-      const { normalized } = await createNormalized(
-        { pattern: '*.ts', path: 'src', sort_by: 'path' },
-        repoDir,
-      );
-      const result = await runSystemRg(
-        normalized,
-        new AbortController().signal,
-      );
+  test('delegates matching to rg, where an explicit positive glob overrides gitignore', async () => {
+    // Native parity: OpenCode's glob tool passes --glob=<pattern> straight
+    // to ripgrep, and in rg an explicit positive glob re-includes files
+    // excluded by .gitignore. There is no JavaScript post-filter.
+    const repoDir = temps.createRepo();
+    mkdirSync(path.join(repoDir, '.git'), { recursive: true });
+    writeFileSync(path.join(repoDir, '.gitignore'), 'src/ignored.ts\n');
+    writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'ignored\n');
+    writeFileSync(path.join(repoDir, 'src', 'ok.ts'), 'ok\n');
+    const { normalized } = await createNormalized(
+      { pattern: '*.ts', path: 'src', sort_by: 'path' },
+      repoDir,
+    );
+    const result = await runSystemRg(normalized, new AbortController().signal);
 
-      expect(result.files.map((file) => path.basename(file))).toEqual([
-        'a.ts',
-        'b.ts',
-        'ignored.ts',
-        'ok.ts',
-      ]);
-    },
-  );
+    expect(result.files.map((file) => path.basename(file))).toEqual([
+      'a.ts',
+      'b.ts',
+      'ignored.ts',
+      'ok.ts',
+    ]);
+  });
 
-  testWithRg('still excludes .git contents under hidden matching', async () => {
+  test('still excludes .git contents under hidden matching', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'), { recursive: true });
     writeFileSync(path.join(repoDir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
