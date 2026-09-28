@@ -1,6 +1,6 @@
 import { raceSignal } from '../../utils/abort';
+import { DEFAULT_CLEANUP_WAIT_MS } from '../../utils/process-output';
 import { normalizeTimeoutMs } from './normalize';
-import { DEFAULT_CLEANUP_WAIT_MS } from './supervised-search';
 
 export const TIMEOUT_ERROR_MESSAGE =
   'glob search exceeded its automatic deadline.';

@@ -1,6 +1,16 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { AbortWaitError } from '../../utils/abort';
-import { POST_EXIT_DRAIN_MS } from '../../utils/process-output';
+import {
+  adaptSpawnedSearch,
+  adaptSupervisedSearch,
+  adaptWindowsSearch,
+  DEFAULT_CLEANUP_WAIT_MS,
+  type ManagedSearch,
+  POST_EXIT_DRAIN_MS,
+  toErrorMessage,
+  waitForManagedCleanup,
+  watchSearchCompletion,
+} from '../../utils/process-output';
 import {
   DEFAULT_CLEANUP_TIMEOUT_MS,
   DEFAULT_KILL_GRACE_MS,
@@ -13,18 +23,8 @@ import {
   collectMatchedPaths,
   emptyResult,
   sliceLimit,
-  toErrorMessage,
   watchStderr,
 } from './runner-output';
-import {
-  adaptSpawnedSearch,
-  adaptSupervisedSearch,
-  adaptWindowsSearch,
-  DEFAULT_CLEANUP_WAIT_MS,
-  type ManagedSearch,
-  waitForManagedCleanup,
-  watchSearchCompletion,
-} from './supervised-search';
 import type { GlobRunner } from './types';
 
 interface SpawnOptions {

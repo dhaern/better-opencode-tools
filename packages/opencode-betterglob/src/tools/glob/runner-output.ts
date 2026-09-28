@@ -3,10 +3,6 @@ import path from 'node:path';
 import { destroyReader, watchCappedStream } from '../../utils/process-output';
 import type { GlobSearchResult, NormalizedGlobInput } from './types';
 
-export function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function sliceLimit(
   input: NormalizedGlobInput,
   files: string[],

@@ -6,6 +6,11 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
+  adaptSupervisedSearch,
+  adaptWindowsSearch,
+  type ManagedSearch,
+} from '../../utils/process-output';
+import {
   type SupervisedExit,
   type SupervisedProcess,
   type SupervisorOptions,
@@ -14,11 +19,6 @@ import {
 import { normalizeGlobInputAsync } from './normalize';
 import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { collectMatchedPaths } from './runner-output';
-import {
-  adaptSupervisedSearch,
-  adaptWindowsSearch,
-  type ManagedSearch,
-} from './supervised-search';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
 function spawnTestSearch(
