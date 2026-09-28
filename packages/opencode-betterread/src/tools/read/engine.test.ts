@@ -720,6 +720,29 @@ describe('executeRead', () => {
     ]);
   });
 
+  test('names symlinked image attachments after the requested file', async () => {
+    const directory = await createWorkspace();
+    const canonical = path.join(directory, 'photo.png');
+    const requested = path.join(directory, 'link.png');
+    await writeFile(canonical, tinyPng);
+    await symlink(canonical, requested);
+
+    const result = await executeRead({
+      args: { filePath: requested },
+      directory,
+    });
+    expect(result.output).toContain(`<path>${requested}</path>`);
+    expect(result.metadata.real_path).toBe(canonical);
+    expect(result.attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'image/png',
+        url: `data:image/png;base64,${tinyPng.toString('base64')}`,
+        filename: 'link.png',
+      },
+    ]);
+  });
+
   test('escapes unsafe image summaries and previews', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'tiny\n<unsafe>&.png');

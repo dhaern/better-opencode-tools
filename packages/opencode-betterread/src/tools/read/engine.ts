@@ -175,7 +175,7 @@ export async function executeRead(input: {
         signal,
         handleStat.size,
       );
-      const attachments = [dataAttachment(readPath, mime, bytes)];
+      const attachments = [dataAttachment(resolvedPath, mime, bytes)];
       if (mime === 'application/pdf') {
         // pdfinfo takes a path argument; metadata-only, so a path-based
         // probe is acceptable.
