@@ -9,6 +9,7 @@ import {
   SupervisorRuntimeError,
   spawnSupervised,
 } from './process-supervisor';
+import { validatedStamps } from './stamped-probe';
 
 export const POST_EXIT_DRAIN_MS = 1_000;
 export const DIAGNOSTIC_CAP_BYTES = 8 * 1024;
@@ -371,7 +372,6 @@ export function isMissingExecutableError(error: unknown): boolean {
   );
 }
 
-const runtimeProbes = new Set<string>();
 export async function ensureSupervisorRuntime(
   signal?: AbortSignal,
   executable = 'node',
@@ -384,15 +384,12 @@ export async function ensureSupervisorRuntime(
   );
   const stamp = found ? await fileStamp(found) : undefined;
   const key = stamp
-    ? `${process.env.PATH ?? ''}:${executable}:${found}:${stamp}`
+    ? `runtime:${process.env.PATH ?? ''}:${executable}:${found}:${stamp}`
     : undefined;
   signal?.throwIfAborted();
-  if (key && runtimeProbes.has(key)) return;
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), DEFAULT_CLEANUP_TIMEOUT_MS);
-  const probeSignal = signal
-    ? AbortSignal.any([signal, timeout.signal])
-    : timeout.signal;
+  if (key && validatedStamps.has(key)) return;
+  const timeout = AbortSignal.timeout(DEFAULT_CLEANUP_TIMEOUT_MS);
+  const probeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
     const result = await runProcess(
       [
@@ -411,12 +408,10 @@ export async function ensureSupervisorRuntime(
       result.stdout !== 'betterglob-node-supervisor'
     )
       throw new SupervisorRuntimeError();
-    if (key) runtimeProbes.add(key);
+    if (key) validatedStamps.add(key);
   } catch (error) {
     if (isSupervisorError(error)) throw error;
     signal?.throwIfAborted();
     throw new SupervisorRuntimeError({ cause: error });
-  } finally {
-    clearTimeout(timer);
   }
 }

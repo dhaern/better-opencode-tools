@@ -6,6 +6,7 @@ import {
   isMissingExecutableError,
 } from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
+import { validatedStamps } from '../../utils/stamped-probe';
 import { RG_BINARY } from './constants';
 import { installLatestStableRipgrep } from './downloader';
 import { fileStamp } from './install-io';
@@ -48,7 +49,6 @@ interface SharedAutoInstallState {
 let state: SharedAutoInstallState | null = null;
 const PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_DEPS: GlobResolverDependencies = {};
-const systemMemo = new WeakMap<GlobResolverDependencies, Set<string>>();
 
 async function defaultFindExecutableAsync(
   name: string,
@@ -68,12 +68,8 @@ async function defaultValidateExecutableAsync(
   if (signal?.aborted) {
     throw new AbortWaitError();
   }
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), PROBE_TIMEOUT_MS);
-  timer.unref?.();
-  const probeSignal = signal
-    ? AbortSignal.any([signal, timeout.signal])
-    : timeout.signal;
+  const timeout = AbortSignal.timeout(PROBE_TIMEOUT_MS);
+  const probeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
   try {
     const result = await probeRipgrepVersion(file, probeSignal);
@@ -81,18 +77,16 @@ async function defaultValidateExecutableAsync(
     if (signal?.aborted) {
       throw new AbortWaitError();
     }
-    if (result.aborted || timeout.signal.aborted) return false;
+    if (result.aborted || timeout.aborted) return false;
     return result.valid;
   } catch (error) {
     if (isSupervisorError(error)) throw error;
     if (signal?.aborted) {
       throw new AbortWaitError();
     }
-    if (timeout.signal.aborted) return false;
+    if (timeout.aborted) return false;
     if (isMissingExecutableError(error)) return false;
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -116,16 +110,14 @@ export async function resolveGlobCliAsync(
 
   if (system) {
     const stamp = deps === DEFAULT_DEPS ? await fileStamp(system) : undefined;
-    const key = stamp && `${system}:${stamp}`;
-    const memo = systemMemo.get(deps) ?? new Set<string>();
-    if (key && memo.has(key)) {
+    const key = stamp && `system:${system}:${stamp}`;
+    if (key && validatedStamps.has(key)) {
       if (signal?.aborted) throw new AbortWaitError();
       return { path: system, backend: 'rg', source: 'system-rg' };
     }
     if (await race(validate(system, signal), signal)) {
       if (key && stamp === (await fileStamp(system))) {
-        memo.add(key);
-        systemMemo.set(deps, memo);
+        validatedStamps.add(key);
       }
       return { path: system, backend: 'rg', source: 'system-rg' };
     }

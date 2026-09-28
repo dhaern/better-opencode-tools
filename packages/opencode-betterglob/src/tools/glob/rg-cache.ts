@@ -6,6 +6,7 @@ import {
   runProcess,
 } from '../../utils/process-output';
 import { isSupervisorError } from '../../utils/process-supervisor';
+import { validatedStamps } from '../../utils/stamped-probe';
 import {
   computeSha256Async,
   fileStamp,
@@ -21,19 +22,12 @@ export interface InstalledRipgrepMetadata {
   binarySha256: string;
 }
 
-const validated = new Set<string>();
-async function cacheStamp(
-  binary: string,
-  metadata: string,
-): Promise<string | undefined> {
-  const [binaryStamp, metadataStamp] = await Promise.all([
-    fileStamp(binary),
-    fileStamp(metadata),
-  ]);
-  return binaryStamp && metadataStamp
-    ? `${binary}:${binaryStamp}:${metadata}:${metadataStamp}`
+const cacheStamp = async (binary: string, metadata: string) => {
+  const stamps = await Promise.all([fileStamp(binary), fileStamp(metadata)]);
+  return stamps[0] && stamps[1]
+    ? `${binary}:${stamps[0]}:${metadata}:${stamps[1]}`
     : undefined;
-}
+};
 
 function isInstalledRipgrepMetadata(
   value: unknown,
@@ -127,7 +121,7 @@ export async function validateCachedBinaryAsync(
   throwIfAborted(signal);
   const stamp = await cacheStamp(binary, metadataPath);
   throwIfAborted(signal);
-  if (stamp && validated.has(stamp)) return;
+  if (stamp && validatedStamps.has(`managed:${stamp}`)) return;
   const metadata = await readInstalledMetadataAsync(signal, metadataPath);
   if ((await computeSha256Async(binary, signal)) !== metadata.binarySha256) {
     throw new InvalidCachedBinaryError(
@@ -137,7 +131,7 @@ export async function validateCachedBinaryAsync(
 
   await validateInstalledBinaryAsync(binary, signal);
   if (stamp && stamp === (await cacheStamp(binary, metadataPath)))
-    validated.add(stamp);
+    validatedStamps.add(`managed:${stamp}`);
 }
 
 export async function probeRipgrepVersion(
