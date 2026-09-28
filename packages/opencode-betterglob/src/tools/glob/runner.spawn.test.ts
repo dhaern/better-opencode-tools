@@ -147,6 +147,80 @@ describe('tools/glob/runner spawn failures', () => {
     expect(managed.readExit()).toEqual(await managed.completed);
   });
 
+  test('Windows adapter retains a stream read failure in the runner result', async () => {
+    const child = fakeChild();
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: () => adaptWindowsSearch(child),
+    });
+    const pending = run(
+      await normalizeSearchInput({}, temps.createRepo()),
+      new AbortController().signal,
+    );
+    await nextTurn();
+    child.stdout?.emit('error', new Error('read failed'));
+    child.stdout?.emit('end');
+    child.stderr?.emit('end');
+    child.emit('close', 0, null);
+    expect(await within(pending)).toMatchObject({
+      error: 'read failed',
+      incomplete: true,
+    });
+  });
+
+  test.each([
+    'windows',
+    'supervised',
+  ] as const)('%s adapter stops on stream error, retains its diagnostic, and destroys readers', async (adapter) => {
+    const fixture =
+      adapter === 'supervised' ? controlledSupervisor() : undefined;
+    const child = fixture?.child ?? fakeChild();
+    let stops = 0;
+    if (fixture) {
+      fixture.supervised.stop = () => {
+        stops++;
+        void fixture.task.promise.then(() => fixture.cleanup.resolve());
+        return fixture.cleanup.promise;
+      };
+    } else {
+      child.kill = () => {
+        stops++;
+        return true;
+      };
+    }
+    const run = createRipgrepRunner({
+      resolve: fakeResolve,
+      spawn: () =>
+        fixture
+          ? adaptSupervisedSearch(fixture.supervised)
+          : adaptWindowsSearch(child),
+    });
+    const repoDir = temps.createRepo();
+    const pending = run(
+      await normalizeSearchInput({}, repoDir),
+      new AbortController().signal,
+    );
+    await nextTurn();
+    child.stdout?.emit('data', 'a.ts\0');
+    child.stderr?.emit('error', new Error('read failed'));
+    if (fixture) {
+      // The supervised adapter must close abandoned pipes at the error,
+      // not only after its post-exit drain deadline expires.
+      expect(child.stdout?.destroyed).toBe(true);
+      fixture.task.resolve({ code: 0, signal: null });
+    } else child.emit('close', 0, null);
+    const result = await within(pending);
+    expect(result?.files).toEqual([`${repoDir}/src/a.ts`]);
+    expect(result?.exitCode).toBe(0);
+    expect(result?.incomplete).toBe(true);
+    expect(result?.error).toContain(
+      fixture ? 'Output reader failed: read failed' : 'read failed',
+    );
+    expect(stops).toBe(1);
+    expect(child.stdout?.destroyed).toBe(true);
+    expect(child.stderr?.destroyed).toBe(true);
+  });
+
   test('cancelled managed search without an exit status retains exit code 130', async () => {
     const child = fakeChild();
     const completion =

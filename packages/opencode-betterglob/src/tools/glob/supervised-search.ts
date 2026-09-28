@@ -76,12 +76,14 @@ export function watchSearchCompletion(
     settle = resolve;
   });
   let settled = false;
+  let failure: string | undefined;
   const finish = (result: SearchDone) => {
     if (settled) return;
     settled = true;
     settle(result);
   };
-  const onError = () => {
+  const onError = (error: unknown) => {
+    failure ??= toErrorMessage(error);
     if (!settled) stop();
   };
   const clearReaderErrors = () => {
@@ -97,7 +99,7 @@ export function watchSearchCompletion(
   child.stderr?.on('error', onError);
   void search.completed.then((exit) => {
     clear();
-    finish({ type: 'close', ...exit });
+    finish({ type: 'close', ...exit, error: exit.error ?? failure });
   });
   return { done, clear, clearReaderErrors };
 }
