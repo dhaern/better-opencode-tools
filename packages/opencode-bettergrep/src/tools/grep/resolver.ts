@@ -155,18 +155,20 @@ async function resolveAsync(
   signal?: AbortSignal,
 ): Promise<ResolvedGrepCli> {
   if (signal?.aborted) throw createSearchAbortError();
+  const findExecutable = deps.findExecutable ?? defaultFindExecutable;
   const memo = cliMemo.get(deps);
   if (memo) {
+    // Let a newly available system rg supersede the GNU fallback.
     if (
       memo.pathEnv === process.env.PATH &&
       memo.cacheDir === getRipgrepCacheDir() &&
-      statStamp(memo.cli.path) === memo.stamp
+      statStamp(memo.cli.path) === memo.stamp &&
+      (memo.cli.backend === 'rg' || !findExecutable(RG_BINARY))
     ) {
       return memo.cli;
     }
     cliMemo.delete(deps);
   }
-  const findExecutable = deps.findExecutable ?? defaultFindExecutable;
   const systemRg = findExecutable(RG_BINARY);
   if (
     systemRg &&

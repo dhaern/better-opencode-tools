@@ -60,6 +60,20 @@ describe('tools/grep/resolver', () => {
     expect(count()).toBe(6);
   });
 
+  test('GNU memo yields to newly available system rg', async () => {
+    let rg: string | null = null;
+    const deps = {
+      findExecutable: (name: string) => (name === 'rg' ? rg : process.execPath),
+      getInstalledRipgrepPath: () => null,
+      isSupportedGrep: () => true,
+      isSupportedRipgrep: () => true,
+      installLatestStableRipgrep: () => Promise.reject(Error('offline')),
+    };
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('grep');
+    rg = process.execPath;
+    expect((await resolveGrepCliWithAutoInstall(deps)).backend).toBe('rg');
+  });
+
   test.each([
     {
       name: 'prioritizes system rg over managed rg and system grep',
