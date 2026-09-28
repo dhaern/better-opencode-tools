@@ -67,7 +67,7 @@ export async function downloadArchive(
       { signal },
     );
   } catch (error) {
-    await rm(file, { force: true });
+    await rm(file, { force: true }).catch(() => undefined);
     throwIfAborted(signal);
     throw error;
   }

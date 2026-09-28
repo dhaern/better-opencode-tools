@@ -99,6 +99,11 @@ describe('ripgrep platform candidates', () => {
       expect(existsSync(file)).toBe(false);
       const exact = join(dir, 'exact.tar.gz');
       await downloadArchive(`${server.url}exact`, exact, undefined, maxBytes);
+      await expect(
+        downloadArchive(`${server.url}exact`, dir),
+      ).rejects.toMatchObject({
+        code: 'EISDIR',
+      });
       expect(readFileSync(exact).byteLength).toBe(maxBytes);
       const oversized = join(dir, 'oversized.tar.gz');
       const rejected = downloadArchive(
