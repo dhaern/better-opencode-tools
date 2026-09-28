@@ -69,10 +69,11 @@ async function runProbe(
   const stderrPromise = readTextStream(proc.proc.stderr, 1_000_000).catch(
     () => '',
   );
-  const { exitCode: rawExitCode } = await waitForExitAndStderr(
-    proc,
-    stderrPromise,
-  );
+  // A stopped child may leave inherited pipes open and never emit close.
+  const exit = await Promise.race([
+    waitForExitAndStderr(proc, stderrPromise),
+    termination.stopped,
+  ]);
   const stopped = termination.state.timedOut || termination.state.cancelled;
   termination.cleanup();
 
@@ -93,7 +94,7 @@ async function runProbe(
   if (termination.state.cancelled || signal?.aborted) throw abortError();
 
   return {
-    exitCode: stopped ? 1 : rawExitCode,
+    exitCode: stopped || !exit ? 1 : exit.exitCode,
     stdout: stdoutResult,
     stderr: stderrResult,
     timedOut: termination.state.timedOut,

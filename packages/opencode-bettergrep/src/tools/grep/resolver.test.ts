@@ -2,6 +2,7 @@
 import { describe, expect, jest, mock, test } from 'bun:test';
 import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { probeExecutable } from './cli-probe';
 import {
   invalidateGrepCliResolverCache,
@@ -172,6 +173,17 @@ describe('tools/grep/resolver', () => {
       20,
     );
 
+    expect(result.timedOut).toBe(true);
+  });
+
+  test('probeExecutable times out with inherited pipes still open', async () => {
+    const spawn = (() => ({
+      proc: { stdout: new PassThrough(), stderr: new PassThrough() },
+      exited: new Promise<number>(() => {}),
+      kill: () => true,
+      exitCode: null,
+    })) as never;
+    const result = await probeExecutable('stub', [], undefined, 20, spawn);
     expect(result.timedOut).toBe(true);
   });
 

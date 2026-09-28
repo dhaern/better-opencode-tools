@@ -220,10 +220,15 @@ export function attachTerminationHandlers(
   signal: AbortSignal,
 ): {
   state: TerminationState;
+  stopped: Promise<void>;
   cleanup: () => void;
 } {
   const state: TerminationState = { timedOut: false, cancelled: false };
   let settled = false;
+  let notifyStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => {
+    notifyStopped = resolve;
+  });
   const settle = (kind: 'timeout' | 'cancel') => {
     if (settled) {
       return;
@@ -232,6 +237,7 @@ export function attachTerminationHandlers(
     state.timedOut = kind === 'timeout';
     state.cancelled = kind === 'cancel';
     killProcess(proc);
+    notifyStopped();
   };
   const timeoutId = setTimeout(() => {
     settle('timeout');
@@ -249,6 +255,7 @@ export function attachTerminationHandlers(
 
   return {
     state,
+    stopped,
     cleanup: () => {
       clearTimeout(timeoutId);
       signal.removeEventListener('abort', abortHandler);
