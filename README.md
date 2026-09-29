@@ -39,18 +39,83 @@ Each plugin is published on its own. Install only the ones you want.
   `glob`) load on first use. Cold start of `read` dropped from about 260 ms to
   about 70 ms.
 
-## 📉 Smaller code, same features
+## ⏱️ Benchmark against the built-in tools
 
-Version 1.0.0 was a refactor, and no feature was removed. Production code
-compared with 0.3.1:
+These are timings of the built-in `read`, `grep` and `glob` from the OpenCode
+1.18.32 source and of the three plugins at 1.1.0, measured on one machine over the
+same files. Times are in milliseconds and lower is better. Per-release notes are on
+the [Releases page](https://github.com/dhaern/better-opencode-tools/releases).
 
-| Plugin | Lines | Files | Tests |
-| --- | --- | --- | --- |
-| `opencode-betterglob` | 4,746 → 3,892 (−18.0 %) | 28 → 26 | 187 |
-| `opencode-bettergrep` | 8,270 → 7,323 (−11.5 %) | 39 → 32 | 302 |
-| `opencode-betterread` | 2,902 → 2,121 (−26.9 %) | 24 → 15 | 174 |
+How it was measured:
 
-Per-release notes are on the [Releases page](https://github.com/dhaern/better-opencode-tools/releases).
+- Each tool is called in process with the same arguments, with no model or UI in
+  between, so the numbers cover the tool itself.
+- The files are the OpenCode repository (about 6,600 files) and two generated
+  fixtures: a 13 MB log of 200,000 lines and a directory of 5,000 files.
+- The machine is a 4-core Arm Neoverse-N1 VM on Ubuntu 24.04 with ripgrep 15.2.0
+  on `PATH` and a warm file cache.
+- Every case makes 5 to 9 timed calls after a discarded first call, and each run
+  of the suite records their median. The tables show the median across runs: 5 runs
+  for the built-in tools and 4 for the plugins (Bun 1.4.2 and Bun 1.3.14, two runs
+  each). The two Bun versions differ by about 3 ms at most on any row.
+- The built-in `grep` and `glob` return at most 100 results, and the built-in
+  `glob` does not sort. The `grep` and `glob` tables therefore call the plugins
+  with `max_results: 100`, and `glob` also with `limit: 100` and
+  `sort_by: "none"`. The `read` table leaves the plugin on its default budget of
+  2,000 lines or 50 KiB, the same as the built-in. Output sizes are similar but not
+  identical, and differ by up to 2× on the single 300 KB line.
+
+### `read`
+
+| Case | Built-in | Plugin | Ratio |
+| --- | ---: | ---: | ---: |
+| Small file, 139 lines | 7.7 | 0.9 | 8.2× |
+| File of 2,000 lines | 7.6 | 1.9 | 4.1× |
+| 13 MB log, first window | 6.4 | 1.8 | 3.7× |
+| 13 MB log, 200 lines at offset 150,000 | 330 | 13 | 25.3× |
+| Single line of 300 KB | 3.8 | 0.6 | 6.2× |
+| Minified bundle, 160 KB | 5.5 | 1.8 | 3.1× |
+| Directory of 5,000 entries | 11 | 9.7 | 1.1× |
+| Missing file | 0.6 | 0.3 | 2.2× |
+
+The plugin is faster on every case. The gap is smallest on the 5,000-entry
+directory (1.1×) and largest when reading 200 lines deep into the 13 MB log.
+
+### `grep`
+
+| Case | Built-in | Plugin | Ratio |
+| --- | ---: | ---: | ---: |
+| Rare literal, whole repository | 42 | 36 | 1.2× |
+| Common word in `*.ts` | 12 | 6.6 | 1.9× |
+| Regex in `*.ts` | 15 | 7.4 | 2.1× |
+| No match, whole repository | 41 | 34 | 1.2× |
+| 13 MB log, many hits | 20 | 7.1 | 2.8× |
+| 13 MB log, one hit | 24 | 7.6 | 3.2× |
+
+Both sides run ripgrep. A search that walks the whole repository takes 34 to 42 ms
+either way, and the plugin is about 1.2× faster there. On searches limited to
+`*.ts` it is 1.9× to 2.1× faster, and on the 13 MB log 2.8× to 3.2×.
+
+### `glob`
+
+| Pattern | Built-in | Plugin, same limit | Plugin, defaults |
+| --- | ---: | ---: | ---: |
+| `**/*.ts` | 8.2 | 6.0 | 33 |
+| `**/*.test.ts` | 9.1 | 9.1 | 28 |
+| `**/*` | 9.0 | 7.4 | 49 |
+| `*.txt` in a directory of 5,000 files | 11 | 8.8 | 18 |
+| `src/tool/*.ts`, few matches | 14 | 13 | 25 |
+| No match | 15 | 13 | 25 |
+
+With the same limit and no sorting, the plugin takes the same time as the built-in
+tool or slightly less. The plugin defaults to 500 paths sorted by
+modification time, and that sort is what costs time. In a separate run on the
+repository, the sort added about 25 ms to `**/*.ts` and 40 ms to `**/*`, while
+raising the limit from 100 to 500 added about 1 ms. Pass `sort_by: "none"` when
+order does not matter.
+
+These figures come from one machine and one repository. They leave out the host
+and the model, which add their own latency in a real session.
 
 ## 🚀 Install
 

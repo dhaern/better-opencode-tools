@@ -61,6 +61,32 @@ The fallback choice is remembered for 10 minutes. After that the plugin tries
 ripgrep again, so a single failed probe does not keep the session on GNU grep. It
 also tries again as soon as the ripgrep binary on `PATH` changes.
 
+## ⏱️ Benchmark against the built-in `grep`
+
+Times in milliseconds, lower is better, for the built-in tool from the OpenCode
+1.18.32 source and this plugin at 1.1.0. Both were called in process with the same
+arguments, on a 4-core Arm Neoverse-N1 VM with ripgrep 15.2.0, over the OpenCode
+repository (about 6,600 files) and a generated 13 MB log of 200,000 lines. The
+built-in tool returns at most 100 results, so the plugin ran with
+`max_results: 100`. Each figure is a median across separate runs of the suite: 5 for the
+built-in tool and 4 for the plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The
+two Bun versions differ by less than 2 ms on every row.
+
+| Case | Built-in | Plugin | Ratio |
+| --- | ---: | ---: | ---: |
+| Rare literal, whole repository | 42 | 36 | 1.2× |
+| Common word in `*.ts` | 12 | 6.6 | 1.9× |
+| Regex in `*.ts` | 15 | 7.4 | 2.1× |
+| No match, whole repository | 41 | 34 | 1.2× |
+| 13 MB log, many hits | 20 | 7.1 | 2.8× |
+| 13 MB log, one hit | 24 | 7.6 | 3.2× |
+
+Both sides run ripgrep. A search that walks the whole repository takes 34 to 42 ms
+either way. On searches limited to `*.ts` the plugin is 1.9× to 2.1× faster, and
+on the 13 MB log 2.8× to 3.2×.
+The full method, and the `read` and `glob` results, are in the
+[repository README](https://github.com/dhaern/better-opencode-tools#readme).
+
 ## ⚠️ Known limitations
 
 - The GNU grep fallback is slower and does not support every ripgrep feature.

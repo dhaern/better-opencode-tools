@@ -54,6 +54,35 @@ so agents can use it as a drop-in replacement.
 - `which` and `proper-lockfile` load only when they are needed. Importing the
   plugin does not patch host globals.
 
+## ⏱️ Benchmark against the built-in `glob`
+
+Times in milliseconds, lower is better, for the built-in tool from the OpenCode
+1.18.32 source and this plugin at 1.1.0. Both were called in process with the same
+arguments, on a 4-core Arm Neoverse-N1 VM with ripgrep 15.2.0, over the OpenCode
+repository (about 6,600 files) and a generated directory of 5,000 files. The
+built-in tool returns at most 100 paths and does not sort, so the "same limit"
+column ran the plugin with `limit: 100` and `sort_by: "none"`. Each figure is a
+median across separate runs of the suite: 5 for the built-in tool and 4 for the
+plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The two Bun versions differ by
+less than 2 ms on every row.
+
+| Pattern | Built-in | Plugin, same limit | Plugin, defaults |
+| --- | ---: | ---: | ---: |
+| `**/*.ts` | 8.2 | 6.0 | 33 |
+| `**/*.test.ts` | 9.1 | 9.1 | 28 |
+| `**/*` | 9.0 | 7.4 | 49 |
+| `*.txt` in a directory of 5,000 files | 11 | 8.8 | 18 |
+| `src/tool/*.ts`, few matches | 14 | 13 | 25 |
+| No match | 15 | 13 | 25 |
+
+With the same limit and no sorting, the plugin takes the same time as the built-in
+tool or slightly less. The plugin defaults to 500 paths sorted by
+modification time, and that sort is what costs time. In a separate run on the
+repository, the sort added about 25 ms to `**/*.ts` and 40 ms to `**/*`, while
+raising the limit from 100 to 500 added about 1 ms. Pass `sort_by: "none"` when
+order does not matter. The full method, and the `read` and `grep` results, are in
+the [repository README](https://github.com/dhaern/better-opencode-tools#readme).
+
 ## ⚠️ Known limitations
 
 - On Windows, only the launched process is stopped with `child.kill()`, as in 1.0.1.

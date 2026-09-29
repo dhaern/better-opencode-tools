@@ -88,6 +88,34 @@ instead of inflating memory and the provider payload.
 - Special files such as FIFOs are rejected.
 - PDF helper output is bounded.
 
+## ⏱️ Benchmark against the built-in `read`
+
+Times in milliseconds, lower is better, for the built-in tool from the OpenCode
+1.18.32 source and this plugin at 1.1.0. Both were called in process with the same
+arguments, on a 4-core Arm Neoverse-N1 VM, over a generated 13 MB log of 200,000
+lines and a few generated files. The plugin ran with its default output budget of
+2,000 lines or 50 KiB, the same as the built-in tool, and output sizes are close
+but not identical, and differ by up to 2× on the single 300 KB line. Each figure is
+a median across separate runs of the suite: 5 for the built-in tool and 4 for the
+plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The two Bun versions differ by about
+3 ms at most on every row.
+
+| Case | Built-in | Plugin | Ratio |
+| --- | ---: | ---: | ---: |
+| Small file, 139 lines | 7.7 | 0.9 | 8.2× |
+| File of 2,000 lines | 7.6 | 1.9 | 4.1× |
+| 13 MB log, first window | 6.4 | 1.8 | 3.7× |
+| 13 MB log, 200 lines at offset 150,000 | 330 | 13 | 25.3× |
+| Single line of 300 KB | 3.8 | 0.6 | 6.2× |
+| Minified bundle, 160 KB | 5.5 | 1.8 | 3.1× |
+| Directory of 5,000 entries | 11 | 9.7 | 1.1× |
+| Missing file | 0.6 | 0.3 | 2.2× |
+
+The plugin is faster on every case. The gap is smallest on the 5,000-entry
+directory (1.1×) and largest when reading 200 lines deep into the 13 MB log. The full
+method, and the `grep` and `glob` results, are in the
+[repository README](https://github.com/dhaern/better-opencode-tools#readme).
+
 ## ⚠️ Known limitations
 
 - Nested `AGENTS.md` auto-loading is not available. The plugin API does not expose
