@@ -69,7 +69,7 @@ also tries again as soon as the ripgrep binary on `PATH` changes.
   other positive glob is a ripgrep override: it also searches the ignored or
   hidden files it names. To search an ignored directory, pass it as `path`.
 - `.git` directories are skipped even with `hidden` or a glob such as
-  `**/.git/**`, unless the search `path` is inside one (`path: '.git'`), as in
+  `**/.git/**`, unless a search path is inside one (`path: '.git'`), as in
   OpenCode's native grep.
 - A very large output can still be expensive for the host UI and the model, even
   when the search process exits quickly. Use `max_results` and the filters to keep

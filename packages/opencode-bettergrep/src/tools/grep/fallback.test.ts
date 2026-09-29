@@ -445,11 +445,16 @@ describe('tools/grep/fallback', () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'));
     writeFileSync(path.join(repoDir, '.git', 'marker.txt'), 'createTool\n');
-    const search = async (target: string) => {
+    mkdirSync(path.join(repoDir, 'site.git', '.git'), { recursive: true });
+    writeFileSync(
+      path.join(repoDir, 'site.git', '.git', 'marker.txt'),
+      'createTool\n',
+    );
+    const search = async (...paths: string[]) => {
       const input = normalizeGrepInput(
         {
           pattern: 'createTool',
-          path: target,
+          paths,
           output_mode: 'files_with_matches',
           hidden: true,
           fixed_strings: true,
@@ -470,6 +475,13 @@ describe('tools/grep/fallback', () => {
     expect(await search(path.join(repoDir, '.git'))).toEqual([
       path.join('.git', 'marker.txt'),
     ]);
+    // Only a target named .git lifts the exclusion; site.git is not one.
+    expect(
+      await search(
+        path.join(repoDir, 'site.git'),
+        path.join(repoDir, '.git', 'marker.txt'),
+      ),
+    ).toEqual([path.join('.git', 'marker.txt')]);
   });
 
   test('executeGrepFallback parses content mode paths with colons correctly', async () => {

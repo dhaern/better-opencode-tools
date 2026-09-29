@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { RG_BINARY } from './constants';
 import type { NormalizedGrepInput } from './types';
 
@@ -50,16 +49,6 @@ function appendFileTypeArgs(
 function matchesEveryPath(glob: string): boolean {
   const anchored = glob.includes('/') ? glob.replace(/^\//, '') : `**/${glob}`;
   return anchored === '**' || anchored === '**/*' || anchored === '**/**';
-}
-
-// rg matches globs against paths relative to its cwd, so "!**/.git/**" would
-// also hide a target inside .git. Like native grep, search what was asked for.
-export function excludesGitDirs(
-  input: Pick<NormalizedGrepInput, 'searchPath' | 'searchTargets'>,
-): boolean {
-  return !(input.searchTargets ?? [input.searchPath]).some((target) =>
-    target.split(path.sep).includes('.git'),
-  );
 }
 
 export function buildRgArgs(input: NormalizedGrepInput): string[] {
@@ -139,8 +128,10 @@ export function buildRgArgs(input: NormalizedGrepInput): string[] {
     args.push('--glob', normalizedGlob);
   }
 
-  // Last matching glob wins; exclude .git even if a user glob includes it.
-  if (excludesGitDirs(input)) args.push('--glob', '!**/.git/**');
+  // Last matching glob wins, so .git directories are pruned even if a user
+  // glob matches them. rg never filters a search target itself, so a target
+  // inside .git is still searched.
+  args.push('--glob', '!.git/');
 
   if (input.hidden) {
     args.push('--hidden');
