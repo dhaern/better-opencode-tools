@@ -208,11 +208,16 @@ describe('tools/grep/runner', () => {
     const gitDir = path.join(repoDir, 'site.github.io', '.git');
     mkdirSync(gitDir, { recursive: true });
     writeFileSync(path.join(gitDir, 'marker.txt'), 'createTool\n');
-    const search = async (globs: string[], target = repoDir) => {
+    mkdirSync(path.join(repoDir, '.git'));
+    writeFileSync(path.join(repoDir, '.git', 'marker.txt'), 'createTool\n');
+    const search = async (
+      globs: string[],
+      target: string | string[] = repoDir,
+    ) => {
       const { normalized } = createNormalized(
         {
           pattern: 'createTool',
-          path: target,
+          paths: [target].flat(),
           output_mode: 'files_with_matches',
           sort_by: 'path',
           globs,
@@ -226,12 +231,16 @@ describe('tools/grep/runner', () => {
     };
 
     expect(await search([])).toEqual([path.join('src', 'example.ts')]);
-    expect(await search(['**/.git/**'])).toEqual([]);
+    expect(await search(['**/.git', '**/.git/**'])).toEqual([]);
     // ".git" inside a name (site.github.io) is not a .git directory.
     expect(await search([], path.dirname(gitDir))).toEqual([]);
     expect(await search([], gitDir)).toEqual([
       path.join('site.github.io', '.git', 'marker.txt'),
     ]);
+    // A target inside one .git does not open the .git of another target.
+    expect(
+      await search([], [path.dirname(gitDir), path.join(repoDir, '.git')]),
+    ).toEqual([path.join('.git', 'marker.txt')]);
   });
 
   test('runRipgrep parses NUL-delimited filenames in files/count modes', async () => {
