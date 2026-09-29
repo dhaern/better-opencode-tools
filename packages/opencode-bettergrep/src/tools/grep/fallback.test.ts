@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { executeContentLikeMode } from './direct';
 import { executeGrepFallback } from './fallback';
@@ -439,6 +439,37 @@ describe('tools/grep/fallback', () => {
     expect(
       result.files.some((file) => file.absolutePath.endsWith('.hidden.txt')),
     ).toBe(false);
+  });
+
+  test('executeGrepFallback excludes .git with hidden=true', async () => {
+    const repoDir = temps.createRepo();
+    mkdirSync(path.join(repoDir, '.git'));
+    writeFileSync(path.join(repoDir, '.git', 'marker.txt'), 'createTool\n');
+    const search = async (target: string) => {
+      const input = normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: target,
+          output_mode: 'files_with_matches',
+          hidden: true,
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as never,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
+      );
+      return result.files.map((file) =>
+        path.relative(repoDir, file.absolutePath),
+      );
+    };
+
+    expect(await search(repoDir)).toEqual([path.join('src', 'example.ts')]);
+    expect(await search(path.join(repoDir, '.git'))).toEqual([
+      path.join('.git', 'marker.txt'),
+    ]);
   });
 
   test('executeGrepFallback parses content mode paths with colons correctly', async () => {

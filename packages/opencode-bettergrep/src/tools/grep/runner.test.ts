@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   copyFileSync,
+  mkdirSync,
   openSync,
   readFileSync,
   symlinkSync,
@@ -199,6 +200,37 @@ describe('tools/grep/runner', () => {
       path.join('src', 'example.ts'),
       path.join('src', 'ignored.ts'),
       path.join('src', 'notes.md'),
+    ]);
+  });
+
+  test('runRipgrep excludes .git after user globs', async () => {
+    const repoDir = temps.createRepo();
+    const gitDir = path.join(repoDir, 'site.github.io', '.git');
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(path.join(gitDir, 'marker.txt'), 'createTool\n');
+    const search = async (globs: string[], target = repoDir) => {
+      const { normalized } = createNormalized(
+        {
+          pattern: 'createTool',
+          path: target,
+          output_mode: 'files_with_matches',
+          sort_by: 'path',
+          globs,
+        },
+        repoDir,
+      );
+      const result = await runRipgrep(normalized, new AbortController().signal);
+      return result.files.map((file) =>
+        path.relative(repoDir, file.absolutePath),
+      );
+    };
+
+    expect(await search([])).toEqual([path.join('src', 'example.ts')]);
+    expect(await search(['**/.git/**'])).toEqual([]);
+    // ".git" inside a name (site.github.io) is not a .git directory.
+    expect(await search([], path.dirname(gitDir))).toEqual([]);
+    expect(await search([], gitDir)).toEqual([
+      path.join('site.github.io', '.git', 'marker.txt'),
     ]);
   });
 
