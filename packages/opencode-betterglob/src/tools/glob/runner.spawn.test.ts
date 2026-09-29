@@ -276,7 +276,7 @@ describe('tools/glob/runner spawn failures', () => {
       const executable = path.join(dir, 'fake-rg');
       writeFileSync(
         executable,
-        '#!/usr/bin/env node\nprocess.stdout.write("a.ts\\0b.ts\\0c.ts\\0"); setInterval(() => {}, 1000);',
+        '#!/usr/bin/env node\nprocess.on("SIGTERM", () => {}); process.stdout.write("a.ts\\0b.ts\\0c.ts\\0"); setInterval(() => {}, 1000);',
         { mode: 0o755 },
       );
       const run = createRipgrepRunner({
@@ -301,6 +301,7 @@ describe('tools/glob/runner spawn failures', () => {
 
       expect(result.timedOut).toBe(true);
       expect(result.incomplete).toBe(true);
+      expect(result.error).toBeUndefined();
       expect(performance.now() - started).toBeLessThan(2500);
     },
   );
