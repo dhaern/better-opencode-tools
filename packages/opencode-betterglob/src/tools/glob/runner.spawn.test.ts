@@ -270,6 +270,41 @@ describe('tools/glob/runner spawn failures', () => {
   );
 
   test.skipIf(process.platform === 'win32')(
+    'default search stops the child of a wrapper rg at the limit',
+    async () => {
+      const dir = temps.createRepo();
+      const executable = path.join(dir, 'fake-rg');
+      // A wrapper without exec: the search runs as its child and holds stdout.
+      writeFileSync(
+        executable,
+        `#!/bin/sh\nnode -e 'process.stdout.write("a.ts\\0b.ts\\0"); setInterval(() => {}, 1000)' fake-rg-child &\nwait\n`,
+        { mode: 0o755 },
+      );
+      const run = createRipgrepRunner({
+        ...createDefaultRunnerDeps(),
+        // Output closes before the bound only if the child is stopped too.
+        killGraceMs: 10_000,
+        postExitDrainMs: 10_000,
+        resolve: async () => ({
+          path: executable,
+          backend: 'rg',
+          source: 'system-rg',
+        }),
+      });
+      const input = await normalizeSearchInput(
+        { limit: 1, timeout_ms: 20_000 },
+        dir,
+      );
+      const result = await within(
+        run(input, new AbortController().signal),
+        2500,
+      );
+      expect(result).toBeDefined();
+      expect(result?.files).toEqual([`${dir}/src/a.ts`]);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
     'default search bounds timeout for a NUL-writing executable that stays alive',
     async () => {
       const dir = temps.createRepo();

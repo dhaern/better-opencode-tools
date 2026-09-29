@@ -155,6 +155,19 @@ export function adaptDirectSearch(
     };
     completed.resolve(exit);
   };
+  // A detached child leads its own process group. Until the child is reaped
+  // (exitCode and signalCode still null) its PID, and so the group ID, cannot
+  // be reused, so only then is the group signalled.
+  const kill = (signal: NodeJS.Signals = 'SIGTERM') => {
+    const reaped = child.exitCode !== null || child.signalCode !== null;
+    if (options.killProcessGroup && child.pid && !reaped) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {}
+    }
+    child.kill(signal);
+  };
   child.on('error', onError);
   child.once('close', finish);
   child.once('exit', () => {
@@ -171,11 +184,11 @@ export function adaptDirectSearch(
     stop: () => {
       if (stopped || exit) return;
       stopped = true;
-      child.kill();
+      kill();
       if (process.platform === 'win32') return;
       killTimer = setTimeout(() => {
         if (exit) return;
-        child.kill('SIGKILL');
+        kill('SIGKILL');
         destroyReader(child.stdout);
         destroyReader(child.stderr);
       }, options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);

@@ -40,15 +40,21 @@ const isTimeoutReason = (signal: AbortSignal) =>
 const INTERRUPT_EXIT_CODES = { timeout: 124, cancel: 130, limit: 0 } as const;
 
 export function createDefaultRunnerDeps(): RunnerDeps {
+  // The rg on PATH may be a wrapper script that runs ripgrep as a child. On
+  // POSIX the search leads its own process group, so a stop reaches it too.
+  const group = process.platform !== 'win32';
   return {
     killGraceMs: DEFAULT_SEARCH_KILL_GRACE_MS,
     resolve: resolveGlobCliWithAutoInstall,
-    // rg --files never spawns descendants (no --pre/-z in listing mode), so
-    // the child capability is sufficient: no supervisor boot, no group grace.
     spawn: (cmd, args, options) =>
       adaptDirectSearch(
-        nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio }),
+        nodeSpawn(cmd, args, {
+          cwd: options.cwd,
+          stdio: options.stdio,
+          detached: group,
+        }),
         {
+          killProcessGroup: group,
           killGraceMs: options.killGraceMs,
           postCloseDrainMs: options.postExitDrainMs,
         },

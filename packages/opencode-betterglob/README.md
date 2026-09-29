@@ -48,13 +48,15 @@ so agents can use it as a drop-in replacement.
 
 - A search that reaches its limit stops ripgrep immediately; SIGKILL follows
   only if it has not closed after the kill grace. Output drain is bounded.
-- Timeout and cancellation stop the process and do not leave it running.
+- Timeout and cancellation stop the process, including a wrapper's child because
+  ripgrep runs in its own process group on POSIX.
 - Paths are read NUL-delimited, so unusual file names stay intact.
 - `which` and `proper-lockfile` load only when they are needed. Importing the
   plugin does not patch host globals.
 
 ## ⚠️ Known limitations
 
+- On Windows, only the launched process is stopped with `child.kill()`, as in 1.0.1.
 - `sort_by: "mtime"` relies on ripgrep's modified-time sorting. On a very broad
   search, ripgrep may not stream useful partial paths before a timeout.
 - The first run may need network access if the plugin has to download a managed
