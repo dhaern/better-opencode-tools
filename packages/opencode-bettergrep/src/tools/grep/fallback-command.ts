@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { GREP_BINARY } from './constants';
 import { translatePatternToEre } from './fallback-ere';
-import { appendContextArgs } from './rg-args';
+import { appendContextArgs, excludesGitDirs } from './rg-args';
 import type { NormalizedGrepInput } from './types';
 
 export interface BuiltGrepCommand {
@@ -216,6 +216,7 @@ export function buildGrepCommand(
   if (!input.hidden) {
     args.push('--exclude=.*', '--exclude-dir=.*');
   }
+  if (excludesGitDirs(input)) args.push('--exclude-dir=.git');
 
   const unsupported = (patternError: string): BuiltGrepCommand => ({
     command: [binaryPath, ...args],
