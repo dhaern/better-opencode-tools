@@ -35,7 +35,7 @@ To run it from a local checkout, clone the repository, run `bun install` and
 | `limit` | 500 | Maximum number of paths returned. |
 | `sort_by` | `mtime` | `mtime`, `path` or `none`. |
 | `sort_order` | none | `asc` or `desc`. |
-| `hidden` | `true` | Include hidden files, still honoring ignore rules. |
+| `hidden` | `true` | Include hidden files. Ignore rules apply as described below. |
 | `timeout_ms` | 80,000 | Deadline for the whole call, including binary resolution and any first install. |
 
 The default limit is deliberately low, so a broad pattern does not flood the
@@ -64,6 +64,12 @@ so agents can use it as a drop-in replacement.
   `PATH` can search without it.
 - The first managed ripgrep installation loads `proper-lockfile`, which patches
   some Node process and fs functions and signal listeners.
+- Ignore files such as `.gitignore` always apply to a pattern that matches
+  every path (`*`, `**`, `**/*`). Any other pattern is a ripgrep override, as in
+  OpenCode's native glob: it also returns the ignored or hidden files it names
+  (`*.log`, `.env*`), and `packages/**` also descends into ignored directories
+  below `packages/`, such as nested `node_modules`. To list an ignored
+  directory, pass it as `path`.
 - Symlink traversal is disabled. `follow_symlinks: true` is rejected, because an
   `rg --follow` process cannot be confined to the destinations authorized before
   it starts.

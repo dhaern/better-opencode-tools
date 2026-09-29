@@ -180,6 +180,30 @@ describe('tools/glob/runner', () => {
     ]);
   });
 
+  test('a match-all pattern keeps honoring gitignore', async () => {
+    const repoDir = temps.createRepo();
+    writeFileSync(path.join(repoDir, '.gitignore'), 'build/\n');
+    mkdirSync(path.join(repoDir, 'build'));
+    writeFileSync(path.join(repoDir, 'build', 'out.js'), 'out\n');
+
+    for (const pattern of ['*', '**', path.join(repoDir, '**')]) {
+      const { normalized } = await createNormalized(
+        { pattern, sort_by: 'path' },
+        repoDir,
+      );
+      const result = await runSystemRg(
+        normalized,
+        new AbortController().signal,
+      );
+      expect(result.files.map((file) => path.relative(repoDir, file))).toEqual([
+        '.gitignore',
+        'README.md',
+        path.join('src', 'a.ts'),
+        path.join('src', 'b.ts'),
+      ]);
+    }
+  });
+
   test('still excludes .git contents under hidden matching', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'), { recursive: true });
