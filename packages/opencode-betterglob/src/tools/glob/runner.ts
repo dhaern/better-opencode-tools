@@ -1,8 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { AbortWaitError } from '../../utils/abort';
 import {
-  adaptSupervisedSearch,
-  adaptWindowsSearch,
+  adaptDirectSearch,
   cleanupBudget,
   DEFAULT_SEARCH_KILL_GRACE_MS,
   type ManagedSearch,
@@ -10,7 +9,6 @@ import {
   waitForManagedCleanup,
   watchSearchCompletion,
 } from '../../utils/process-output';
-import { spawnSupervised } from '../../utils/process-supervisor';
 import { resolveGlobCliWithAutoInstall } from './resolver';
 import { buildRgCommand } from './rg-args';
 import {
@@ -45,21 +43,16 @@ export function createDefaultRunnerDeps(): RunnerDeps {
   return {
     killGraceMs: DEFAULT_SEARCH_KILL_GRACE_MS,
     resolve: resolveGlobCliWithAutoInstall,
+    // rg --files never spawns descendants (no --pre/-z in listing mode), so
+    // the child capability is sufficient: no supervisor boot, no group grace.
     spawn: (cmd, args, options) =>
-      process.platform === 'win32'
-        ? adaptWindowsSearch(
-            nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio }),
-          )
-        : adaptSupervisedSearch(
-            spawnSupervised([cmd, ...args], {
-              cwd: options.cwd,
-              stdin: 'ignore',
-              stdout: 'pipe',
-              stderr: 'pipe',
-              killGraceMs: options.killGraceMs,
-            }),
-            { postExitDrainMs: options.postExitDrainMs },
-          ),
+      adaptDirectSearch(
+        nodeSpawn(cmd, args, { cwd: options.cwd, stdio: options.stdio }),
+        {
+          killGraceMs: options.killGraceMs,
+          postCloseDrainMs: options.postExitDrainMs,
+        },
+      ),
   };
 }
 

@@ -129,7 +129,7 @@ function startOutputDrain(
   return timer;
 }
 
-function adaptDirectSearch(
+export function adaptDirectSearch(
   child: ChildProcess,
   options: ProcessOptions,
 ): ManagedSearch {
@@ -333,40 +333,14 @@ export interface SearchExit {
 }
 
 export interface ManagedSearch {
-  // Preserve raw worker pipes; the supervisor owns lifecycle and cleanup.
+  // Preserve raw child pipes; either the direct child or supervisor owns cleanup.
   child: ChildProcess;
   // Idempotent capability, never a saved numeric PID/PGID.
   stop: () => void;
-  // Task-exit status may precede transport close.
+  // Task-exit status may precede transport close for supervised searches.
   readExit: () => SearchExit | undefined;
-  // Task status + bounded output drain + supervised cleanup, not raw close.
+  // Direct transport close or supervised task status and bounded cleanup.
   completed: Promise<SearchExit>;
-}
-
-// Windows has no private POSIX supervisor. Only a transport close confirms
-// completion, and stop is the ChildProcess capability (never a saved PID).
-export function adaptWindowsSearch(child: ChildProcess): ManagedSearch {
-  let exit: SearchExit | undefined;
-  let failure: string | undefined;
-  const onError = (error: unknown) => {
-    failure ??= toErrorMessage(error);
-  };
-  const completed = new Promise<SearchExit>((resolve) => {
-    child.on('error', onError);
-    child.once('close', (code, signal) => {
-      child.removeListener('error', onError);
-      exit = { code, signal, ...(failure ? { error: failure } : {}) };
-      resolve(exit);
-    });
-  });
-  return {
-    child,
-    completed,
-    stop: () => {
-      child.kill();
-    },
-    readExit: () => exit,
-  };
 }
 
 export function watchSearchCompletion(

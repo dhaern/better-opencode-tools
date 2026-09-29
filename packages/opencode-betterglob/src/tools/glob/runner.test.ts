@@ -112,7 +112,7 @@ describe('tools/glob/runner', () => {
     expect(result.truncated).toBe(false);
   });
 
-  test('real rg truncates at limit one through the default supervisor', async () => {
+  test('real rg truncates at limit one through the default search', async () => {
     const { repoDir, normalized } = await createNormalized({
       pattern: '*.ts',
       path: 'src',
