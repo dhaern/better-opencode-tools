@@ -26,8 +26,8 @@ Each plugin is published on its own. Install only the ones you want.
   re-read what it already has. A single line larger than the budget is reported
   by number instead of being dropped.
 - Every search process has a deadline and is killed on timeout or cancellation.
-  `glob` launches `rg` directly and sends SIGTERM immediately when it reaches
-  its limit. If `rg` ignores SIGTERM, SIGKILL follows after 250 ms.
+  `glob` launches `rg` directly in its own process group on POSIX and signals
+  the group: SIGTERM at the limit, SIGKILL after 250 ms if it has not closed.
 - Ordering does not depend on timing or locale. `grep` breaks mtime ties by raw
   path bytes, and `read` sorts directory entries by UTF-16 code units. The same
   tree gives the same listing on every runtime.
