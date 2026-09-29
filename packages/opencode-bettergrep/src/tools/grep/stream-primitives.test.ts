@@ -175,6 +175,10 @@ test('stderr retains collected text on stream read failure and preserves truncat
   expect(await readTextStream(chunks(['abcdef']), 3)).toBe(
     'abc\n[stderr truncated]',
   );
+  const pipe = new Readable({ read() {} });
+  pipe.push('abcdef');
+  expect(await readTextStream(pipe, 3)).toBe('abc\n[stderr truncated]');
+  expect(pipe.destroyed).toBe(true);
 });
 
 test('byte and text escaping keep tab, CR and newline contracts', () => {
