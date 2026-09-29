@@ -46,8 +46,8 @@ so agents can use it as a drop-in replacement.
 
 ## 🛡️ How it handles processes
 
-- The search shares one lifecycle with its cleanup. A search that reaches its
-  limit stops in about 0.3 s, where a generic kill grace would take 5 s.
+- A search that reaches its limit stops ripgrep immediately; SIGKILL follows
+  only if it has not closed after the kill grace. Output drain is bounded.
 - Timeout and cancellation stop the process and do not leave it running.
 - Paths are read NUL-delimited, so unusual file names stay intact.
 - `which` and `proper-lockfile` load only when they are needed. Importing the

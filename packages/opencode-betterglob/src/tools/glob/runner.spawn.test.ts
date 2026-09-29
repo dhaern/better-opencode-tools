@@ -6,8 +6,8 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
+  adaptDirectSearch,
   adaptSupervisedSearch,
-  adaptWindowsSearch,
   type ManagedSearch,
 } from '../../utils/process-output';
 import {
@@ -104,14 +104,14 @@ function isAlive(pid: number | undefined): boolean {
 describe('tools/glob/runner spawn failures', () => {
   const temps = createTempTracker();
 
-  test('Windows adapter waits for close and stops only through the child capability', async () => {
+  test('direct adapter waits for close and stops only through the child capability', async () => {
     const child = fakeChild();
     let kills = 0;
     child.kill = () => {
       kills++;
       return true;
     };
-    const managed = adaptWindowsSearch(child);
+    const managed = adaptDirectSearch(child, {});
     let completed = false;
     void managed.completed.then(() => {
       completed = true;
@@ -122,7 +122,7 @@ describe('tools/glob/runner spawn failures', () => {
     managed.stop();
     expect(kills).toBe(1);
     child.emit('close', null, null);
-    expect(await within(managed.completed)).toEqual({
+    expect(await within(managed.completed)).toMatchObject({
       code: null,
       signal: null,
       error: 'spawn failed',
@@ -130,11 +130,11 @@ describe('tools/glob/runner spawn failures', () => {
     expect(managed.readExit()).toEqual(await managed.completed);
   });
 
-  test('Windows adapter retains a stream read failure in the runner result', async () => {
+  test('direct adapter retains a stream read failure in the runner result', async () => {
     const child = fakeChild();
     const run = createRipgrepRunner({
       resolve: fakeResolve,
-      spawn: () => adaptWindowsSearch(child),
+      spawn: () => adaptDirectSearch(child, {}),
     });
     const pending = run(
       await normalizeSearchInput({}, temps.createRepo()),
@@ -151,7 +151,7 @@ describe('tools/glob/runner spawn failures', () => {
     });
   });
 
-  test.each(['windows', 'supervised'] as const)(
+  test.each(['direct', 'supervised'] as const)(
     '%s adapter stops on stream error, retains its diagnostic, and destroys readers',
     async (adapter) => {
       const fixture =
@@ -175,7 +175,7 @@ describe('tools/glob/runner spawn failures', () => {
         spawn: () =>
           fixture
             ? adaptSupervisedSearch(fixture.supervised)
-            : adaptWindowsSearch(child),
+            : adaptDirectSearch(child, {}),
       });
       const repoDir = temps.createRepo();
       const pending = run(
@@ -232,7 +232,7 @@ describe('tools/glob/runner spawn failures', () => {
   });
 
   test.skipIf(process.platform === 'win32')(
-    'default supervisor stops a NUL-writing executable at limit one without a five-second grace',
+    'default search stops a NUL-writing executable at limit one without waiting its kill grace',
     async () => {
       const dir = temps.createRepo();
       const executable = path.join(dir, 'fake-rg');
@@ -243,6 +243,8 @@ describe('tools/glob/runner spawn failures', () => {
       );
       const run = createRipgrepRunner({
         ...createDefaultRunnerDeps(),
+        // A grace far beyond the bound: only a stop that does not wait it passes.
+        killGraceMs: 10_000,
         resolve: async () => ({
           path: executable,
           backend: 'rg',
@@ -250,10 +252,9 @@ describe('tools/glob/runner spawn failures', () => {
         }),
       });
       const input = await normalizeSearchInput(
-        { limit: 1, timeout_ms: 10_000 },
+        { limit: 1, timeout_ms: 20_000 },
         dir,
       );
-      const started = performance.now();
       const result = await within(
         run(input, new AbortController().signal),
         2500,
@@ -264,12 +265,12 @@ describe('tools/glob/runner spawn failures', () => {
       expect(result.files).toEqual([`${dir}/src/a.ts`]);
       expect(result.truncated).toBe(true);
       expect(result.timedOut).toBe(false);
-      expect(performance.now() - started).toBeLessThan(1500);
+      expect(result.incomplete).toBe(false);
     },
   );
 
   test.skipIf(process.platform === 'win32')(
-    'default supervisor bounds timeout for a NUL-writing executable that stays alive',
+    'default search bounds timeout for a NUL-writing executable that stays alive',
     async () => {
       const dir = temps.createRepo();
       const executable = path.join(dir, 'fake-rg');
