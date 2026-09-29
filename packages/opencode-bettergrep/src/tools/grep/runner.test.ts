@@ -167,6 +167,41 @@ describe('tools/grep/runner', () => {
     };
   }
 
+  test('a match-all include keeps honoring ignore files', async () => {
+    const repoDir = temps.createRepo();
+    writeFileSync(path.join(repoDir, '.ignore'), 'ignored.ts\n');
+    writeFileSync(path.join(repoDir, 'src', 'ignored.ts'), 'createTool\n');
+    writeFileSync(path.join(repoDir, 'src', 'notes.md'), 'createTool\n');
+    const search = async (input: Partial<GrepToolInput>) => {
+      const { normalized } = createNormalized(
+        {
+          pattern: 'createTool',
+          output_mode: 'files_with_matches',
+          sort_by: 'path',
+          ...input,
+        },
+        repoDir,
+      );
+      const result = await runRipgrep(normalized, new AbortController().signal);
+      return result.files.map((file) =>
+        path.relative(repoDir, file.absolutePath),
+      );
+    };
+
+    for (const include of ['*', '**', '/**']) {
+      expect(await search({ include })).toEqual([
+        path.join('src', 'example.ts'),
+        path.join('src', 'notes.md'),
+      ]);
+    }
+    // Specific globs still reach rg, keeping its override semantics.
+    expect(await search({ include: '*.ts', globs: ['*.md'] })).toEqual([
+      path.join('src', 'example.ts'),
+      path.join('src', 'ignored.ts'),
+      path.join('src', 'notes.md'),
+    ]);
+  });
+
   test('runRipgrep parses NUL-delimited filenames in files/count modes', async () => {
     const repoDir = temps.createRepo();
     const weirdName = path.join(repoDir, 'src', 'odd\nname.ts');

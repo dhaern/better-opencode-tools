@@ -43,6 +43,14 @@ function appendFileTypeArgs(
   }
 }
 
+// rg matches a glob without "/" at any depth, as if it were "**/<glob>", and
+// a leading "/" anchors it to the root. Once canonical, "**", "**/*" and
+// "**/**" match every path ("/*" stays root-only).
+function matchesEveryPath(glob: string): boolean {
+  const anchored = glob.includes('/') ? glob.replace(/^\//, '') : `**/${glob}`;
+  return anchored === '**' || anchored === '**/*' || anchored === '**/**';
+}
+
 export function buildRgArgs(input: NormalizedGrepInput): string[] {
   const args = ['--no-config', '--no-mmap', '--color', 'never'];
 
@@ -108,12 +116,11 @@ export function buildRgArgs(input: NormalizedGrepInput): string[] {
     args.push('--max-filesize', input.maxFilesize);
   }
 
-  if (input.include) {
-    args.push('--glob', input.include);
-  }
-
-  for (const glob of input.globs) {
-    args.push('--glob', glob);
+  // A positive --glob is an rg override: it beats ignore and hidden rules
+  // for every path it matches, so a glob matching every path is omitted.
+  const globs = input.include ? [input.include, ...input.globs] : input.globs;
+  for (const glob of globs) {
+    if (!matchesEveryPath(glob)) args.push('--glob', glob);
   }
 
   for (const glob of input.excludeGlobs) {
