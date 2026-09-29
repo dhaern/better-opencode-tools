@@ -98,29 +98,28 @@ export async function resolveGlobCliAsync(
     throw new AbortWaitError();
   }
 
-  await race(
-    (deps.ensureSupervisorRuntimeAsync ?? ensureSupervisorRuntime)(signal),
-    signal,
-  );
-
   const find = deps.findExecutableAsync ?? defaultFindExecutableAsync;
   const validate =
     deps.validateExecutableAsync ?? defaultValidateExecutableAsync;
   const system = await race(find(RG_BINARY, signal), signal);
+  const stamp =
+    system && deps === DEFAULT_DEPS ? await fileStamp(system) : undefined;
+  const key = stamp && `system:${system}:${stamp}`;
+  if (system && key && validatedStamps.has(key)) {
+    if (signal?.aborted) throw new AbortWaitError();
+    return { path: system, backend: 'rg', source: 'system-rg' };
+  }
 
-  if (system) {
-    const stamp = deps === DEFAULT_DEPS ? await fileStamp(system) : undefined;
-    const key = stamp && `system:${system}:${stamp}`;
-    if (key && validatedStamps.has(key)) {
-      if (signal?.aborted) throw new AbortWaitError();
-      return { path: system, backend: 'rg', source: 'system-rg' };
+  // Validation and installation run supervised; a validated search does not.
+  await race(
+    (deps.ensureSupervisorRuntimeAsync ?? ensureSupervisorRuntime)(signal),
+    signal,
+  );
+  if (system && (await race(validate(system, signal), signal))) {
+    if (key && stamp === (await fileStamp(system))) {
+      validatedStamps.add(key);
     }
-    if (await race(validate(system, signal), signal)) {
-      if (key && stamp === (await fileStamp(system))) {
-        validatedStamps.add(key);
-      }
-      return { path: system, backend: 'rg', source: 'system-rg' };
-    }
+    return { path: system, backend: 'rg', source: 'system-rg' };
   }
 
   const installed = deps.getInstalledRipgrepPathAsync

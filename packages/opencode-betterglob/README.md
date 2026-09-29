@@ -59,8 +59,8 @@ so agents can use it as a drop-in replacement.
   search, ripgrep may not stream useful partial paths before a timeout.
 - The first run may need network access if the plugin has to download a managed
   ripgrep binary.
-- On Bun hosts, a working `node` executable must be on `PATH` for POSIX process
-  supervision. Bun's child-process IPC is not used.
+- On Bun hosts, a working `node` executable must be on `PATH` to validate or
+  install ripgrep; an already validated ripgrep can search without it.
 - The first managed ripgrep installation loads `proper-lockfile`, which patches
   some Node process and fs functions and signal listeners.
 - Symlink traversal is disabled. `follow_symlinks: true` is rejected, because an

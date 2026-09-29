@@ -179,7 +179,7 @@ describe('tools/glob/resolver', () => {
   );
 
   test.skipIf(process.platform === 'win32' || !process.versions.bun)(
-    'missing node fails preflight before rg lookup, validation, managed cache or authorized installation',
+    'missing node fails preflight before validation, managed cache or authorized installation',
     async () => {
       const dir = await mkdtemp(path.join(os.tmpdir(), 'betterglob-no-node-'));
       const originalPath = process.env.PATH;
@@ -215,7 +215,7 @@ describe('tools/glob/resolver', () => {
         await expect(
           resolveGlobCliWithAutoInstall(deps),
         ).rejects.toBeInstanceOf(SupervisorRuntimeError);
-        expect(calls).toEqual([]);
+        expect(calls).toEqual(['find', 'find', 'find']);
       } finally {
         if (originalPath === undefined) delete process.env.PATH;
         else process.env.PATH = originalPath;
@@ -412,4 +412,28 @@ describe('tools/glob/resolver', () => {
     );
     expect(installs).toBe(0);
   });
+
+  test.skipIf(!process.versions.bun || process.platform === 'win32')(
+    'a validated system rg resolves after node leaves PATH',
+    async () => {
+      const rg = process.env.BETTERGLOB_TEST_RG;
+      const node = Bun.which('node');
+      if (!rg || !node) throw new Error('needs BETTERGLOB_TEST_RG and node');
+      const bin = await mkdtemp(path.join(os.tmpdir(), 'betterglob-path-'));
+      const savedPath = process.env.PATH;
+      try {
+        fs.symlinkSync(rg, path.join(bin, 'rg'));
+        fs.symlinkSync(node, path.join(bin, 'node'));
+        process.env.PATH = bin;
+        await resolveGlobCliAsync(); // validates through the supervisor
+        fs.rmSync(path.join(bin, 'node'));
+        expect(await resolveGlobCliAsync()).toMatchObject({
+          source: 'system-rg',
+        });
+      } finally {
+        process.env.PATH = savedPath;
+        await rm(bin, { recursive: true, force: true });
+      }
+    },
+  );
 });
