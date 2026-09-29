@@ -104,6 +104,23 @@ test('early stop cancels stream exactly once for all framed consumers', async ()
   }
 });
 
+test('early stop while a Node pipe resumes from backpressure keeps the process alive', () => {
+  // The 'c' chunk is still buffered when the consumer stops on 'b' and the
+  // source has a resume tick pending; nothing may consume it after the stop.
+  const script = `
+    import { Readable } from 'node:stream';
+    import { consumeNullItemsBytes } from ${JSON.stringify(`${import.meta.dir}/json-stream.ts`)};
+    const stream = new Readable({ read() {}, highWaterMark: 16 });
+    for (const part of ['a\\0', 'b'.repeat(16) + '\\0', 'c\\0']) stream.push(part);
+    await consumeNullItemsBytes(stream, (item) => item[0] !== 0x62);
+    await new Promise((resolve) => setImmediate(resolve));
+    if (!stream.destroyed) throw new Error('pipe left open after early stop');
+  `;
+  const child = Bun.spawnSync([process.execPath, '-e', script]);
+  expect(child.stderr.toString()).toBe('');
+  expect(child.exitCode).toBe(0);
+});
+
 test('invalid JSON rejects and destroys a Node pipe that never ends', async () => {
   let sent = false;
   const stream = new Readable({

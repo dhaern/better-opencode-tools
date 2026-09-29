@@ -1,4 +1,3 @@
-import { Readable } from 'node:stream';
 import { MAX_STDERR_CHARS, RG_BINARY } from './constants';
 import { formatNonUtf8TextDisplay, tryDecodeUtf8 } from './path-utils';
 import type { RgJsonEvent, RgPathPayload, RgTextPayload } from './types';
@@ -18,15 +17,24 @@ export type BinaryReadableStream =
   | null
   | undefined;
 
-function toWebReadableStream(
-  stream: BinaryReadableStream,
-): ReadableStream<Uint8Array> | null {
+interface ChunkReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(): Promise<unknown>;
+}
+
+// Web streams keep their own reader. Node pipes use their native async
+// iterator, not Readable.toWeb(): after cancel() that adapter can still
+// enqueue a chunk flushed by a pending resume tick and throw outside any
+// caller (nodejs/node#64529), terminating a host without a global handler.
+function getChunkReader(stream: BinaryReadableStream): ChunkReader | null {
   if (!stream) return null;
-  return 'getReader' in stream && typeof stream.getReader === 'function'
-    ? (stream as ReadableStream<Uint8Array>)
-    : (Readable.toWeb(
-        stream as unknown as Readable,
-      ) as unknown as ReadableStream<Uint8Array>);
+  if ('getReader' in stream && typeof stream.getReader === 'function')
+    return (stream as ReadableStream<Uint8Array>).getReader();
+  const chunks = (stream as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+  return {
+    read: () => chunks.next() as ReturnType<ChunkReader['read']>,
+    cancel: async () => chunks.return?.(),
+  };
 }
 
 export class GrowableByteBuffer {
@@ -105,9 +113,8 @@ export async function consumeBufferedBytes(
   stream: BinaryReadableStream,
   onBuffer: (buffer: GrowableByteBuffer, done: boolean) => boolean | undefined,
 ): Promise<void> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) return;
-  const reader = readable.getReader();
+  const reader = getChunkReader(stream);
+  if (!reader) return;
   const buffer = new GrowableByteBuffer();
   while (true) {
     const { done, value } = await reader.read();
@@ -207,10 +214,9 @@ export async function readTextStream(
   preserveOnError = true,
   cancelOnLimit = true,
 ): Promise<string> {
-  const readable = toWebReadableStream(stream);
-  if (!readable) return '';
+  const reader = getChunkReader(stream);
+  if (!reader) return '';
 
-  const reader = readable.getReader();
   const decoder = new TextDecoder();
   let text = '';
 
