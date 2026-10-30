@@ -73,6 +73,55 @@ test('registers one direct tool with described JSON schema and defaults', async 
   );
 });
 
+test('accepts and clamps symmetric context above 50', async () => {
+  const dir = temp();
+  writeFileSync(path.join(dir, 'sample.txt'), 'needle\n');
+  const { tool, toolCtx } = await registered(dir);
+  const input = await tool.input['~standard'].validate({
+    pattern: 'needle',
+    context: 85,
+  });
+  expect(input.issues).toBeUndefined();
+  expect(input.value.context).toBe(85);
+  const result = await tool.execute(input.value, toolCtx);
+  expect(result.metadata).toMatchObject({
+    context: 50,
+    before_context: 50,
+    after_context: 50,
+  });
+  expect(result.metadata.command).toEqual(expect.arrayContaining(['-C', '50']));
+});
+
+test('accepts and clamps before context above 50', async () => {
+  const dir = temp();
+  writeFileSync(path.join(dir, 'sample.txt'), 'needle\n');
+  const { tool, toolCtx } = await registered(dir);
+  const input = await tool.input['~standard'].validate({
+    pattern: 'needle',
+    before_context: 85,
+  });
+  expect(input.issues).toBeUndefined();
+  expect(input.value.before_context).toBe(85);
+  const result = await tool.execute(input.value, toolCtx);
+  expect(result.metadata.before_context).toBe(50);
+  expect(result.metadata.command).toEqual(expect.arrayContaining(['-B', '50']));
+});
+
+test('accepts and clamps after context above 50', async () => {
+  const dir = temp();
+  writeFileSync(path.join(dir, 'sample.txt'), 'needle\n');
+  const { tool, toolCtx } = await registered(dir);
+  const input = await tool.input['~standard'].validate({
+    pattern: 'needle',
+    after_context: 85,
+  });
+  expect(input.issues).toBeUndefined();
+  expect(input.value.after_context).toBe(85);
+  const result = await tool.execute(input.value, toolCtx);
+  expect(result.metadata.after_context).toBe(50);
+  expect(result.metadata.command).toEqual(expect.arrayContaining(['-A', '50']));
+});
+
 test('returns JSON-only metadata and grep summary without output or truncated', async () => {
   const dir = temp();
   writeFileSync(path.join(dir, 'sample.txt'), 'needle\n');

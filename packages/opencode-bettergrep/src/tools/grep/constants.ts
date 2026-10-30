@@ -18,7 +18,7 @@ export const MAX_GREP_LIMIT = 5_000;
 export const MAX_MTIME_DISCOVERY_FILES = 5_000;
 
 export const DEFAULT_GREP_CONTEXT = 0;
-export const MAX_GREP_CONTEXT = 20;
+export const MAX_GREP_CONTEXT = 50;
 
 export const DEFAULT_GREP_MAX_CONCURRENCY = 2;
 export const DEFAULT_GREP_RETRY_COUNT = 1;
