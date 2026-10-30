@@ -3,6 +3,7 @@ import { createReadRenderMetadataHook } from './hooks/read-render-metadata';
 import { READ_DESCRIPTION, READ_TOOL_ID } from './tools/read/constants';
 import { hostOutputLimits } from './tools/read/limits';
 import { createReadTool, readArgsSchema } from './tools/read/tool';
+import { setup } from './v2/plugin';
 
 const server: Plugin = async (ctx) => {
   let outputLimits = hostOutputLimits();
@@ -22,7 +23,8 @@ const server: Plugin = async (ctx) => {
 export default {
   id: 'opencode-betterread',
   server,
-} satisfies PluginModule;
+  setup,
+} satisfies PluginModule & { setup: typeof setup };
 
 export {
   createReadRenderMetadataHook,

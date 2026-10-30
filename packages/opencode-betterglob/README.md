@@ -26,17 +26,27 @@ To run it from a local checkout, clone the repository, run `bun install` and
 `bun run build`, and point the plugin entry at
 `file:///path/to/better-opencode-tools/packages/opencode-betterglob`.
 
+## OpenCode versions
+
+The same package supports OpenCode 1.19.5 and 2.2.2. In v2 it registers
+`glob` as a direct tool. External-directory approvals keep the requested
+directory pattern and save an allow rule for the enclosing Git or Mercurial
+project root, or the requested directory when no project root is found.
+
+Search truncation remains available as `search_truncated` in v2; OpenCode
+applies its own output truncation separately.
+
 ## 🎛️ Options
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `pattern` | required | The glob to match. |
-| `path` | working directory | Directory to search. |
-| `limit` | 500 | Maximum number of paths returned. |
-| `sort_by` | `mtime` | `mtime`, `path` or `none`. |
-| `sort_order` | none | `asc` or `desc`. |
-| `hidden` | `true` | Include hidden files. Ignore rules apply as described below. |
-| `timeout_ms` | 80,000 | Deadline for the whole call, including binary resolution and any first install. |
+| Option       | Default           | Meaning                                                                         |
+| ------------ | ----------------- | ------------------------------------------------------------------------------- |
+| `pattern`    | required          | The glob to match.                                                              |
+| `path`       | working directory | Directory to search.                                                            |
+| `limit`      | 500               | Maximum number of paths returned.                                               |
+| `sort_by`    | `mtime`           | `mtime`, `path` or `none`.                                                      |
+| `sort_order` | none              | `asc` or `desc`.                                                                |
+| `hidden`     | `true`            | Include hidden files. Ignore rules apply as described below.                    |
+| `timeout_ms` | 80,000            | Deadline for the whole call, including binary resolution and any first install. |
 
 The default limit is deliberately low, so a broad pattern does not flood the
 conversation with paths. Raise `limit` when you need more.
@@ -66,14 +76,14 @@ median across separate runs of the suite: 5 for the built-in tool and 4 for the
 plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The two Bun versions differ by
 less than 2 ms on every row.
 
-| Pattern | Built-in | Plugin, same limit | Plugin, defaults |
-| --- | ---: | ---: | ---: |
-| `**/*.ts` | 8.2 | 6.0 | 33 |
-| `**/*.test.ts` | 9.1 | 9.1 | 28 |
-| `**/*` | 9.0 | 7.4 | 49 |
-| `*.txt` in a directory of 5,000 files | 11 | 8.8 | 18 |
-| `src/tool/*.ts`, few matches | 14 | 13 | 25 |
-| No match | 15 | 13 | 25 |
+| Pattern                               | Built-in | Plugin, same limit | Plugin, defaults |
+| ------------------------------------- | -------: | -----------------: | ---------------: |
+| `**/*.ts`                             |      8.2 |                6.0 |               33 |
+| `**/*.test.ts`                        |      9.1 |                9.1 |               28 |
+| `**/*`                                |      9.0 |                7.4 |               49 |
+| `*.txt` in a directory of 5,000 files |       11 |                8.8 |               18 |
+| `src/tool/*.ts`, few matches          |       14 |                 13 |               25 |
+| No match                              |       15 |                 13 |               25 |
 
 With the same limit and no sorting, the plugin takes the same time as the built-in
 tool or slightly less. The plugin defaults to 500 paths sorted by

@@ -26,16 +26,26 @@ To run it from a local checkout, clone the repository, run `bun install` and
 `bun run build`, and point the plugin entry at
 `file:///path/to/better-opencode-tools/packages/opencode-bettergrep`.
 
+## OpenCode versions
+
+The same package supports OpenCode 1.19.5 and 2.2.2. In v2 it registers
+`grep` as a direct tool. External-directory approvals keep the requested
+directory pattern and save an allow rule for the enclosing Git or Mercurial
+project root, or the requested directory when no project root is found.
+
+Search truncation remains available as `search_truncated` in v2; OpenCode
+applies its own output truncation separately.
+
 ## 🔎 What you can ask for
 
-| Area | Options |
-| --- | --- |
-| Output | `output_mode`: `content`, `files_with_matches` or `count`. |
-| Matching | `fixed_strings`, `case_sensitive`, `smart_case`, `word_regexp`, `invert_match`, `multiline`, `multiline_dotall`, `pcre2`. |
-| Context | `context`, `before_context`, `after_context` (0 to 20 lines). |
-| Scope | `path` or `paths`, `include`, `globs`, `exclude_globs`, `file_type`, `file_types`, `exclude_file_types`, `max_filesize`, `hidden`, `follow_symlinks`. |
-| Limits | `max_results` (500 by default, 5,000 at most), `max_count_per_file`, `timeout_ms` (80 s by default, 140 s at most). |
-| Order | `sort_by`: `none`, `path` or `mtime`, with `sort_order`. |
+| Area     | Options                                                                                                                                               |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Output   | `output_mode`: `content`, `files_with_matches` or `count`.                                                                                            |
+| Matching | `fixed_strings`, `case_sensitive`, `smart_case`, `word_regexp`, `invert_match`, `multiline`, `multiline_dotall`, `pcre2`.                             |
+| Context  | `context`, `before_context`, `after_context` (0 to 20 lines).                                                                                         |
+| Scope    | `path` or `paths`, `include`, `globs`, `exclude_globs`, `file_type`, `file_types`, `exclude_file_types`, `max_filesize`, `hidden`, `follow_symlinks`. |
+| Limits   | `max_results` (500 by default, 5,000 at most), `max_count_per_file`, `timeout_ms` (80 s by default, 140 s at most).                                   |
+| Order    | `sort_by`: `none`, `path` or `mtime`, with `sort_order`.                                                                                              |
 
 Results list file paths, line numbers and context. When a search was cut short by
 a limit, a timeout or a cancellation, the output says so, so the agent knows
@@ -72,14 +82,14 @@ built-in tool returns at most 100 results, so the plugin ran with
 built-in tool and 4 for the plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The
 two Bun versions differ by less than 2 ms on every row.
 
-| Case | Built-in | Plugin | Ratio |
-| --- | ---: | ---: | ---: |
-| Rare literal, whole repository | 42 | 36 | 1.2× |
-| Common word in `*.ts` | 12 | 6.6 | 1.9× |
-| Regex in `*.ts` | 15 | 7.4 | 2.1× |
-| No match, whole repository | 41 | 34 | 1.2× |
-| 13 MB log, many hits | 20 | 7.1 | 2.8× |
-| 13 MB log, one hit | 24 | 7.6 | 3.2× |
+| Case                           | Built-in | Plugin | Ratio |
+| ------------------------------ | -------: | -----: | ----: |
+| Rare literal, whole repository |       42 |     36 |  1.2× |
+| Common word in `*.ts`          |       12 |    6.6 |  1.9× |
+| Regex in `*.ts`                |       15 |    7.4 |  2.1× |
+| No match, whole repository     |       41 |     34 |  1.2× |
+| 13 MB log, many hits           |       20 |    7.1 |  2.8× |
+| 13 MB log, one hit             |       24 |    7.6 |  3.2× |
 
 Both sides run ripgrep. A search that walks the whole repository takes 34 to 42 ms
 either way. On searches limited to `*.ts` the plugin is 1.9× to 2.1× faster, and
