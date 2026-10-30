@@ -9,7 +9,8 @@ Three OpenCode plugins that replace the built-in `glob`, `grep` and `read` tools
 They register under the same tool IDs and accept the arguments models already
 use, so prompts and agents keep working unchanged. Behind the call, output stays
 inside the host budget and says where to continue, search processes cannot hang,
-and results come back in the same order on every run.
+and results come back in the same order on every run. The same package loads in
+OpenCode 1.x and 2.x; see [Compatibility](#-compatibility).
 
 Each plugin is published on its own. Install only the ones you want.
 
@@ -17,7 +18,7 @@ Each plugin is published on its own. Install only the ones you want.
 | --- | --- | --- |
 | [`opencode-betterglob`](./packages/opencode-betterglob) | `glob` | File discovery on top of `rg --files`, with a default limit of 500 paths, mtime or path sorting and a hard deadline. |
 | [`opencode-bettergrep`](./packages/opencode-bettergrep) | `grep` | Content search on top of ripgrep, with a GNU grep fallback, the full ripgrep filter set and SIGTERM-then-SIGKILL timeouts. |
-| [`opencode-betterread`](./packages/opencode-betterread) | `read` | Text, directories, notebooks, images, PDFs and binaries, with its own permission checks and an output budget that follows your OpenCode config. |
+| [`opencode-betterread`](./packages/opencode-betterread) | `read` | Text, directories, notebooks, images, PDFs and binaries, with its own permission checks and an output budget that follows your OpenCode config ([plugin options in OpenCode 2](#%EF%B8%8F-output-budget)). |
 
 ## 🎯 What you notice in use
 
