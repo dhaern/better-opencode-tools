@@ -7,7 +7,7 @@
     },
     "packages/opencode-betterglob": {
       "name": "opencode-betterglob",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "dependencies": {
         "@opencode-ai/plugin": "1.19.5",
         "effect": "4.0.0-beta.83",
@@ -32,7 +32,7 @@
     },
     "packages/opencode-bettergrep": {
       "name": "opencode-bettergrep",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "dependencies": {
         "@opencode-ai/plugin": "1.19.5",
         "effect": "4.0.0-beta.83",
@@ -55,7 +55,7 @@
     },
     "packages/opencode-betterread": {
       "name": "opencode-betterread",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "dependencies": {
         "@opencode-ai/plugin": "1.19.5",
         "effect": "4.0.0-beta.83",

@@ -42,7 +42,7 @@ applies its own output truncation separately.
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Output   | `output_mode`: `content`, `files_with_matches` or `count`.                                                                                            |
 | Matching | `fixed_strings`, `case_sensitive`, `smart_case`, `word_regexp`, `invert_match`, `multiline`, `multiline_dotall`, `pcre2`.                             |
-| Context  | `context`, `before_context`, `after_context` (0 to 20 lines).                                                                                         |
+| Context  | `context`, `before_context`, `after_context` (values above 50 are clamped to 50 lines).                                                               |
 | Scope    | `path` or `paths`, `include`, `globs`, `exclude_globs`, `file_type`, `file_types`, `exclude_file_types`, `max_filesize`, `hidden`, `follow_symlinks`. |
 | Limits   | `max_results` (500 by default, 5,000 at most), `max_count_per_file`, `timeout_ms` (80 s by default, 140 s at most).                                   |
 | Order    | `sort_by`: `none`, `path` or `mtime`, with `sort_order`.                                                                                              |

@@ -64,28 +64,25 @@ export const grepArgsSchema: Record<string, unknown> = {
     .number()
     .int()
     .min(0)
-    .max(MAX_GREP_CONTEXT)
     .default(DEFAULT_GREP_CONTEXT)
     .describe(
-      'Symmetric context lines around each match. Used as the fallback for before_context/after_context when those are omitted.',
+      `Symmetric context lines around each match. Used as the fallback for before_context/after_context when those are omitted. Values above ${MAX_GREP_CONTEXT} are clamped to ${MAX_GREP_CONTEXT}.`,
     ),
   before_context: z
     .number()
     .int()
     .min(0)
-    .max(MAX_GREP_CONTEXT)
     .optional()
     .describe(
-      'Optional context lines before each match. When provided, it overrides the before side of context.',
+      `Optional context lines before each match. When provided, it overrides the before side of context. Values above ${MAX_GREP_CONTEXT} are clamped to ${MAX_GREP_CONTEXT}.`,
     ),
   after_context: z
     .number()
     .int()
     .min(0)
-    .max(MAX_GREP_CONTEXT)
     .optional()
     .describe(
-      'Optional context lines after each match. When provided, it overrides the after side of context.',
+      `Optional context lines after each match. When provided, it overrides the after side of context. Values above ${MAX_GREP_CONTEXT} are clamped to ${MAX_GREP_CONTEXT}.`,
     ),
   max_results: z
     .number()

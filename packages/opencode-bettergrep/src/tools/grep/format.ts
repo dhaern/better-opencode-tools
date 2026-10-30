@@ -208,7 +208,7 @@ export function formatGrepResult(
         : input.outputMode === 'count'
           ? formatCountMode(result)
           : formatContentMode(result);
-    lines.push(...formattedBody);
+    for (const line of formattedBody) lines.push(line);
   }
 
   const notes: string[] = [];
