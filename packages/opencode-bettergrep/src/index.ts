@@ -14,6 +14,7 @@ import {
   getRipgrepCacheDir,
 } from './tools/grep/rg-cache';
 import { createGrepTool } from './tools/grep/tool';
+import { setup } from './v2/plugin';
 
 const server: Plugin = async (ctx) => ({
   tool: { grep: createGrepTool(ctx) },
@@ -23,7 +24,8 @@ const server: Plugin = async (ctx) => ({
 export default {
   id: 'opencode-bettergrep',
   server,
-} satisfies PluginModule;
+  setup,
+} satisfies PluginModule & { setup: typeof setup };
 
 export {
   createGrepRenderMetadataHook,

@@ -18,7 +18,11 @@ test('public module exposes exactly the grep contract and registers its hook', a
     'resolveGrepCli',
     'resolveGrepCliWithAutoInstall',
   ]);
-  expect(plugin).toEqual({ id: 'opencode-bettergrep', server: plugin.server });
+  expect(plugin).toEqual({
+    id: 'opencode-bettergrep',
+    server: plugin.server,
+    setup: plugin.setup,
+  });
   const registered = await plugin.server({
     directory: process.cwd(),
     worktree: process.cwd(),

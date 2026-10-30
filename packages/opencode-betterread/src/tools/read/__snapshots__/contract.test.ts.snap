@@ -124,6 +124,7 @@ exports[`public exports and server shape stay stable 2`] = `
   "keys": [
     "id",
     "server",
+    "setup",
   ],
 }
 `;

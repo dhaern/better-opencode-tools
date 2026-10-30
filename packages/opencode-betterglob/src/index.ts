@@ -2,6 +2,7 @@ import type { Plugin, PluginModule } from '@opencode-ai/plugin';
 import { createGlobRenderMetadataHook } from './hooks/glob-render-metadata';
 import { createGlobTool } from './tools/glob/tool';
 import { initLogger } from './utils/logger';
+import { setup } from './v2/plugin';
 
 const server: Plugin = async (ctx) => {
   initLogger(ctx.project.id);
@@ -32,4 +33,5 @@ const server: Plugin = async (ctx) => {
 export default {
   id: 'opencode-betterglob',
   server,
-} satisfies PluginModule;
+  setup,
+} satisfies PluginModule & { setup: typeof setup };

@@ -26,6 +26,32 @@ To run it from a local checkout, clone the repository, run `bun install` and
 `bun run build`, and point the plugin entry at
 `file:///path/to/better-opencode-tools/packages/opencode-betterread`.
 
+## OpenCode versions
+
+The same package supports OpenCode 1.19.5 and 2.2.2. In v2 the tool accepts
+`path` instead of `filePath` and reads its output budget from plugin options:
+
+```json
+{
+  "plugin": [
+    [
+      "opencode-betterread",
+      {
+        "tool_output": { "max_lines": 4000, "max_bytes": 153600 }
+      }
+    ]
+  ]
+}
+```
+
+In v2, `read` permission resources are relative to the session directory for
+internal paths and absolute for external paths; the saved read rule is `*`.
+For symlinks, the check includes both the requested path and its resolved target.
+External-directory rules are saved at the enclosing Git or Mercurial project
+root, or at the requested directory when no project root is found. Read
+truncation is reported in metadata so the host preserves the continuation text.
+The replacement does not load `AGENTS.md` from subdirectories.
+
 ## 📄 Text output and continuation
 
 Text files come back with numbered lines. When a read hits the budget, the output
@@ -41,7 +67,7 @@ larger than the whole budget is reported by number
 (`(Line 12 exceeds budget. Use offset=13 to continue.)`) so the read can move
 past it. Long lines carry a truncation note.
 
-The budget comes from the `tool_output` block of your OpenCode config:
+On OpenCode v1, the budget comes from the `tool_output` block of your config:
 
 ```json
 {
@@ -60,15 +86,15 @@ Calling the exported `createReadTool` without per-instance limits uses the same
 
 ## 🧠 What it can read
 
-| Input | Result |
-| --- | --- |
-| Text and code | Numbered lines, with offset and limit. |
-| Directories | Sorted, paginated entries. The total is marked as exact or partially scanned. |
+| Input             | Result                                                                                       |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| Text and code     | Numbered lines, with offset and limit.                                                       |
+| Directories       | Sorted, paginated entries. The total is marked as exact or partially scanned.                |
 | Jupyter notebooks | Small ones are rendered cell by cell. Large or malformed ones fall back to bounded raw text. |
-| Images | Dimensions and metadata, plus an embedded attachment. |
-| PDFs | A conservative metadata and text summary, plus an embedded attachment. |
-| Binary files | An explicit binary placeholder. |
-| Missing paths | An error with suggestions when there are close matches. |
+| Images            | Dimensions and metadata, plus an embedded attachment.                                        |
+| PDFs              | A conservative metadata and text summary, plus an embedded attachment.                       |
+| Binary files      | An explicit binary placeholder.                                                              |
+| Missing paths     | An error with suggestions when there are close matches.                                      |
 
 Directory entries are sorted by UTF-16 code units, so the listing does not depend
 on ICU or on the runtime's locale. Symlinks in the visible window get a trailing
@@ -100,16 +126,16 @@ a median across separate runs of the suite: 5 for the built-in tool and 4 for th
 plugin (Bun 1.4.2 and Bun 1.3.14, two runs each). The two Bun versions differ by about
 3 ms at most on every row.
 
-| Case | Built-in | Plugin | Ratio |
-| --- | ---: | ---: | ---: |
-| Small file, 139 lines | 7.7 | 0.9 | 8.2× |
-| File of 2,000 lines | 7.6 | 1.9 | 4.1× |
-| 13 MB log, first window | 6.4 | 1.8 | 3.7× |
-| 13 MB log, 200 lines at offset 150,000 | 330 | 13 | 25.3× |
-| Single line of 300 KB | 3.8 | 0.6 | 6.2× |
-| Minified bundle, 160 KB | 5.5 | 1.8 | 3.1× |
-| Directory of 5,000 entries | 11 | 9.7 | 1.1× |
-| Missing file | 0.6 | 0.3 | 2.2× |
+| Case                                   | Built-in | Plugin | Ratio |
+| -------------------------------------- | -------: | -----: | ----: |
+| Small file, 139 lines                  |      7.7 |    0.9 |  8.2× |
+| File of 2,000 lines                    |      7.6 |    1.9 |  4.1× |
+| 13 MB log, first window                |      6.4 |    1.8 |  3.7× |
+| 13 MB log, 200 lines at offset 150,000 |      330 |     13 | 25.3× |
+| Single line of 300 KB                  |      3.8 |    0.6 |  6.2× |
+| Minified bundle, 160 KB                |      5.5 |    1.8 |  3.1× |
+| Directory of 5,000 entries             |       11 |    9.7 |  1.1× |
+| Missing file                           |      0.6 |    0.3 |  2.2× |
 
 The plugin is faster on every case. The gap is smallest on the 5,000-entry
 directory (1.1×) and largest when reading 200 lines deep into the 13 MB log. The full
