@@ -52,6 +52,7 @@ export function createDefaultRunnerDeps(): RunnerDeps {
           cwd: options.cwd,
           stdio: options.stdio,
           detached: group,
+          windowsHide: true,
         }),
         {
           killProcessGroup: group,
