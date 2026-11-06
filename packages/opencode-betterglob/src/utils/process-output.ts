@@ -218,6 +218,7 @@ export function runProcess(
       ],
       cwd: options.cwd,
       env: options.env as NodeJS.ProcessEnv,
+      windowsHide: true,
     });
   const search = owner
     ? adaptSupervisedSearch(owner, {

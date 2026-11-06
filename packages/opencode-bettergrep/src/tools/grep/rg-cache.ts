@@ -136,6 +136,7 @@ export function ensureExecutable(binaryPath: string): void {
 function validateInstalledBinary(binaryPath: string): void {
   const result = spawnSync(binaryPath, ['--version'], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
   const output = `${result.stdout?.toString() ?? ''}\n${result.stderr?.toString() ?? ''}`;
   assertValidationOutput(output, result.status);

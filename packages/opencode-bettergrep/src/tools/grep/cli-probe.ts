@@ -140,6 +140,7 @@ function defaultIsSupported(binaryPath: string, kind: 'rg' | 'grep'): boolean {
     const result = spawnSync(binaryPath, ['--version'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: PROBE_TIMEOUT_MS,
+      windowsHide: true,
     });
     if (result.error || result.status !== 0) return false;
     return isSupportedVersion(

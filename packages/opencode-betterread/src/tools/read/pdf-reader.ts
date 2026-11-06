@@ -13,7 +13,10 @@ export function runCommand(
 ): Promise<string> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     const chunks: Buffer[] = [];
     let size = 0;
     let timedOut = false;

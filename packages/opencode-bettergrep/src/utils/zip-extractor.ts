@@ -23,6 +23,7 @@ function isPwshAvailable(): boolean {
   const result = spawnSync('where', ['pwsh'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: SUPPORT_PROBE_TIMEOUT_MS,
+    windowsHide: true,
   });
   return result.status === 0;
 }
@@ -38,6 +39,7 @@ function hasCommand(command: string, args: string[] = ['--version']): boolean {
     const result = spawnSync(command, args, {
       stdio: ['ignore', 'ignore', 'ignore'],
       timeout: SUPPORT_PROBE_TIMEOUT_MS,
+      windowsHide: true,
     });
     return result.status === 0;
   } catch {

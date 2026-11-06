@@ -174,6 +174,7 @@ export function crossSpawn(
     ],
     cwd: options?.cwd,
     env: options?.env as NodeJS.ProcessEnv,
+    windowsHide: true,
   });
 
   const stdoutCollector = collectStream(proc.stdout);
