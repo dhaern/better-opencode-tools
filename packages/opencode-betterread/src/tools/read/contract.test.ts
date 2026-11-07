@@ -106,13 +106,42 @@ test.each([
     const size = Buffer.byteLength(result.output, 'utf8');
     expect(size).toBeLessThanOrEqual(MAX_OUTPUT_BYTES);
     expect(size).toBeGreaterThan(MAX_OUTPUT_BYTES - 620);
-    expect(result.metadata).toMatchObject({
-      truncated_by_bytes: true,
+    const endLine = result.metadata.end_line as number;
+    expect(endLine).toBeGreaterThan(0);
+    expect(endLine).toBeLessThanOrEqual(1500);
+    const lines = Array.from(
+      { length: endLine },
+      (_, index) => `${index + 1}: ${'€'.repeat(200)}`,
+    );
+    expect(canonical(result.output)).toBe(
+      [
+        '<path><root>/repo/bytes.txt</path>',
+        '<type>file</type>',
+        '<content>',
+        ...lines,
+        '</content>',
+        `(Showing lines 1-${endLine}. Use offset=${endLine + 1} to continue.)`,
+        '(Output capped by byte budget.)',
+      ].join('\n'),
+    );
+    expect(canonical(result.metadata)).toEqual({
+      enhancedBy: 'opencode-betterread',
+      enhancedPath: '<root>/repo/bytes.txt',
+      resolved_path: '<root>/repo/bytes.txt',
+      kind: 'text',
+      loaded: [],
+      preview: lines.slice(0, 20).join('\n'),
+      truncated: true,
+      start_line: 1,
+      end_line: endLine,
+      total_lines: 1500,
       has_more: true,
+      truncated_by_bytes: true,
+      truncated_by_line_length: false,
     });
-    return;
+  } else {
+    expect(contract(result.output, result.metadata)).toMatchSnapshot();
   }
-  expect(contract(result.output, result.metadata)).toMatchSnapshot();
 });
 
 test('out-of-range offset error is stable', async () => {

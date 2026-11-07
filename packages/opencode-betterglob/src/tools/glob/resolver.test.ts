@@ -291,43 +291,40 @@ describe('tools/glob/resolver', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
-  (process.platform === 'win32' ? test.skip : test)(
-    'resolves a real PATH executable without synchronous filesystem calls',
-    async () => {
-      const dir = await mkdtemp(path.join(os.tmpdir(), 'betterglob-resolver-'));
-      const executable = path.join(dir, 'rg');
-      const originalPath = process.env.PATH;
-      await writeFile(executable, '#!/bin/sh\necho ripgrep 14.1.1\n', {
-        mode: 0o755,
+  test('resolves a real PATH executable without synchronous filesystem calls', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'betterglob-resolver-'));
+    const executable = path.join(dir, 'rg');
+    const originalPath = process.env.PATH;
+    await writeFile(executable, '#!/bin/sh\necho ripgrep 14.1.1\n', {
+      mode: 0o755,
+    });
+    process.env.PATH = `${dir}${path.delimiter}${originalPath ?? ''}`;
+    const syncCalls = [
+      spyOn(fs, 'statSync'),
+      spyOn(fs, 'lstatSync'),
+      spyOn(fs, 'accessSync'),
+      spyOn(fs, 'existsSync'),
+      spyOn(fs, 'readFileSync'),
+    ];
+    try {
+      const resolved = await resolveGlobCliAsync({
+        findExecutableAsync: async () => executable,
+        getInstalledRipgrepPathAsync: async () => null,
+        validateExecutableAsync: async () => true,
       });
-      process.env.PATH = `${dir}${path.delimiter}${originalPath ?? ''}`;
-      const syncCalls = [
-        spyOn(fs, 'statSync'),
-        spyOn(fs, 'lstatSync'),
-        spyOn(fs, 'accessSync'),
-        spyOn(fs, 'existsSync'),
-        spyOn(fs, 'readFileSync'),
-      ];
-      try {
-        const resolved = await resolveGlobCliAsync({
-          findExecutableAsync: async () => executable,
-          getInstalledRipgrepPathAsync: async () => null,
-          validateExecutableAsync: async () => true,
-        });
-        expect(resolved).toEqual({
-          path: executable,
-          backend: 'rg',
-          source: 'system-rg',
-        });
-        for (const call of syncCalls) expect(call).not.toHaveBeenCalled();
-      } finally {
-        for (const call of syncCalls) call.mockRestore();
-        if (originalPath === undefined) delete process.env.PATH;
-        else process.env.PATH = originalPath;
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
+      expect(resolved).toEqual({
+        path: executable,
+        backend: 'rg',
+        source: 'system-rg',
+      });
+      for (const call of syncCalls) expect(call).not.toHaveBeenCalled();
+    } finally {
+      for (const call of syncCalls) call.mockRestore();
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   test('cancels a pending failure logger and observes its late rejection', async () => {
     const controller = new AbortController();

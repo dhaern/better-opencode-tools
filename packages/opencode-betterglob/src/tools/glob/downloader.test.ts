@@ -288,45 +288,42 @@ describe('tools/glob/downloader', () => {
     },
   );
 
-  testPosix(
-    'removes only install directories older than 24 hours under the lock',
-    async () => {
-      const { binary, metadata } = setupCache();
-      const dir = path.dirname(binary);
-      const input = stage(binary, metadata, 'staged-rg');
-      const stale = path.join(dir, `.install-${Date.now()}-abc123`);
-      const fresh = path.join(dir, '.install-1000000000000-def456');
-      const unrelated = path.join(dir, '.install-unrelated');
-      const staleFile = path.join(dir, '.install-1000000000000-ghi789');
-      const staleLink = path.join(dir, '.install-1000000000000-jkl012');
-      for (const entry of [stale, fresh, unrelated]) {
-        mkdirSync(entry);
-        writeFileSync(path.join(entry, 'archive'), 'preserve or cleanup');
-      }
-      writeFileSync(staleFile, 'not a directory');
-      symlinkSync(unrelated, staleLink);
-      const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
-      const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
-      utimesSync(stale, old, old);
-      utimesSync(fresh, recent, recent);
-      utimesSync(unrelated, old, old);
-      utimesSync(staleFile, old, old);
-      lutimesSync(staleLink, old, old);
-      input.acquireLock = async (file, options) => {
-        const release = await lock(file, options);
-        expect(existsSync(stale)).toBe(true);
-        expect(existsSync(fresh)).toBe(true);
-        return release;
-      };
-
-      await publishStagedBinary(input);
-      expect(existsSync(stale)).toBe(false);
+  test('removes only install directories older than 24 hours under the lock', async () => {
+    const { binary, metadata } = setupCache();
+    const dir = path.dirname(binary);
+    const input = stage(binary, metadata, 'staged-rg');
+    const stale = path.join(dir, `.install-${Date.now()}-abc123`);
+    const fresh = path.join(dir, '.install-1000000000000-def456');
+    const unrelated = path.join(dir, '.install-unrelated');
+    const staleFile = path.join(dir, '.install-1000000000000-ghi789');
+    const staleLink = path.join(dir, '.install-1000000000000-jkl012');
+    for (const entry of [stale, fresh, unrelated]) {
+      mkdirSync(entry);
+      writeFileSync(path.join(entry, 'archive'), 'preserve or cleanup');
+    }
+    writeFileSync(staleFile, 'not a directory');
+    symlinkSync(unrelated, staleLink);
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
+    utimesSync(stale, old, old);
+    utimesSync(fresh, recent, recent);
+    utimesSync(unrelated, old, old);
+    utimesSync(staleFile, old, old);
+    lutimesSync(staleLink, old, old);
+    input.acquireLock = async (file, options) => {
+      const release = await lock(file, options);
+      expect(existsSync(stale)).toBe(true);
       expect(existsSync(fresh)).toBe(true);
-      expect(existsSync(unrelated)).toBe(true);
-      expect(existsSync(staleFile)).toBe(true);
-      expect(existsSync(staleLink)).toBe(true);
-    },
-  );
+      return release;
+    };
+
+    await publishStagedBinary(input);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+    expect(existsSync(staleFile)).toBe(true);
+    expect(existsSync(staleLink)).toBe(true);
+  });
 
   testPosix(
     'serializes simultaneous publishers through a directory alias',
@@ -441,35 +438,32 @@ describe('tools/glob/downloader', () => {
     },
   );
 
-  testPosix(
-    'observes compromise during acquisition and releases a late lock',
-    async () => {
-      const { binary, metadata } = setupCache();
-      const input = stage(binary, metadata, 'staged-rg');
-      const acquiring = deferred();
-      const acquired = deferred();
-      const released = deferred();
-      const error = Object.assign(new Error('acquisition compromised'), {
-        code: 'ECOMPROMISED',
-      });
-      let compromise!: () => void;
-      input.acquireLock = async (_file, options) => {
-        compromise = () => options?.onCompromised?.(error);
-        acquiring.resolve();
-        await acquired.promise;
-        return async () => released.resolve();
-      };
-      const pending = publishStagedBinary(input);
-      await acquiring.promise;
-      expect(compromise).not.toThrow();
-      await expect(pending).rejects.toThrow('acquisition compromised');
-      acquired.resolve();
-      await released.promise;
-      expect(existsSync(binary)).toBe(false);
-      expect(existsSync(metadata)).toBe(false);
-      expect(existsSync(input.staged)).toBe(true);
-    },
-  );
+  test('observes compromise during acquisition and releases a late lock', async () => {
+    const { binary, metadata } = setupCache();
+    const input = stage(binary, metadata, 'staged-rg');
+    const acquiring = deferred();
+    const acquired = deferred();
+    const released = deferred();
+    const error = Object.assign(new Error('acquisition compromised'), {
+      code: 'ECOMPROMISED',
+    });
+    let compromise!: () => void;
+    input.acquireLock = async (_file, options) => {
+      compromise = () => options?.onCompromised?.(error);
+      acquiring.resolve();
+      await acquired.promise;
+      return async () => released.resolve();
+    };
+    const pending = publishStagedBinary(input);
+    await acquiring.promise;
+    expect(compromise).not.toThrow();
+    await expect(pending).rejects.toThrow('acquisition compromised');
+    acquired.resolve();
+    await released.promise;
+    expect(existsSync(binary)).toBe(false);
+    expect(existsSync(metadata)).toBe(false);
+    expect(existsSync(input.staged)).toBe(true);
+  });
 
   testPosix('returns a valid cached ripgrep binary', async () => {
     const { binary, metadata } = setupCache();
@@ -504,26 +498,23 @@ describe('tools/glob/downloader', () => {
     },
   );
 
-  testPosix(
-    'does not repair or delete invalid cache during read-only probe',
-    async () => {
-      const { binary, metadata } = setupCache();
-      writeFakeRipgrep(binary);
-      writeFileSync(
-        metadata,
-        JSON.stringify({
-          version: '14.1.1',
-          assetName: 'ripgrep.tar.gz',
-          archiveSha256: 'a'.repeat(64),
-          binarySha256: 'b'.repeat(64),
-        }),
-      );
+  test('does not repair or delete invalid cache during read-only probe', async () => {
+    const { binary, metadata } = setupCache();
+    writeFakeRipgrep(binary);
+    writeFileSync(
+      metadata,
+      JSON.stringify({
+        version: '14.1.1',
+        assetName: 'ripgrep.tar.gz',
+        archiveSha256: 'a'.repeat(64),
+        binarySha256: 'b'.repeat(64),
+      }),
+    );
 
-      expect(await getInstalledRipgrepPathAsync()).toBeNull();
-      expect(existsSync(binary)).toBe(true);
-      expect(existsSync(metadata)).toBe(true);
-    },
-  );
+    expect(await getInstalledRipgrepPathAsync()).toBeNull();
+    expect(existsSync(binary)).toBe(true);
+    expect(existsSync(metadata)).toBe(true);
+  });
 
   testPosix(
     'publishes a staged binary over a corrupt cache under the lock',
@@ -565,62 +556,21 @@ describe('tools/glob/downloader', () => {
     },
   );
 
-  testPosix(
-    'refuses to publish after an abort while waiting for the lock',
-    async () => {
-      const { binary, metadata } = setupCache();
-      const dir = path.dirname(binary);
-      const staged = path.join(dir, 'staged-rg');
-      writeFakeRipgrep(staged);
+  test('refuses to publish after an abort while waiting for the lock', async () => {
+    const { binary, metadata } = setupCache();
+    const dir = path.dirname(binary);
+    const staged = path.join(dir, 'staged-rg');
+    writeFakeRipgrep(staged);
 
-      // Hold the same proper-lockfile lock used by the publisher.
-      const release = await lock(dir, {
-        realpath: false,
-        stale: 60_000,
-        update: 30_000,
-      });
+    // Hold the same proper-lockfile lock used by the publisher.
+    const release = await lock(dir, {
+      realpath: false,
+      stale: 60_000,
+      update: 30_000,
+    });
 
-      const controller = new AbortController();
-      try {
-        const pending = publishStagedBinary(
-          {
-            dir,
-            final: binary,
-            metadata,
-            staged,
-            version: '14.1.1',
-            assetName: 'ripgrep.tar.gz',
-            archiveSha256: 'a'.repeat(64),
-            binarySha256: sha256(staged),
-          },
-          controller.signal,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        controller.abort();
-
-        await expect(pending).rejects.toThrow(/aborted|abort/i);
-        expect(existsSync(binary)).toBe(false);
-        expect(existsSync(metadata)).toBe(false);
-      } finally {
-        await release();
-      }
-    },
-  );
-
-  testPosix(
-    'does not rename a staged binary after metadata write aborts',
-    async () => {
-      const { binary, metadata } = setupCache();
-      const dir = path.dirname(binary);
-      const staged = path.join(dir, 'staged-rg');
-      writeFakeRipgrep(staged);
-
-      let releaseWrite!: () => void;
-      let markWriteStarted!: () => void;
-      const writeStarted = new Promise<void>((resolve) => {
-        markWriteStarted = resolve;
-      });
-      const controller = new AbortController();
+    const controller = new AbortController();
+    try {
       const pending = publishStagedBinary(
         {
           dir,
@@ -631,30 +581,65 @@ describe('tools/glob/downloader', () => {
           assetName: 'ripgrep.tar.gz',
           archiveSha256: 'a'.repeat(64),
           binarySha256: sha256(staged),
-          writeMetadata: async (file, contents) => {
-            markWriteStarted();
-            await new Promise<void>((resolve) => {
-              releaseWrite = resolve;
-            });
-            writeFileSync(file, contents);
-          },
         },
         controller.signal,
       );
-
-      await writeStarted;
+      await new Promise((resolve) => setTimeout(resolve, 20));
       controller.abort();
-      releaseWrite();
 
       await expect(pending).rejects.toThrow(/aborted|abort/i);
       expect(existsSync(binary)).toBe(false);
       expect(existsSync(metadata)).toBe(false);
-      expect(existsSync(`${metadata}.tmp`)).toBe(false);
-      expect(readdirSync(dir).filter((name) => name.includes('.tmp'))).toEqual(
-        [],
-      );
-    },
-  );
+    } finally {
+      await release();
+    }
+  });
+
+  test('does not rename a staged binary after metadata write aborts', async () => {
+    const { binary, metadata } = setupCache();
+    const dir = path.dirname(binary);
+    const staged = path.join(dir, 'staged-rg');
+    writeFakeRipgrep(staged);
+
+    let releaseWrite!: () => void;
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    const controller = new AbortController();
+    const pending = publishStagedBinary(
+      {
+        dir,
+        final: binary,
+        metadata,
+        staged,
+        version: '14.1.1',
+        assetName: 'ripgrep.tar.gz',
+        archiveSha256: 'a'.repeat(64),
+        binarySha256: sha256(staged),
+        writeMetadata: async (file, contents) => {
+          markWriteStarted();
+          await new Promise<void>((resolve) => {
+            releaseWrite = resolve;
+          });
+          writeFileSync(file, contents);
+        },
+      },
+      controller.signal,
+    );
+
+    await writeStarted;
+    controller.abort();
+    releaseWrite();
+
+    await expect(pending).rejects.toThrow(/aborted|abort/i);
+    expect(existsSync(binary)).toBe(false);
+    expect(existsSync(metadata)).toBe(false);
+    expect(existsSync(`${metadata}.tmp`)).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.includes('.tmp'))).toEqual(
+      [],
+    );
+  });
 
   testPosix(
     'uses one canonical lock for a symlinked cache directory',
