@@ -68,11 +68,14 @@ function stable(
   root: string,
   order: 'none' | 'path' | 'mtime' = 'path',
 ) {
-  const relative = (value: string) =>
-    value
-      .replaceAll(root, '<ROOT>')
-      .replaceAll('\\', '/')
-      .replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
+  const relative = (value: string) => {
+    const normalized = value.replaceAll(root, '<ROOT>');
+    return (
+      process.platform === 'win32'
+        ? normalized.replaceAll('\\', '/')
+        : normalized
+    ).replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
+  };
   const files =
     order === 'none' || (order === 'mtime' && result.backend === 'grep')
       ? [...result.files].sort(comparePathBytes)
