@@ -1,5 +1,6 @@
 /// <reference types="bun-types" />
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import {
   chmodSync,
   mkdirSync,
@@ -9,7 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { extractZip } from './zip-extractor';
+import * as compat from './compat';
+import { extractZip, getZipExtractionSupportError } from './zip-extractor';
 
 const originalPath = process.env.PATH;
 const tempDirs: string[] = [];
@@ -44,6 +46,44 @@ function createUnzipWrapper(script: string): {
 }
 
 describe('utils/zip-extractor process lifetime', () => {
+  test.skipIf(process.platform !== 'win32')(
+    'uses System32 tar for the probe and extraction',
+    async () => {
+      const root = process.env.SystemRoot;
+      const probe = spyOn(childProcess, 'spawnSync');
+      const spawn = spyOn(compat, 'crossSpawn').mockReturnValue({
+        stderr: async () => '',
+        exited: Promise.resolve(0),
+      } as never);
+      try {
+        expect(getZipExtractionSupportError()).toBeUndefined();
+        await extractZip('archive.zip', 'destination');
+        const tar = path.join(
+          process.env.SystemRoot as string,
+          'System32',
+          'tar.exe',
+        );
+        expect(probe.mock.calls[0]?.[0]).toBe(tar);
+        expect(spawn.mock.calls[0]?.[0][0]).toBe(tar);
+        delete process.env.SystemRoot;
+        probe.mockReturnValue({ status: 0 } as never);
+        expect(getZipExtractionSupportError()).toBeUndefined();
+        await extractZip('archive.zip', 'destination');
+        expect(probe.mock.calls.slice(1).map(([command]) => command)).toEqual([
+          'where',
+          'pwsh',
+          'where',
+        ]);
+        expect(spawn.mock.calls[1]?.[0][0]).toBe('pwsh');
+      } finally {
+        if (root === undefined) delete process.env.SystemRoot;
+        else process.env.SystemRoot = root;
+        probe.mockRestore();
+        spawn.mockRestore();
+      }
+    },
+  );
+
   test('does not reject a healthy extraction that exceeds cleanup grace', async () => {
     if (process.platform === 'win32') return;
 

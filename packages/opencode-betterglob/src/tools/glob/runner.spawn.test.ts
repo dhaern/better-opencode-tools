@@ -192,7 +192,7 @@ describe('tools/glob/runner spawn failures', () => {
         fixture.task.resolve({ code: 0, signal: null });
       } else child.emit('close', 0, null);
       const result = await within(pending);
-      expect(result?.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result?.files).toEqual([path.join(repoDir, 'src', 'a.ts')]);
       expect(result?.exitCode).toBe(0);
       expect(result?.incomplete).toBe(true);
       expect(result?.error).toContain(
@@ -262,7 +262,7 @@ describe('tools/glob/runner spawn failures', () => {
       expect(result).toBeDefined();
       if (!result) return;
 
-      expect(result.files).toEqual([`${dir}/src/a.ts`]);
+      expect(result.files).toEqual([path.join(dir, 'src', 'a.ts')]);
       expect(result.truncated).toBe(true);
       expect(result.timedOut).toBe(false);
       expect(result.incomplete).toBe(false);
@@ -300,7 +300,7 @@ describe('tools/glob/runner spawn failures', () => {
         2500,
       );
       expect(result).toBeDefined();
-      expect(result?.files).toEqual([`${dir}/src/a.ts`]);
+      expect(result?.files).toEqual([path.join(dir, 'src', 'a.ts')]);
     },
   );
 
@@ -406,8 +406,11 @@ describe('tools/glob/runner spawn failures', () => {
       if (!result) return;
       expect(result.files).toEqual(
         ending === 'limit'
-          ? [`${repoDir}/src/a.ts`]
-          : [`${repoDir}/src/a.ts`, `${repoDir}/src/b.ts`],
+          ? [path.join(repoDir, 'src', 'a.ts')]
+          : [
+              path.join(repoDir, 'src', 'a.ts'),
+              path.join(repoDir, 'src', 'b.ts'),
+            ],
       );
       expect(result.stderr).toBe('late cleanup diagnostic');
       expect(result.exitCode).toBe(taskExit.code);
@@ -461,7 +464,7 @@ describe('tools/glob/runner spawn failures', () => {
       const result = await within(pending, 2500);
       expect(result).toBeDefined();
       if (!result) return;
-      expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result.files).toEqual([path.join(repoDir, 'src', 'a.ts')]);
       expect(result.exitCode).toBe(0);
       expect(result.incomplete).toBe(true);
       expect(result.error).toContain('cleanup wait deadline exceeded');
@@ -533,8 +536,8 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result).toBeDefined();
     if (!result) return;
     expect(result.files).toEqual([
-      `${repoDir}/src/a.ts`,
-      `${repoDir}/src/b.ts`,
+      path.join(repoDir, 'src', 'a.ts'),
+      path.join(repoDir, 'src', 'b.ts'),
     ]);
     expect(result.stderr).toBe('retained diagnostic');
     expect(result.exitCode).toBe(0);
@@ -575,7 +578,7 @@ describe('tools/glob/runner spawn failures', () => {
       const result = await within(pending, 2500);
       expect(result).toBeDefined();
       if (!result) return;
-      expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
+      expect(result.files).toEqual([path.join(repoDir, 'src', 'a.ts')]);
       expect(result.exitCode).toBe(code);
       expect(result.error).toContain('cleanup unconfirmed');
       expect(result.incomplete).toBe(true);
@@ -934,7 +937,9 @@ describe('tools/glob/runner spawn failures', () => {
       const result = await run(input, new AbortController().signal);
       expect(result.exitCode).toBe(code);
       expect(result.incomplete).toBe(incomplete);
-      expect(result.files).toEqual(rows ? [`${repoDir}/src/a.ts`] : []);
+      expect(result.files).toEqual(
+        rows ? [path.join(repoDir, 'src', 'a.ts')] : [],
+      );
       expect(result.error).toBe(error);
       expect(isAlive(managed?.child.pid)).toBe(false);
 
@@ -1094,7 +1099,7 @@ describe('tools/glob/runner spawn failures', () => {
     expect(result.error).toContain('spawn threw');
   });
 
-  test.each(['', 'rg: permission denied'])(
+  test.skipIf(process.platform === 'win32').each(['', 'rg: permission denied'])(
     'reports exit 2 without rows, with stderr %j',
     async (diagnostic) => {
       const repoDir = temps.createRepo();
@@ -1117,45 +1122,51 @@ describe('tools/glob/runner spawn failures', () => {
     },
   );
 
-  test('caps stderr retention from a supervised search', async () => {
-    const repoDir = temps.createRepo();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: (_cmd, _args, options) =>
-        spawnScript(
-          "process.stderr.write('x'.repeat(1_048_576)); process.stdout.write('a.ts\\0');",
-          options,
-        ),
-    });
-    const input = await normalizeSearchInput(
-      { limit: 1, timeout_ms: 3000 },
-      repoDir,
-    );
-    const result = await run(input, new AbortController().signal);
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.stderr.length).toBeLessThanOrEqual(8 * 1024 + 40);
-    expect(result.stderr).toContain('[stderr truncated at 8192 bytes]');
-  });
+  test.skipIf(process.platform === 'win32')(
+    'caps stderr retention from a supervised search',
+    async () => {
+      const repoDir = temps.createRepo();
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: (_cmd, _args, options) =>
+          spawnScript(
+            "process.stderr.write('x'.repeat(1_048_576)); process.stdout.write('a.ts\\0');",
+            options,
+          ),
+      });
+      const input = await normalizeSearchInput(
+        { limit: 1, timeout_ms: 3000 },
+        repoDir,
+      );
+      const result = await run(input, new AbortController().signal);
+      expect(result.files).toEqual([path.join(repoDir, 'src', 'a.ts')]);
+      expect(result.stderr.length).toBeLessThanOrEqual(8 * 1024 + 40);
+      expect(result.stderr).toContain('[stderr truncated at 8192 bytes]');
+    },
+  );
 
-  test('treats exit 2 with collected rows as a partial success', async () => {
-    const repoDir = temps.createRepo();
-    const run = createRipgrepRunner({
-      resolve: fakeResolve,
-      spawn: (_cmd, _args, options) =>
-        spawnScript(
-          "process.stdout.write('a.ts\\0'); process.stderr.write('rg: /locked: Permission denied'); process.exit(2);",
-          options,
-        ),
-    });
-    const result = await run(
-      await normalizeSearchInput({}, repoDir),
-      new AbortController().signal,
-    );
-    expect(result.files).toEqual([`${repoDir}/src/a.ts`]);
-    expect(result.exitCode).toBe(2);
-    expect(result.incomplete).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
+  test.skipIf(process.platform === 'win32')(
+    'treats exit 2 with collected rows as a partial success',
+    async () => {
+      const repoDir = temps.createRepo();
+      const run = createRipgrepRunner({
+        resolve: fakeResolve,
+        spawn: (_cmd, _args, options) =>
+          spawnScript(
+            "process.stdout.write('a.ts\\0'); process.stderr.write('rg: /locked: Permission denied'); process.exit(2);",
+            options,
+          ),
+      });
+      const result = await run(
+        await normalizeSearchInput({}, repoDir),
+        new AbortController().signal,
+      );
+      expect(result.files).toEqual([path.join(repoDir, 'src', 'a.ts')]);
+      expect(result.exitCode).toBe(2);
+      expect(result.incomplete).toBe(true);
+      expect(result.error).toBeUndefined();
+    },
+  );
 
   test('reassembles multibyte paths split across stream chunks deterministically', async () => {
     // Direct stream test: every PassThrough.write() is one data event, so
@@ -1172,8 +1183,8 @@ describe('tools/glob/runner spawn failures', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(collected.read()).toEqual([
-      `${repoDir}/src/é.ts`,
-      `${repoDir}/src/odd\nname.ts`,
+      path.join(repoDir, 'src', 'é.ts'),
+      path.join(repoDir, 'src', 'odd\nname.ts'),
     ]);
   });
 
@@ -1188,6 +1199,6 @@ describe('tools/glob/runner spawn failures', () => {
 
     // The incomplete fragment must NOT become a path, even though the
     // stream ended without a terminator.
-    expect(collected.read()).toEqual([`${repoDir}/src/a.ts`]);
+    expect(collected.read()).toEqual([path.join(repoDir, 'src', 'a.ts')]);
   });
 });

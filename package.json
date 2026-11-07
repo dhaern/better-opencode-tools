@@ -1,7 +1,7 @@
 {
   "name": "better-opencode-tools",
   "private": true,
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Monorepo for standalone Better OpenCode tool plugins.",
   "packageManager": "bun@1.4.4",
   "workspaces": [

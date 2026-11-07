@@ -87,6 +87,10 @@ export class GrowableByteBuffer {
     return true;
   }
 
+  peek(): Uint8Array {
+    return this.buffer.subarray(this.start, this.end);
+  }
+
   takePrefix(length: number): Uint8Array | undefined {
     if (length < 0 || this.end - this.start < length) return undefined;
     const item = this.buffer.slice(this.start, this.start + length);

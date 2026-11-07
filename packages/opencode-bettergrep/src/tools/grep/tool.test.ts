@@ -315,8 +315,8 @@ describe('tools/grep/tool', () => {
     >;
     expect(calls[0]?.[0]).toMatchObject({
       permission: 'external_directory',
-      patterns: [`${externalDir}/*`],
-      always: [`${externalDir}/*`],
+      patterns: [`${externalDir.replaceAll('\\', '/')}/*`],
+      always: [`${externalDir.replaceAll('\\', '/')}/*`],
     });
     expect(calls[1]?.[0]).toMatchObject({
       permission: 'grep',
@@ -355,7 +355,7 @@ describe('tools/grep/tool', () => {
     >;
     expect(calls[0]?.[0]).toMatchObject({
       permission: 'external_directory',
-      patterns: [`${externalDir}/*`],
+      patterns: [`${externalDir.replaceAll('\\', '/')}/*`],
     });
     expect(run).toHaveBeenCalledTimes(1);
   });

@@ -1,5 +1,8 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from 'bun:test';
+
+const posix = process.platform === 'win32' ? test.skip : test;
+
 import { execFileSync } from 'node:child_process';
 import {
   mkdir,
@@ -20,6 +23,7 @@ import {
   MAX_OUTPUT_CHARS,
 } from './constants';
 import { executeRead, inspectReadTarget } from './engine';
+import { escapeStructuredSingleLineValue } from './formatter';
 
 const tempDirs: string[] = [];
 const tinyPng = Buffer.from([
@@ -410,7 +414,9 @@ describe('executeRead', () => {
 
     await expect(
       executeRead({ args: { filePath: missingPath }, directory, inspection }),
-    ).rejects.toThrow(path.join(outside, 'secret.txt'));
+    ).rejects.toThrow(
+      escapeStructuredSingleLineValue(path.join(outside, 'secret.txt')),
+    );
   });
 
   test('does not read a regular file ancestor for child paths', async () => {
@@ -540,30 +546,33 @@ describe('executeRead', () => {
     );
   });
 
-  test('escapes unsafe paths in missing-file errors and suggestions', async () => {
-    const directory = await createWorkspace();
-    await writeFile(
-      path.join(directory, 'bad\n<suggestion>&.txt'),
-      'hello',
-      'utf8',
-    );
+  posix(
+    'escapes unsafe paths in missing-file errors and suggestions',
+    async () => {
+      const directory = await createWorkspace();
+      await writeFile(
+        path.join(directory, 'bad\n<suggestion>&.txt'),
+        'hello',
+        'utf8',
+      );
 
-    const message = await executeRead({
-      args: { filePath: path.join(directory, 'bad\n<missing>&.txt') },
-      directory,
-    }).then(
-      () => '',
-      (error: unknown) =>
-        error instanceof Error ? error.message : String(error),
-    );
+      const message = await executeRead({
+        args: { filePath: path.join(directory, 'bad\n<missing>&.txt') },
+        directory,
+      }).then(
+        () => '',
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      );
 
-    expect(message).toContain('File not found:');
-    expect(message).toContain('bad\\n&lt;missing&gt;&amp;.txt');
-    expect(message).toContain('bad\\n&lt;suggestion&gt;&amp;.txt');
-    expect(message).not.toContain('bad\n<missing>&.txt');
-    expect(message).not.toContain('bad\n<suggestion>&.txt');
-    expect(message.split('\n')).toHaveLength(3);
-  });
+      expect(message).toContain('File not found:');
+      expect(message).toContain('bad\\n&lt;missing&gt;&amp;.txt');
+      expect(message).toContain('bad\\n&lt;suggestion&gt;&amp;.txt');
+      expect(message).not.toContain('bad\n<missing>&.txt');
+      expect(message).not.toContain('bad\n<suggestion>&.txt');
+      expect(message.split('\n')).toHaveLength(3);
+    },
+  );
 
   test('recomputes preview and truncated metadata from the direct text output', async () => {
     const directory = await createWorkspace();
@@ -822,7 +831,7 @@ describe('executeRead', () => {
     ]);
   });
 
-  test('escapes unsafe image summaries and previews', async () => {
+  posix('escapes unsafe image summaries and previews', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'tiny\n<unsafe>&.png');
     await writeFile(filePath, tinyPng);
@@ -881,7 +890,7 @@ describe('executeRead', () => {
     expect(result.metadata.kind).toBe('binary');
   });
 
-  test('escapes unsafe binary placeholders and previews', async () => {
+  posix('escapes unsafe binary placeholders and previews', async () => {
     const directory = await createWorkspace();
     const filePath = path.join(directory, 'sample\n<binary>&.dat');
     await writeFile(filePath, Buffer.from([0x61, 0x00, 0x62]));

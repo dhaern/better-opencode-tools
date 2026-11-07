@@ -2,11 +2,25 @@
 import { describe, expect, test } from 'bun:test';
 import path from 'node:path';
 import { decodeRgPayload } from './json-stream';
-import { buildPathFromBytes, sanitizeTitle } from './path-utils';
+import {
+  buildPathFromBytes,
+  resolveAbsolutePath,
+  sanitizeTitle,
+} from './path-utils';
 import { createTempTracker } from './test-helpers';
 
 describe('tools/grep/path', () => {
   const temps = createTempTracker();
+
+  test.skipIf(process.platform !== 'win32')(
+    'normalizes mixed separators in absolute paths',
+    () => {
+      const cwd = temps.createRepo();
+      expect(resolveAbsolutePath(`${cwd}\\src/example.ts`, cwd)).toBe(
+        path.join(cwd, 'src', 'example.ts'),
+      );
+    },
+  );
 
   test('buildPathFromBytes preserves non-UTF8 paths without lossy replacement', () => {
     const repoDir = temps.createRepo();

@@ -55,12 +55,30 @@ export function parseContentLine(
 export async function consumeNullPrefixedLinesStream(
   stream: BinaryReadableStream,
   onRecord: (record: ContentRecord) => boolean | undefined,
+  onBinaryNotice?: (notice: string) => void,
 ): Promise<void> {
   let currentPath: Uint8Array | undefined;
   const separator = Uint8Array.from([0x2d, 0x2d, 0x0a]);
+  const binaryPrefix = Buffer.from('Binary file ');
   return consumeBufferedBytes(stream, (buffer) => {
     while (true) {
       if (currentPath === undefined) {
+        if (buffer.startsWith(binaryPrefix)) {
+          const bytes = buffer.peek();
+          const newline = bytes.indexOf(0x0a);
+          const nul = bytes.indexOf(0);
+          if (newline < 0 && nul < 0) break;
+          if (newline >= 0 && (nul < 0 || newline < nul)) {
+            const line = Buffer.from(bytes.subarray(0, newline))
+              .toString('utf8')
+              .replace(/\r$/, '');
+            if (/^Binary file (.+) matches$/.test(line)) {
+              buffer.takePrefix(newline + 1);
+              onBinaryNotice?.(line);
+              continue;
+            }
+          }
+        }
         // The context group separator must be recognized BEFORE scanning
         // for the next NUL, or it gets glued onto the following path.
         if (buffer.startsWith(separator)) {
@@ -140,6 +158,7 @@ export async function consumeContentOutput(
     | 'sortOrder'
     | 'worktree'
   >,
+  onBinaryNotice?: (notice: string) => void,
 ): Promise<{
   files: GrepFileMatch[];
   skippedLines: number;
@@ -263,7 +282,7 @@ export async function consumeContentOutput(
     return true;
   };
 
-  await consumeNullPrefixedLinesStream(stdout, (record) => {
+  const onRecord = (record: ContentRecord): boolean => {
     if (record === '--') {
       if (!withContext) {
         skippedLines += 1;
@@ -414,7 +433,8 @@ export async function consumeContentOutput(
       return false;
     }
     return true;
-  });
+  };
+  await consumeNullPrefixedLinesStream(stdout, onRecord, onBinaryNotice);
 
   if (sorted && (admission?.dropped() || matchesCapped)) {
     limitReached = true;

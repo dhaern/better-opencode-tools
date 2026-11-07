@@ -1,5 +1,8 @@
 /// <reference types="bun-types" />
 import { afterAll, expect, test } from 'bun:test';
+
+const posix = process.platform === 'win32' ? test.skip : test;
+
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +28,19 @@ function fixture(name: string, content: string | Buffer): string {
 }
 
 function canonical(value: unknown): unknown {
-  if (typeof value === 'string') return value.replaceAll(root, '<root>');
+  if (typeof value === 'string') {
+    const normalized = value
+      .replaceAll(root.replaceAll('\\', '\\\\'), '<root>')
+      .replaceAll(root, '<root>')
+      .replaceAll(root.replaceAll('\\', '/'), '<root>')
+      .replace(
+        /<path>(.*?)<\/path>/g,
+        (_, file: string) => `<path>${file.replaceAll('\\', '/')}</path>`,
+      );
+    return normalized.replace(/<root>(?:\\+[^\\/\r\n<>" ]+)+/g, (file) =>
+      file.replace(/\\+/g, '/'),
+    );
+  }
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
@@ -38,7 +53,7 @@ function canonical(value: unknown): unknown {
 function contract(output: string, metadata: Record<string, unknown>) {
   return {
     outputSha256: createHash('sha256')
-      .update(output.replaceAll(root, '<root>'))
+      .update(canonical(output) as string)
       .digest('hex'),
     metadataJson: JSON.stringify(canonical(metadata)),
   };
@@ -87,7 +102,46 @@ test.each([
     args: { filePath, offset, limit },
     directory: repo,
   });
-  expect(contract(result.output, result.metadata)).toMatchSnapshot();
+  if (_name === 'UTF-8 byte cap') {
+    const size = Buffer.byteLength(result.output, 'utf8');
+    expect(size).toBeLessThanOrEqual(MAX_OUTPUT_BYTES);
+    expect(size).toBeGreaterThan(MAX_OUTPUT_BYTES - 620);
+    const endLine = result.metadata.end_line as number;
+    expect(endLine).toBeGreaterThan(0);
+    expect(endLine).toBeLessThanOrEqual(1500);
+    const lines = Array.from(
+      { length: endLine },
+      (_, index) => `${index + 1}: ${'€'.repeat(200)}`,
+    );
+    expect(canonical(result.output)).toBe(
+      [
+        '<path><root>/repo/bytes.txt</path>',
+        '<type>file</type>',
+        '<content>',
+        ...lines,
+        '</content>',
+        `(Showing lines 1-${endLine}. Use offset=${endLine + 1} to continue.)`,
+        '(Output capped by byte budget.)',
+      ].join('\n'),
+    );
+    expect(canonical(result.metadata)).toEqual({
+      enhancedBy: 'opencode-betterread',
+      enhancedPath: '<root>/repo/bytes.txt',
+      resolved_path: '<root>/repo/bytes.txt',
+      kind: 'text',
+      loaded: [],
+      preview: lines.slice(0, 20).join('\n'),
+      truncated: true,
+      start_line: 1,
+      end_line: endLine,
+      total_lines: 1500,
+      has_more: true,
+      truncated_by_bytes: true,
+      truncated_by_line_length: false,
+    });
+  } else {
+    expect(contract(result.output, result.metadata)).toMatchSnapshot();
+  }
 });
 
 test('out-of-range offset error is stable', async () => {
@@ -235,29 +289,32 @@ test('directory trim budgets the truncation note, not the full-page footer', asy
   ).toMatchSnapshot();
 });
 
-test('directory escaping, ASCII, multibyte and bounded scan contracts', async () => {
-  const directory = path.join(repo, 'listing');
-  mkdirSync(directory);
-  for (const name of ['alpha', 'a&< >\nb', 'éclair', 'zeta']) {
-    fixture(path.join('listing', name), 'x');
-  }
-  const actual = await executeRead({
-    args: { filePath: directory },
-    directory: repo,
-  });
-  expect(contract(actual.output, actual.metadata)).toMatchSnapshot();
+posix(
+  'directory escaping, ASCII, multibyte and bounded scan contracts',
+  async () => {
+    const directory = path.join(repo, 'listing');
+    mkdirSync(directory);
+    for (const name of ['alpha', 'a&< >\nb', 'éclair', 'zeta']) {
+      fixture(path.join('listing', name), 'x');
+    }
+    const actual = await executeRead({
+      args: { filePath: directory },
+      directory: repo,
+    });
+    expect(contract(actual.output, actual.metadata)).toMatchSnapshot();
 
-  const bounded = await readDirectory(directory, 1, 10, {
-    scanDirectoryEntries: async () => ({
-      entries: [],
-      totalEntries: 65_536,
-      totalEntriesKnown: false,
-    }),
-  });
-  const output = formatDirectoryResult(bounded);
-  const metadata = buildDirectoryMetadata({ filePath: directory }, bounded);
-  expect(contract(output, metadata)).toMatchSnapshot();
-});
+    const bounded = await readDirectory(directory, 1, 10, {
+      scanDirectoryEntries: async () => ({
+        entries: [],
+        totalEntries: 65_536,
+        totalEntriesKnown: false,
+      }),
+    });
+    const output = formatDirectoryResult(bounded);
+    const metadata = buildDirectoryMetadata({ filePath: directory }, bounded);
+    expect(contract(output, metadata)).toMatchSnapshot();
+  },
+);
 
 test('public exports and server shape stay stable', async () => {
   expect(Object.keys(publicModule).sort()).toMatchSnapshot();

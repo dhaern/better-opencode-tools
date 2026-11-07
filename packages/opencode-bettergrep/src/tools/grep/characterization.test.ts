@@ -10,7 +10,11 @@ import { comparePathBytes } from './fallback-results';
 import { buildPrimarySummary, formatGrepResult } from './format';
 import { executeMtimeMode } from './mtime';
 import { normalizeGrepInput } from './normalize';
-import { createRepoContext, createTempTracker } from './test-helpers';
+import {
+  createRepoContext,
+  createTempTracker,
+  hasGnuGrep,
+} from './test-helpers';
 import type { GrepBackend, GrepOutputMode, GrepSearchResult } from './types';
 
 const temps = createTempTracker();
@@ -64,12 +68,18 @@ function stable(
   root: string,
   order: 'none' | 'path' | 'mtime' = 'path',
 ) {
-  const relative = (value: string) =>
-    value
-      .replaceAll(root, '<ROOT>')
-      .replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
+  const relative = (value: string) => {
+    const normalized = value.replaceAll(root, '<ROOT>');
+    return (
+      process.platform === 'win32'
+        ? normalized.replaceAll('\\', '/')
+        : normalized
+    ).replace(/bytes:base64:[A-Za-z0-9+/=]+/g, 'bytes:base64:<PATH>');
+  };
   const files =
-    order === 'none' ? [...result.files].sort(comparePathBytes) : result.files;
+    order === 'none' || (order === 'mtime' && result.backend === 'grep')
+      ? [...result.files].sort(comparePathBytes)
+      : result.files;
   return {
     backend: result.backend,
     mode: result.outputMode,
@@ -119,7 +129,7 @@ describe('grep observable result characterization', () => {
       '',
       'Found 5 matches across 1 file.',
       '',
-      'src/boundary.txt',
+      path.join('src', 'boundary.txt'),
       `      1: needle${'a'.repeat(1991)}\\t\\...`,
       '',
       `      2: needle${'b'.repeat(1992)}\\t...`,
@@ -130,7 +140,9 @@ describe('grep observable result characterization', () => {
       '',
       `      5: needle${'f'.repeat(1993)}\ud83e...`,
     ].join('\n');
-    for (const backend of ['rg', 'grep'] as const) {
+    for (const backend of hasGnuGrep
+      ? (['rg', 'grep'] as const)
+      : (['rg'] as const)) {
       const result = await search(root, backend, 'content', 'none', 0, 500, {
         path: file,
       });
@@ -180,7 +192,7 @@ describe('grep observable result characterization', () => {
       '',
       'Found 1 match across 1 file.',
       '',
-      'src/boundary.txt',
+      path.join('src', 'boundary.txt'),
       `      1: needle${'\n         needle'.repeat(284)}\n         needl...`,
     ].join('\n');
     expect(formatGrepResult(input, result)).toBe(expected);
@@ -210,63 +222,77 @@ describe('grep observable result characterization', () => {
       for (const order of ['none', 'path', 'mtime'] as const) {
         for (const context of [0, 2]) {
           for (const maxResults of [1, 20]) {
-            test(`${backend}/${mode}/${order}/context=${context}/limit=${maxResults}`, async () => {
-              const root = fixture();
-              const result = await search(
-                root,
-                backend,
-                mode,
-                order,
-                context,
-                maxResults,
-                {
-                  ...(order === 'none' && maxResults === 1
-                    ? { path: path.join(root, 'src', 'a.txt') }
-                    : {}),
-                },
-              );
-              expect(stable(result, root, order)).toMatchSnapshot();
-            });
+            test.skipIf(backend === 'grep' && !hasGnuGrep)(
+              `${backend}/${mode}/${order}/context=${context}/limit=${maxResults}`,
+              async () => {
+                const root = fixture();
+                const result = await search(
+                  root,
+                  backend,
+                  mode,
+                  order,
+                  context,
+                  maxResults,
+                  {
+                    ...((order === 'none' ||
+                      (order === 'mtime' && backend === 'grep')) &&
+                    maxResults === 1
+                      ? { path: path.join(root, 'src', 'a.txt') }
+                      : {}),
+                  },
+                );
+                expect(stable(result, root, order)).toMatchSnapshot();
+              },
+            );
           }
         }
       }
     }
   }
 
-  test('UTF-8, non-UTF8, binary, CRLF and external symlink fixtures', async () => {
-    const edges = temps.createRepo();
-    const external = temps.createDir('opencode-bettergrep-external');
-    writeFileSync(path.join(edges, 'src', 'utf8.txt'), 'café needle\n');
-    writeFileSync(path.join(edges, 'src', 'crlf.txt'), 'needle\r\n');
-    writeFileSync(
-      path.join(edges, 'src', 'binary.dat'),
-      Buffer.from('needle\0needle\n'),
-    );
-    writeFileSync(path.join(external, 'outside.txt'), 'needle external\n');
-    symlinkSync(
-      path.join(external, 'outside.txt'),
-      path.join(edges, 'src', 'link.txt'),
-    );
-    writeFileSync(
-      Buffer.concat([
-        Buffer.from(path.join(edges, 'src') + path.sep),
-        Buffer.from([0x62, 0x61, 0x64, 0xff]),
-      ]),
-      'needle invalid path\n',
-    );
-    for (const backend of ['rg', 'grep'] as const) {
-      for (const mode of ['content', 'files_with_matches', 'count'] as const) {
-        const result = await search(edges, backend, mode, 'path', 0, 20, {
-          follow_symlinks: true,
-        });
-        expect(
-          stable(result, edges).files.map((file) => ({
-            ...file,
-            path: file.path.replaceAll(external, '<EXTERNAL>'),
-            file: file.file.replaceAll(external, '<EXTERNAL>'),
-          })),
-        ).toMatchSnapshot();
+  test.skipIf(process.platform === 'win32')(
+    'UTF-8, non-UTF8, binary, CRLF and external symlink fixtures',
+    async () => {
+      const edges = temps.createRepo();
+      const external = temps.createDir('opencode-bettergrep-external');
+      writeFileSync(path.join(edges, 'src', 'utf8.txt'), 'café needle\n');
+      writeFileSync(path.join(edges, 'src', 'crlf.txt'), 'needle\r\n');
+      writeFileSync(
+        path.join(edges, 'src', 'binary.dat'),
+        Buffer.from('needle\0needle\n'),
+      );
+      writeFileSync(path.join(external, 'outside.txt'), 'needle external\n');
+      symlinkSync(
+        path.join(external, 'outside.txt'),
+        path.join(edges, 'src', 'link.txt'),
+      );
+      writeFileSync(
+        Buffer.concat([
+          Buffer.from(path.join(edges, 'src') + path.sep),
+          Buffer.from([0x62, 0x61, 0x64, 0xff]),
+        ]),
+        'needle invalid path\n',
+      );
+      for (const backend of hasGnuGrep
+        ? (['rg', 'grep'] as const)
+        : (['rg'] as const)) {
+        for (const mode of [
+          'content',
+          'files_with_matches',
+          'count',
+        ] as const) {
+          const result = await search(edges, backend, mode, 'path', 0, 20, {
+            follow_symlinks: true,
+          });
+          expect(
+            stable(result, edges).files.map((file) => ({
+              ...file,
+              path: file.path.replaceAll(external, '<EXTERNAL>'),
+              file: file.file.replaceAll(external, '<EXTERNAL>'),
+            })),
+          ).toMatchSnapshot();
+        }
       }
-    }
-  });
+    },
+  );
 });

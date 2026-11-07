@@ -100,9 +100,7 @@ the [repository README](https://github.com/dhaern/better-opencode-tools#readme).
   search, ripgrep may not stream useful partial paths before a timeout.
 - The first run may need network access if the plugin has to download a managed
   ripgrep binary.
-- On Bun hosts, a working `node` executable must be on `PATH` to validate or
-  install ripgrep, or to resolve a managed ripgrep. An already validated `rg` on
-  `PATH` can search without it.
+- On Bun hosts on Linux and macOS, a working `node` executable must be on `PATH`.
 - The first managed ripgrep installation loads `proper-lockfile`, which patches
   some Node process and fs functions and signal listeners.
 - Ignore files such as `.gitignore` always apply to a pattern that matches

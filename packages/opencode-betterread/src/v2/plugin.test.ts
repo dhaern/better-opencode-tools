@@ -126,12 +126,12 @@ test('uses v2 external saves and lexical read resources', async () => {
   await tool.execute({ path: target }, toolCtx);
   expect(asks.find((ask) => ask.action === 'external_directory')).toMatchObject(
     {
-      resources: [path.join(external, 'nested', '*')],
-      save: [path.join(external, '*')],
+      resources: [path.join(external, 'nested', '*').replaceAll('\\', '/')],
+      save: [path.join(external, '*').replaceAll('\\', '/')],
     },
   );
   expect(asks.find((ask) => ask.action === 'read')).toMatchObject({
-    resources: [target],
+    resources: [target.replaceAll('\\', '/')],
     save: ['*'],
   });
 });

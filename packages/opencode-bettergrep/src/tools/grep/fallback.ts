@@ -40,6 +40,7 @@ export async function executeGrepFallback(
   const grepError = await ensureGnuGrep(cli.path, signal, input.timeoutMs);
   if (grepError) return { ...base, error: grepError };
   let skippedLines = 0;
+  let binaryNotice = '';
 
   return executeMode(input, signal, cli, {
     command,
@@ -56,7 +57,14 @@ export async function executeGrepFallback(
     }),
     consumeStdout: async (stdout, proc, state) => {
       if (input.outputMode === 'content') {
-        state.parsed = await consumeContentOutput(stdout, proc, input);
+        state.parsed = await consumeContentOutput(
+          stdout,
+          proc,
+          input,
+          (notice) => {
+            binaryNotice ||= notice;
+          },
+        );
         return;
       }
       const collected = await collectFileEntries(
@@ -89,7 +97,8 @@ export async function executeGrepFallback(
     finalizeResult: (result, stdoutError, exitError) => {
       const stderr = result.stderr;
       applySuccessfulStderr(result, stderr, result.exitCode);
-      if (/binary file.*matches/i.test(stderr)) {
+      if (binaryNotice) result.warnings.push(binaryNotice);
+      if (binaryNotice || /binary file.*matches/i.test(stderr)) {
         result.truncated = true;
         if (!hasVisibleResults(result)) {
           result.error =

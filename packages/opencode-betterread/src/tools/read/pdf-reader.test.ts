@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PDF_COMMAND_TIMEOUT_MS } from './constants';
 import { readPdf, runCommand } from './pdf-reader';
 
+const posix = process.platform === 'win32' ? test.skip : test;
 const tempDirs: string[] = [];
 const originalPath = process.env.PATH;
 const originalPdfInfoOutput = process.env.BETTERREAD_PDFINFO_OUTPUT;
@@ -79,40 +80,49 @@ afterEach(async () => {
 });
 
 describe('readPdf', () => {
-  test('returns attachment-only metadata with page count when available', async () => {
-    const directory = await createWorkspace();
-    await installPdfMocks(directory);
-    const filePath = await createPdfFile(directory);
+  posix(
+    'returns attachment-only metadata with page count when available',
+    async () => {
+      const directory = await createWorkspace();
+      await installPdfMocks(directory);
+      const filePath = await createPdfFile(directory);
 
-    const result = await readPdf(filePath);
+      const result = await readPdf(filePath);
 
-    expect(result.pageCount).toBe(4);
-  });
+      expect(result.pageCount).toBe(4);
+    },
+  );
 
-  test('does not require pdfinfo to return a stable attachment-only result', async () => {
-    const directory = await createWorkspace();
-    await installPdfMocks(directory);
-    const filePath = await createPdfFile(directory);
-    process.env.BETTERREAD_PDFINFO_OUTPUT = '';
+  posix(
+    'does not require pdfinfo to return a stable attachment-only result',
+    async () => {
+      const directory = await createWorkspace();
+      await installPdfMocks(directory);
+      const filePath = await createPdfFile(directory);
+      process.env.BETTERREAD_PDFINFO_OUTPUT = '';
 
-    const result = await readPdf(filePath);
+      const result = await readPdf(filePath);
 
-    expect(result.pageCount).toBeUndefined();
-  });
+      expect(result.pageCount).toBeUndefined();
+    },
+  );
 
-  test('keeps page count parsing with pathological trailing stdout', async () => {
-    const directory = await createWorkspace();
-    await installPdfMocks(directory);
-    const filePath = await createPdfFile(directory);
-    process.env.BETTERREAD_PDFINFO_OUTPUT = 'Pages: 7\n';
-    process.env.BETTERREAD_PDFINFO_STDOUT_BYTES = String(512 * 1024);
+  posix(
+    'keeps page count parsing with pathological trailing stdout',
+    async () => {
+      const directory = await createWorkspace();
+      await installPdfMocks(directory);
+      const filePath = await createPdfFile(directory);
+      process.env.BETTERREAD_PDFINFO_OUTPUT = 'Pages: 7\n';
+      process.env.BETTERREAD_PDFINFO_STDOUT_BYTES = String(512 * 1024);
 
-    const result = await readPdf(filePath);
+      const result = await readPdf(filePath);
 
-    expect(result.pageCount).toBe(7);
-  });
+      expect(result.pageCount).toBe(7);
+    },
+  );
 
-  test('does not buffer stderr from failed pdfinfo commands', async () => {
+  posix('does not buffer stderr from failed pdfinfo commands', async () => {
     const directory = await createWorkspace();
     await installPdfMocks(directory);
     const filePath = await createPdfFile(directory);
@@ -155,7 +165,7 @@ describe('readPdf', () => {
     expect(clearTimeoutCalls).toBeGreaterThan(0);
   });
 
-  test('kills a hung pdfinfo at the timeout and reports it', async () => {
+  posix('kills a hung pdfinfo at the timeout and reports it', async () => {
     const directory = await createWorkspace();
     await installPdfMocks(directory);
     const filePath = await createPdfFile(directory);
