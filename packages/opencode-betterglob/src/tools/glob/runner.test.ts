@@ -7,6 +7,8 @@ import { createDefaultRunnerDeps, createRipgrepRunner } from './runner';
 import { createRepoContext, createTempTracker, within } from './test-helpers';
 import type { GlobToolInput } from './types';
 
+const posix = process.platform === 'win32' ? test.skip : test;
+
 describe('tools/glob/runner', () => {
   const temps = createTempTracker();
 
@@ -34,20 +36,26 @@ describe('tools/glob/runner', () => {
     };
   }
 
-  test('parses NUL-delimited paths with names containing newlines', async () => {
-    const repoDir = temps.createRepo();
-    const weird = path.join(repoDir, 'src', 'odd\nname.ts');
-    writeFileSync(weird, 'export const weird = true;\n');
+  posix(
+    'parses NUL-delimited paths with names containing newlines',
+    async () => {
+      const repoDir = temps.createRepo();
+      const weird = path.join(repoDir, 'src', 'odd\nname.ts');
+      writeFileSync(weird, 'export const weird = true;\n');
 
-    const { normalized } = await createNormalized(
-      { pattern: '*.ts', path: 'src', sort_by: 'path' },
-      repoDir,
-    );
-    const result = await runSystemRg(normalized, new AbortController().signal);
+      const { normalized } = await createNormalized(
+        { pattern: '*.ts', path: 'src', sort_by: 'path' },
+        repoDir,
+      );
+      const result = await runSystemRg(
+        normalized,
+        new AbortController().signal,
+      );
 
-    expect(result.files).toContain(weird);
-    expect(result.error).toBeUndefined();
-  });
+      expect(result.files).toContain(weird);
+      expect(result.error).toBeUndefined();
+    },
+  );
 
   test.each([
     {

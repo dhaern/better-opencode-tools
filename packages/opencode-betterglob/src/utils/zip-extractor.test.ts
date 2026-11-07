@@ -1,14 +1,51 @@
 /// <reference types="bun-types" />
 
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import * as processOutput from './process-output';
 import {
   commandSucceeds,
   extractZip,
   getZipExtractionSupportErrorAsync,
 } from './zip-extractor';
+
+test.skipIf(process.platform !== 'win32')(
+  'uses System32 tar for the probe and extraction',
+  async () => {
+    const root = process.env.SystemRoot;
+    const run = spyOn(processOutput, 'runProcess').mockResolvedValue({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      aborted: false,
+    });
+    try {
+      expect(await getZipExtractionSupportErrorAsync()).toBeUndefined();
+      await extractZip('archive.zip', 'destination');
+      const tar = path.join(
+        process.env.SystemRoot as string,
+        'System32',
+        'tar.exe',
+      );
+      expect(run.mock.calls.map(([command]) => command[0])).toEqual([tar, tar]);
+      delete process.env.SystemRoot;
+      expect(await getZipExtractionSupportErrorAsync()).toBeUndefined();
+      await extractZip('archive.zip', 'destination');
+      expect(run.mock.calls.slice(2).map(([command]) => command[0])).toEqual([
+        'pwsh',
+        'pwsh',
+        'pwsh',
+        'pwsh',
+      ]);
+    } finally {
+      if (root === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = root;
+      run.mockRestore();
+    }
+  },
+);
 
 test('rejects pre-aborted probes and extraction before spawning', async () => {
   const signal = AbortSignal.abort();

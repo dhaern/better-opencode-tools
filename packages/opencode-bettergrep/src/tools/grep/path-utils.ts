@@ -46,7 +46,7 @@ export function getDisplayPath(absolutePath: string, worktree: string): string {
 }
 
 export function resolveAbsolutePath(filePath: string, cwd: string): string {
-  return path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+  return path.resolve(cwd, filePath);
 }
 
 export function stripSingleLineEnding(value: string): string {

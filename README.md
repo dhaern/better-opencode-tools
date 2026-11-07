@@ -120,6 +120,8 @@ and the model, which add their own latency in a real session.
 
 ## 🚀 Install
 
+On Bun hosts on Linux and macOS, `opencode-betterglob` requires `node` on `PATH`.
+
 ```bash
 npm install opencode-betterglob opencode-bettergrep opencode-betterread
 ```

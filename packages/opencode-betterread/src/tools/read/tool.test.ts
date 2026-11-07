@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Effect } from 'effect';
+import { escapeStructuredSingleLineValue } from './formatter';
 import { createExecutionContext, createTempTracker } from './test-helpers';
 import { createReadTool } from './tool';
 
@@ -101,8 +102,12 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(readPermission.permission).toBe('read');
-    expect(readPermission.patterns).toEqual([path.relative(worktree, outside)]);
-    expect(readPermission.always).toEqual([path.relative(worktree, outside)]);
+    expect(readPermission.patterns).toEqual([
+      path.relative(worktree, outside).replaceAll('\\', '/'),
+    ]);
+    expect(readPermission.always).toEqual([
+      path.relative(worktree, outside).replaceAll('\\', '/'),
+    ]);
   });
 
   test('keeps the separate read prompt for missing external paths but scopes it to the exact target', async () => {
@@ -136,8 +141,12 @@ describe('tools/read/tool', () => {
       ]
     )[0];
     expect(readPermission.permission).toBe('read');
-    expect(readPermission.patterns).toEqual([path.relative(worktree, missing)]);
-    expect(readPermission.always).toEqual([path.relative(worktree, missing)]);
+    expect(readPermission.patterns).toEqual([
+      path.relative(worktree, missing).replaceAll('\\', '/'),
+    ]);
+    expect(readPermission.always).toEqual([
+      path.relative(worktree, missing).replaceAll('\\', '/'),
+    ]);
   });
 
   test('asks external_directory when an internal symlink resolves outside the worktree', async () => {
@@ -177,10 +186,10 @@ describe('tools/read/tool', () => {
     )[0];
     expect(readPermission.permission).toBe('read');
     expect(readPermission.patterns).toEqual([
-      path.relative(worktree, outsideFile),
+      path.relative(worktree, outsideFile).replaceAll('\\', '/'),
     ]);
     expect(readPermission.always).toEqual([
-      path.relative(worktree, outsideFile),
+      path.relative(worktree, outsideFile).replaceAll('\\', '/'),
     ]);
     expect(readPermission.metadata.resolved_path).toBe(linked);
     expect(readPermission.metadata.access_path).toBe(outsideFile);
@@ -202,7 +211,9 @@ describe('tools/read/tool', () => {
 
     await expect(
       read.execute({ filePath: missing }, ctx as any),
-    ).rejects.toThrow(path.join(outside, 'secret.txt'));
+    ).rejects.toThrow(
+      escapeStructuredSingleLineValue(path.join(outside, 'secret.txt')),
+    );
 
     expect(ctx.ask).toHaveBeenCalledTimes(2);
     const external = (
@@ -226,10 +237,14 @@ describe('tools/read/tool', () => {
     )[0];
     expect(readPermission.permission).toBe('read');
     expect(readPermission.patterns).toEqual([
-      path.relative(worktree, path.join(outside, 'secrett.txt')),
+      path
+        .relative(worktree, path.join(outside, 'secrett.txt'))
+        .replaceAll('\\', '/'),
     ]);
     expect(readPermission.always).toEqual([
-      path.relative(worktree, path.join(outside, 'secrett.txt')),
+      path
+        .relative(worktree, path.join(outside, 'secrett.txt'))
+        .replaceAll('\\', '/'),
     ]);
   });
 

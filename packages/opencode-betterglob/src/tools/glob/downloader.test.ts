@@ -64,11 +64,14 @@ function deferred() {
 
 describe('tools/glob/downloader', () => {
   const originalCacheHome = process.env.XDG_CACHE_HOME;
+  const originalLocalAppData = process.env.LOCALAPPDATA;
   const tempDirs: string[] = [];
 
   afterEach(() => {
     if (originalCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
     else process.env.XDG_CACHE_HOME = originalCacheHome;
+    if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = originalLocalAppData;
 
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -113,6 +116,7 @@ describe('tools/glob/downloader', () => {
     );
     tempDirs.push(cacheRoot);
     process.env.XDG_CACHE_HOME = cacheRoot;
+    process.env.LOCALAPPDATA = cacheRoot;
 
     const dir = getRipgrepCacheDir();
     mkdirSync(dir, { recursive: true });

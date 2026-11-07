@@ -1,11 +1,18 @@
 import { spawnSync } from 'node:child_process';
 import { release } from 'node:os';
+import path from 'node:path';
 import { createAbortError, throwIfAborted } from './abort';
 import { crossSpawn, waitForProcessOutputWithAbortGrace } from './compat';
 
 const SUPPORT_PROBE_TIMEOUT_MS = 5_000;
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
+
+function getWindowsTarPath(): string | undefined {
+  return process.env.SystemRoot
+    ? path.join(process.env.SystemRoot, 'System32', 'tar.exe')
+    : undefined;
+}
 
 function getWindowsBuildNumber(): number | null {
   if (process.platform !== 'win32') return null;
@@ -50,7 +57,11 @@ function hasCommand(command: string, args: string[] = ['--version']): boolean {
 function getWindowsZipExtractor(): WindowsZipExtractor {
   const buildNumber = getWindowsBuildNumber();
 
-  if (buildNumber !== null && buildNumber >= WINDOWS_BUILD_WITH_TAR) {
+  if (
+    buildNumber !== null &&
+    buildNumber >= WINDOWS_BUILD_WITH_TAR &&
+    getWindowsTarPath()
+  ) {
     return 'tar';
   }
 
@@ -65,7 +76,7 @@ export function getZipExtractionSupportError(): string | undefined {
   if (process.platform === 'win32') {
     const extractor = getWindowsZipExtractor();
 
-    if (extractor === 'tar' && !hasCommand('tar')) {
+    if (extractor === 'tar' && !hasCommand(getWindowsTarPath() as string)) {
       return 'ripgrep auto-install requires tar on this Windows host to extract zip archives.';
     }
 
@@ -105,10 +116,13 @@ export async function extractZip(
 
     switch (extractor) {
       case 'tar':
-        proc = crossSpawn(['tar', '-xf', archivePath, '-C', destDir], {
-          stdout: 'ignore',
-          stderr: 'pipe',
-        });
+        proc = crossSpawn(
+          [getWindowsTarPath() as string, '-xf', archivePath, '-C', destDir],
+          {
+            stdout: 'ignore',
+            stderr: 'pipe',
+          },
+        );
         break;
       case 'pwsh':
         proc = crossSpawn(

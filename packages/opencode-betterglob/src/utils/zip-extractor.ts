@@ -1,9 +1,16 @@
 import { release } from 'node:os';
+import path from 'node:path';
 import { createAbortError } from './abort';
 import { isMissingExecutableError, runProcess } from './process-output';
 import { isSupervisorError } from './process-supervisor';
 
 const WINDOWS_BUILD_WITH_TAR = 17134;
+
+function getWindowsTarPath(): string | undefined {
+  return process.env.SystemRoot
+    ? path.join(process.env.SystemRoot, 'System32', 'tar.exe')
+    : undefined;
+}
 
 function getWindowsBuildNumber(): number | null {
   if (process.platform !== 'win32') return null;
@@ -49,7 +56,8 @@ async function getWindowsZipExtractorAsync(
   if (signal?.aborted) throw createAbortError();
   const build = getWindowsBuildNumber();
 
-  if (build !== null && build >= WINDOWS_BUILD_WITH_TAR) return 'tar';
+  if (build !== null && build >= WINDOWS_BUILD_WITH_TAR && getWindowsTarPath())
+    return 'tar';
   if (await commandSucceeds('pwsh', ['-v'], signal)) return 'pwsh';
   return 'powershell';
 }
@@ -66,7 +74,14 @@ export async function getZipExtractionSupportErrorAsync(
         : extractor === 'pwsh'
           ? ['-v']
           : ['-Command', '$PSVersionTable.PSVersion.ToString()'];
-    if (await commandSucceeds(extractor, args, signal)) return undefined;
+    if (
+      await commandSucceeds(
+        extractor === 'tar' ? (getWindowsTarPath() as string) : extractor,
+        args,
+        signal,
+      )
+    )
+      return undefined;
     return extractor === 'tar'
       ? 'ripgrep auto-install requires tar on this Windows host to extract zip archives.'
       : extractor === 'pwsh'
@@ -94,7 +109,7 @@ export async function extractZip(
     const extractor = await getWindowsZipExtractorAsync(signal);
     if (signal?.aborted) throw createAbortError();
     if (extractor === 'tar') {
-      return ['tar', '-xf', archivePath, '-C', destDir];
+      return [getWindowsTarPath() as string, '-xf', archivePath, '-C', destDir];
     }
 
     const command = extractor === 'pwsh' ? 'pwsh' : 'powershell';

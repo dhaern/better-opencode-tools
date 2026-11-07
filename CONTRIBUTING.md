@@ -2,6 +2,10 @@
 
 ## Setup
 
+Tests require Bun 1.4.4 or later, Node, ripgrep (`rg`) and GNU grep 3.5 or
+later. Node, ripgrep and GNU grep must be on `PATH`. Tests that require GNU
+grep are skipped when it is absent.
+
 ```bash
 bun install
 ```

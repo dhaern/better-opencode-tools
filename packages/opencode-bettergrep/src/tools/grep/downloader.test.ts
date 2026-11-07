@@ -13,10 +13,12 @@ import { getInstalledRipgrepPath, getRipgrepCacheDir } from './rg-cache';
 import { createTempDir } from './test-helpers';
 
 const originalCacheHome = process.env.XDG_CACHE_HOME;
+const originalLocalAppData = process.env.LOCALAPPDATA;
 const tempDirs: string[] = [];
 
 afterEach(() => {
   process.env.XDG_CACHE_HOME = originalCacheHome;
+  process.env.LOCALAPPDATA = originalLocalAppData;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -30,6 +32,7 @@ function setupCache(binaryContent: string, metadata?: object): string {
   const cacheHome = createTempDir('opencode-bettergrep-cache');
   tempDirs.push(cacheHome);
   process.env.XDG_CACHE_HOME = cacheHome;
+  process.env.LOCALAPPDATA = cacheHome;
 
   const cacheDir = getRipgrepCacheDir();
   mkdirSync(cacheDir, { recursive: true });
@@ -53,18 +56,23 @@ function setupCache(binaryContent: string, metadata?: object): string {
   return binaryPath;
 }
 
-describe('tools/grep/downloader', () => {
-  test('returns cached ripgrep when binary and metadata pass verification', () => {
-    const binary = '#!/bin/sh\necho "ripgrep 15.1.0"\n';
-    const binaryPath = setupCache(binary, {
-      version: '15.1.0',
-      assetName: 'ripgrep-15.1.0-x86_64-unknown-linux-gnu.tar.gz',
-      archiveSha256: sha256('archive'),
-      binarySha256: sha256(binary),
-    });
+const posix = process.platform === 'win32' ? test.skip : test;
 
-    expect(getInstalledRipgrepPath()).toBe(binaryPath);
-  });
+describe('tools/grep/downloader', () => {
+  posix(
+    'returns cached ripgrep when binary and metadata pass verification',
+    () => {
+      const binary = '#!/bin/sh\necho "ripgrep 15.1.0"\n';
+      const binaryPath = setupCache(binary, {
+        version: '15.1.0',
+        assetName: 'ripgrep-15.1.0-x86_64-unknown-linux-gnu.tar.gz',
+        archiveSha256: sha256('archive'),
+        binarySha256: sha256(binary),
+      });
+
+      expect(getInstalledRipgrepPath()).toBe(binaryPath);
+    },
+  );
 
   test('rejects cached ripgrep when metadata is missing without deleting it', () => {
     const binary = '#!/bin/sh\necho "ripgrep 15.1.0"\n';

@@ -1,60 +1,127 @@
 /// <reference types="bun-types" />
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import * as cliProbe from './cli-probe';
 import { executeContentLikeMode } from './direct';
 import { executeGrepFallback } from './fallback';
 import { buildGrepCommand } from './fallback-command';
 import { parseContentLine } from './fallback-content';
 import { translatePatternToEre } from './fallback-ere';
 import { normalizeGrepInput } from './normalize';
-import { createRepoContext, createTempTracker } from './test-helpers';
+import {
+  createRepoContext,
+  createTempTracker,
+  testGnuGrep as gnu,
+  hasGnuGrep,
+} from './test-helpers';
+
+const posix = process.platform === 'win32' ? test.skip : test;
+const posixGnu = process.platform === 'win32' || !hasGnuGrep ? test.skip : test;
 
 describe('tools/grep/fallback', () => {
   const temps = createTempTracker();
 
-  test('GNU grep fallback clears inherited LANGUAGE while forcing a UTF-8 locale', async () => {
-    const repoDir = temps.createRepo();
-    const dir = temps.createDir('bettergrep-locale');
-    const marker = path.join(dir, 'locale');
-    const wrapper = path.join(dir, 'grep-wrapper.sh');
-    writeFileSync(
-      wrapper,
-      [
-        '#!/bin/sh',
-        'if [ "$1" = "--version" ]; then',
-        "  printf 'grep (GNU grep) 3.11\\n'",
-        '  exit 0',
-        'fi',
-        `printf '%s|%s\\n' "$LC_ALL" "\${LANGUAGE-<unset>}" > ${JSON.stringify(marker)}`,
-        'exit 1',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
+  test('handles old GNU grep binary notices on stdout between text records', async () => {
+    const root = temps.createRepo();
     const input = normalizeGrepInput(
-      { pattern: 'needle', path: path.join(repoDir, 'src', 'example.ts') },
-      createRepoContext(repoDir) as never,
+      { pattern: 'needle', path: root, fixed_strings: true },
+      createRepoContext(root) as never,
     );
-    const previousLcAll = process.env.LC_ALL;
-    const previousLanguage = process.env.LANGUAGE;
+    const first = path.join(root, 'first.txt');
+    const second = path.join(root, 'second.txt');
+    const output = `${first}\0${'1:needle\n'}Binary file binary.dat matches\n${second}\0${'2:needle\n'}`;
+    const probe = spyOn(cliProbe, 'ensureGnuGrep').mockResolvedValue(undefined);
     try {
-      process.env.LC_ALL = 'C';
-      process.env.LANGUAGE = 'es';
-      await executeGrepFallback(input, new AbortController().signal, {
-        path: wrapper,
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      });
-      expect(readFileSync(marker, 'utf8')).toBe('C.UTF-8|\n');
+      const built = buildGrepCommand(input, process.execPath);
+      built.command = [
+        process.execPath,
+        '-e',
+        `process.stdout.write(${JSON.stringify(output)})`,
+      ];
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: process.execPath,
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+        built,
+      );
+      expect(result.files.map((file) => file.absolutePath)).toEqual([
+        first,
+        second,
+      ]);
+      expect(result.totalMatches).toBe(2);
+      expect(result.truncated).toBe(true);
+      expect(result.warnings.join('\n')).toContain(
+        'Binary file binary.dat matches',
+      );
+      built.command[2] =
+        'process.stdout.write("Binary file binary.dat matches\\n")';
+      const onlyBinary = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        { path: process.execPath, backend: 'grep', source: 'system-gnu-grep' },
+        built,
+      );
+      expect(onlyBinary.totalMatches).toBe(0);
+      expect(onlyBinary.truncated).toBe(true);
+      expect(onlyBinary.error).toContain('binary files');
+      expect(onlyBinary.warnings.join('\n')).toContain(
+        'Binary file binary.dat matches',
+      );
     } finally {
-      if (previousLcAll === undefined) delete process.env.LC_ALL;
-      else process.env.LC_ALL = previousLcAll;
-      if (previousLanguage === undefined) delete process.env.LANGUAGE;
-      else process.env.LANGUAGE = previousLanguage;
+      probe.mockRestore();
     }
   });
 
-  test.each([
+  posix(
+    'GNU grep fallback clears inherited LANGUAGE while forcing a UTF-8 locale',
+    async () => {
+      const repoDir = temps.createRepo();
+      const dir = temps.createDir('bettergrep-locale');
+      const marker = path.join(dir, 'locale');
+      const wrapper = path.join(dir, 'grep-wrapper.sh');
+      writeFileSync(
+        wrapper,
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then',
+          "  printf 'grep (GNU grep) 3.11\\n'",
+          '  exit 0',
+          'fi',
+          `printf '%s|%s\\n' "$LC_ALL" "\${LANGUAGE-<unset>}" > ${JSON.stringify(marker)}`,
+          'exit 1',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      const input = normalizeGrepInput(
+        { pattern: 'needle', path: path.join(repoDir, 'src', 'example.ts') },
+        createRepoContext(repoDir) as never,
+      );
+      const previousLcAll = process.env.LC_ALL;
+      const previousLanguage = process.env.LANGUAGE;
+      try {
+        process.env.LC_ALL = 'C';
+        process.env.LANGUAGE = 'es';
+        await executeGrepFallback(input, new AbortController().signal, {
+          path: wrapper,
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        });
+        expect(readFileSync(marker, 'utf8')).toBe('C.UTF-8|\n');
+      } finally {
+        if (previousLcAll === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = previousLcAll;
+        if (previousLanguage === undefined) delete process.env.LANGUAGE;
+        else process.env.LANGUAGE = previousLanguage;
+      }
+    },
+  );
+
+  posix.each([
     {
       name: 'exit1 with empty stdout means no matches',
       exit: 1,
@@ -122,64 +189,72 @@ describe('tools/grep/fallback', () => {
     if (exit === 2) expect(result.error).toContain(stderr);
   });
 
-  test('GNU grep spawn rejects a NUL pattern without losing fallback metadata', async () => {
-    const repo = temps.createRepo();
-    const input = normalizeGrepInput(
-      { pattern: 'needle\0tail', path: 'src', fixed_strings: true },
-      createRepoContext(repo) as never,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: '/usr/bin/grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
-    expect(result.backend).toBe('grep');
-    expect(result.error).toContain('null bytes');
-    expect(result.command?.[0]).toBe('/usr/bin/grep');
-    expect(result.warnings.join(' ')).toContain('GNU grep fallback');
-  });
+  gnu(
+    'GNU grep spawn rejects a NUL pattern without losing fallback metadata',
+    async () => {
+      const repo = temps.createRepo();
+      const input = normalizeGrepInput(
+        { pattern: 'needle\0tail', path: 'src', fixed_strings: true },
+        createRepoContext(repo) as never,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
+      expect(result.backend).toBe('grep');
+      expect(result.error).toContain('null bytes');
+      expect(result.command?.[0]).toBe('grep');
+      expect(result.warnings.join(' ')).toContain('GNU grep fallback');
+    },
+  );
 
-  test('GNU grep exit 0 with only unparsable output reports the skipped line', async () => {
-    const repo = temps.createRepo();
-    const dir = temps.createDir('bettergrep-unparsable');
-    const binary = path.join(dir, 'grep');
-    writeFileSync(
-      binary,
-      [
-        '#!/bin/sh',
-        'if [ "$1" = "--version" ]; then',
-        "  printf 'grep (GNU grep) 3.11\\n'",
-        '  exit 0',
-        'fi',
-        'for last do :; done',
-        'printf \'%s\\000not-a-record\\n\' "$last"',
-        'exit 0',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
-    const input = normalizeGrepInput(
-      { pattern: 'needle', path: 'src', fixed_strings: true },
-      createRepoContext(repo) as never,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: binary,
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
-    expect(result.error).toBe('GNU grep fallback produced unparsable output.');
-    expect(result.warnings.join(' ')).toContain('skipped 1');
-    expect(result.totalMatches).toBe(0);
-  });
+  posix(
+    'GNU grep exit 0 with only unparsable output reports the skipped line',
+    async () => {
+      const repo = temps.createRepo();
+      const dir = temps.createDir('bettergrep-unparsable');
+      const binary = path.join(dir, 'grep');
+      writeFileSync(
+        binary,
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then',
+          "  printf 'grep (GNU grep) 3.11\\n'",
+          '  exit 0',
+          'fi',
+          'for last do :; done',
+          'printf \'%s\\000not-a-record\\n\' "$last"',
+          'exit 0',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      const input = normalizeGrepInput(
+        { pattern: 'needle', path: 'src', fixed_strings: true },
+        createRepoContext(repo) as never,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: binary,
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
+      expect(result.error).toBe(
+        'GNU grep fallback produced unparsable output.',
+      );
+      expect(result.warnings.join(' ')).toContain('skipped 1');
+      expect(result.totalMatches).toBe(0);
+    },
+  );
 
-  test.each(['cancel', 'timeout'] as const)(
+  posix.each(['cancel', 'timeout'] as const)(
     '%s retains a partial GNU grep match',
     async (cause) => {
       const repoDir = temps.createRepo();
@@ -248,49 +323,55 @@ describe('tools/grep/fallback', () => {
     });
   });
 
-  test('parses Unicode line separators and interior CR with GNU grep/rg parity', async () => {
-    const repo = temps.createRepo();
-    const file = path.join(repo, 'src', 'separators.txt');
-    writeFileSync(file, 'needle\u2028a\nneedle\u2029b\nneedle\rmid\n');
-    expect(
-      parseContentLine(
-        Buffer.from('file'),
-        Buffer.from('1:needle\u2028a'),
-        false,
-      )?.text,
-    ).toBe('needle\u2028a');
-    expect(
-      parseContentLine(
-        Buffer.from('file'),
-        Buffer.from('2:needle\u2029b'),
-        false,
-      )?.text,
-    ).toBe('needle\u2029b');
-    expect(
-      parseContentLine(Buffer.from('file'), Buffer.from('3:needle\rmid'), false)
-        ?.text,
-    ).toBe('needle\nmid');
-    const input = normalizeGrepInput(
-      { pattern: 'needle', path: file, fixed_strings: true },
-      createRepoContext(repo) as never,
-    );
-    const signal = new AbortController().signal;
-    const fallback = await executeGrepFallback(input, signal, {
-      path: 'grep',
-      backend: 'grep',
-      source: 'system-gnu-grep',
-    });
-    const direct = await executeContentLikeMode(input, signal, {
-      path: 'rg',
-      backend: 'rg',
-      source: 'system-rg',
-    });
-    expect(fallback.totalMatches).toBe(3);
-    expect(fallback.warnings.join(' ')).not.toContain('skipped');
-    expect(fallback.files[0]?.matches.map((match) => match.lineText)).toEqual(
-      direct.files[0]?.matches.map((match) => match.lineText),
-    );
-  });
+  gnu(
+    'parses Unicode line separators and interior CR with GNU grep/rg parity',
+    async () => {
+      const repo = temps.createRepo();
+      const file = path.join(repo, 'src', 'separators.txt');
+      writeFileSync(file, 'needle\u2028a\nneedle\u2029b\nneedle\rmid\n');
+      expect(
+        parseContentLine(
+          Buffer.from('file'),
+          Buffer.from('1:needle\u2028a'),
+          false,
+        )?.text,
+      ).toBe('needle\u2028a');
+      expect(
+        parseContentLine(
+          Buffer.from('file'),
+          Buffer.from('2:needle\u2029b'),
+          false,
+        )?.text,
+      ).toBe('needle\u2029b');
+      expect(
+        parseContentLine(
+          Buffer.from('file'),
+          Buffer.from('3:needle\rmid'),
+          false,
+        )?.text,
+      ).toBe('needle\nmid');
+      const input = normalizeGrepInput(
+        { pattern: 'needle', path: file, fixed_strings: true },
+        createRepoContext(repo) as never,
+      );
+      const signal = new AbortController().signal;
+      const fallback = await executeGrepFallback(input, signal, {
+        path: 'grep',
+        backend: 'grep',
+        source: 'system-gnu-grep',
+      });
+      const direct = await executeContentLikeMode(input, signal, {
+        path: 'rg',
+        backend: 'rg',
+        source: 'system-rg',
+      });
+      expect(fallback.totalMatches).toBe(3);
+      expect(fallback.warnings.join(' ')).not.toContain('skipped');
+      expect(fallback.files[0]?.matches.map((match) => match.lineText)).toEqual(
+        direct.files[0]?.matches.map((match) => match.lineText),
+      );
+    },
+  );
 
   test('caps long GNU grep content records before normalization', () => {
     const text = `needle${'x'.repeat(10_000)}`;
@@ -302,38 +383,41 @@ describe('tools/grep/fallback', () => {
     expect(parsed?.text.length).toBe(4004);
   });
 
-  test('GNU grep content search preserves CRLF matches without unparsable warnings', async () => {
-    const repoDir = temps.createRepo();
-    const crlfFile = path.join(repoDir, 'src', 'crlf.txt');
-    writeFileSync(crlfFile, 'before\r\nneedle\r\nafter\r\n');
-    const input = normalizeGrepInput(
-      {
-        pattern: 'needle',
-        path: crlfFile,
-        output_mode: 'content',
-        context: 1,
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
-    expect(result.totalMatches).toBe(1);
-    expect(result.files[0]?.matches[0]).toMatchObject({
-      lineNumber: 2,
-      lineText: 'needle',
-      before: [{ lineNumber: 1, text: 'before' }],
-      after: [{ lineNumber: 3, text: 'after' }],
-    });
-    expect(result.warnings.join(' ')).not.toContain('unparsable');
-  });
+  gnu(
+    'GNU grep content search preserves CRLF matches without unparsable warnings',
+    async () => {
+      const repoDir = temps.createRepo();
+      const crlfFile = path.join(repoDir, 'src', 'crlf.txt');
+      writeFileSync(crlfFile, 'before\r\nneedle\r\nafter\r\n');
+      const input = normalizeGrepInput(
+        {
+          pattern: 'needle',
+          path: crlfFile,
+          output_mode: 'content',
+          context: 1,
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
+      expect(result.totalMatches).toBe(1);
+      expect(result.files[0]?.matches[0]).toMatchObject({
+        lineNumber: 2,
+        lineText: 'needle',
+        before: [{ lineNumber: 1, text: 'before' }],
+        after: [{ lineNumber: 3, text: 'after' }],
+      });
+      expect(result.warnings.join(' ')).not.toContain('unparsable');
+    },
+  );
 
   function createNormalized(
     input: any,
@@ -411,37 +495,40 @@ describe('tools/grep/fallback', () => {
     assertResult(buildGrepCommand(normalized, 'grep'));
   });
 
-  test('executeGrepFallback respects hidden=false by excluding dotfiles', async () => {
-    const repoDir = temps.createRepo();
-    writeFileSync(path.join(repoDir, '.hidden.txt'), 'createTool\n');
+  gnu(
+    'executeGrepFallback respects hidden=false by excluding dotfiles',
+    async () => {
+      const repoDir = temps.createRepo();
+      writeFileSync(path.join(repoDir, '.hidden.txt'), 'createTool\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'createTool',
-        path: repoDir,
-        output_mode: 'files_with_matches',
-        hidden: false,
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: repoDir,
+          output_mode: 'files_with_matches',
+          hidden: false,
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(
-      result.files.some((file) => file.absolutePath.endsWith('.hidden.txt')),
-    ).toBe(false);
-  });
+      expect(
+        result.files.some((file) => file.absolutePath.endsWith('.hidden.txt')),
+      ).toBe(false);
+    },
+  );
 
-  test('executeGrepFallback excludes .git with hidden=true', async () => {
+  gnu('executeGrepFallback excludes .git with hidden=true', async () => {
     const repoDir = temps.createRepo();
     mkdirSync(path.join(repoDir, '.git'));
     writeFileSync(path.join(repoDir, '.git', 'marker.txt'), 'createTool\n');
@@ -484,167 +571,182 @@ describe('tools/grep/fallback', () => {
     ).toEqual([path.join('.git', 'marker.txt')]);
   });
 
-  test('executeGrepFallback parses content mode paths with colons correctly', async () => {
-    const repoDir = temps.createRepo();
-    const colonFile = path.join(repoDir, 'src', 'a:1:b.txt');
-    writeFileSync(colonFile, 'needle\n');
+  posixGnu(
+    'executeGrepFallback parses content mode paths with colons correctly',
+    async () => {
+      const repoDir = temps.createRepo();
+      const colonFile = path.join(repoDir, 'src', 'a:1:b.txt');
+      writeFileSync(colonFile, 'needle\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'needle',
-        path: path.join(repoDir, 'src'),
-        output_mode: 'content',
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'needle',
+          path: path.join(repoDir, 'src'),
+          output_mode: 'content',
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    const matched = result.files.find(
-      (file) => file.absolutePath === colonFile,
-    );
-    expect(matched).toBeDefined();
-    expect(matched?.matches[0]?.lineText).toBe('needle');
-  });
+      const matched = result.files.find(
+        (file) => file.absolutePath === colonFile,
+      );
+      expect(matched).toBeDefined();
+      expect(matched?.matches[0]?.lineText).toBe('needle');
+    },
+  );
 
-  test('executeGrepFallback parses files mode paths with embedded newlines correctly', async () => {
-    const repoDir = temps.createRepo();
-    const newlineFile = path.join(repoDir, 'src', 'odd\nname.txt');
-    writeFileSync(newlineFile, 'needle\n');
+  posixGnu(
+    'executeGrepFallback parses files mode paths with embedded newlines correctly',
+    async () => {
+      const repoDir = temps.createRepo();
+      const newlineFile = path.join(repoDir, 'src', 'odd\nname.txt');
+      writeFileSync(newlineFile, 'needle\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'needle',
-        path: path.join(repoDir, 'src'),
-        output_mode: 'files_with_matches',
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'needle',
+          path: path.join(repoDir, 'src'),
+          output_mode: 'files_with_matches',
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(result.files.some((file) => file.absolutePath === newlineFile)).toBe(
-      true,
-    );
-    expect(
-      result.files.some((file) => file.absolutePath.endsWith('/odd')),
-    ).toBe(false);
-  });
+      expect(
+        result.files.some((file) => file.absolutePath === newlineFile),
+      ).toBe(true);
+      expect(
+        result.files.some((file) => file.absolutePath.endsWith('/odd')),
+      ).toBe(false);
+    },
+  );
 
-  test('executeGrepFallback count mode with invert_match counts selected lines', async () => {
-    const repoDir = temps.createRepo();
-    const sample = path.join(repoDir, 'src', 'invert.txt');
-    writeFileSync(sample, 'foo\nbar\nbaz\n');
+  gnu(
+    'executeGrepFallback count mode with invert_match counts selected lines',
+    async () => {
+      const repoDir = temps.createRepo();
+      const sample = path.join(repoDir, 'src', 'invert.txt');
+      writeFileSync(sample, 'foo\nbar\nbaz\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'foo',
-        path: sample,
-        output_mode: 'count',
-        fixed_strings: true,
-        invert_match: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'foo',
+          path: sample,
+          output_mode: 'count',
+          fixed_strings: true,
+          invert_match: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    const matched = result.files.find((file) => file.absolutePath === sample);
-    expect(matched?.matchCount).toBe(2);
-    expect(result.totalMatches).toBe(2);
-  });
+      const matched = result.files.find((file) => file.absolutePath === sample);
+      expect(matched?.matchCount).toBe(2);
+      expect(result.totalMatches).toBe(2);
+    },
+  );
 
-  test('executeGrepFallback excludes zero-count files from count results', async () => {
-    const repoDir = temps.createRepo();
-    const empty = path.join(repoDir, 'src', 'empty.txt');
-    writeFileSync(empty, 'nothing here\n');
+  gnu(
+    'executeGrepFallback excludes zero-count files from count results',
+    async () => {
+      const repoDir = temps.createRepo();
+      const empty = path.join(repoDir, 'src', 'empty.txt');
+      writeFileSync(empty, 'nothing here\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'createTool',
-        path: path.join(repoDir, 'src'),
-        output_mode: 'count',
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: path.join(repoDir, 'src'),
+          output_mode: 'count',
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0]?.absolutePath).toBe(
-      path.join(repoDir, 'src', 'example.ts'),
-    );
-    expect(result.files.some((file) => file.matchCount === 0)).toBe(false);
-  });
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]?.absolutePath).toBe(
+        path.join(repoDir, 'src', 'example.ts'),
+      );
+      expect(result.files.some((file) => file.matchCount === 0)).toBe(false);
+    },
+  );
 
-  test('executeGrepFallback sorts all path results before applying max_results', async () => {
-    const repoDir = temps.createRepo();
-    const zFile = path.join(repoDir, 'src', 'z.txt');
-    const aFile = path.join(repoDir, 'src', 'a.txt');
-    writeFileSync(zFile, 'needle\n');
-    writeFileSync(aFile, 'needle\n');
+  gnu(
+    'executeGrepFallback sorts all path results before applying max_results',
+    async () => {
+      const repoDir = temps.createRepo();
+      const zFile = path.join(repoDir, 'src', 'z.txt');
+      const aFile = path.join(repoDir, 'src', 'a.txt');
+      writeFileSync(zFile, 'needle\n');
+      writeFileSync(aFile, 'needle\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'needle',
-        paths: [zFile, aFile],
-        output_mode: 'files_with_matches',
-        fixed_strings: true,
-        sort_by: 'path',
-        max_results: 1,
-      },
-      createRepoContext(repoDir) as any,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'needle',
+          paths: [zFile, aFile],
+          output_mode: 'files_with_matches',
+          fixed_strings: true,
+          sort_by: 'path',
+          max_results: 1,
+        },
+        createRepoContext(repoDir) as any,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0]?.absolutePath).toBe(aFile);
-    expect(result.limitReached).toBe(true);
-  });
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]?.absolutePath).toBe(aFile);
+      expect(result.limitReached).toBe(true);
+    },
+  );
 
-  test('executeGrepFallback preserves non-UTF8 content paths', async () => {
+  posixGnu('executeGrepFallback preserves non-UTF8 content paths', async () => {
     const repoDir = temps.createRepo();
     const rawPath = Buffer.concat([
       Buffer.from(path.join(repoDir, 'src') + path.sep),
@@ -675,45 +777,48 @@ describe('tools/grep/fallback', () => {
     expect(matched?.file).toContain('bytes:base64:');
   });
 
-  test('executeGrepFallback reports operational stderr instead of no matches', async () => {
-    const repoDir = temps.createRepo();
-    const wrapperDir = temps.createDir('opencode-bettergrep-error-wrapper');
-    const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
-    writeFileSync(
-      wrapperPath,
-      [
-        '#!/usr/bin/env bash',
-        'if [ "$1" = "--version" ]; then',
-        "  printf 'grep (GNU grep) 3.11\\n'",
-        '  exit 0',
-        'fi',
-        "printf 'permission denied\\n' >&2",
-        'exit 1',
-        '',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
-    const input = normalizeGrepInput(
-      {
-        pattern: 'needle',
-        path: path.join(repoDir, 'src'),
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+  posix(
+    'executeGrepFallback reports operational stderr instead of no matches',
+    async () => {
+      const repoDir = temps.createRepo();
+      const wrapperDir = temps.createDir('opencode-bettergrep-error-wrapper');
+      const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
+      writeFileSync(
+        wrapperPath,
+        [
+          '#!/usr/bin/env bash',
+          'if [ "$1" = "--version" ]; then',
+          "  printf 'grep (GNU grep) 3.11\\n'",
+          '  exit 0',
+          'fi',
+          "printf 'permission denied\\n' >&2",
+          'exit 1',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'needle',
+          path: path.join(repoDir, 'src'),
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: wrapperPath,
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: wrapperPath,
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(result.error).toContain('permission denied');
-  });
+      expect(result.error).toContain('permission denied');
+    },
+  );
 
   test('executeGrepFallback rejects Unicode digit classes instead of approximating them', async () => {
     const repoDir = temps.createRepo();
@@ -747,32 +852,38 @@ describe('tools/grep/fallback', () => {
     expect(result.totalMatches).toBe(0);
   });
 
-  test('executeGrepFallback passes plain alternation through ERE unchanged', async () => {
-    const repoDir = temps.createRepo();
-    writeFileSync(path.join(repoDir, 'src', 'alt.txt'), 'alpha\nbeta\ngamma\n');
+  gnu(
+    'executeGrepFallback passes plain alternation through ERE unchanged',
+    async () => {
+      const repoDir = temps.createRepo();
+      writeFileSync(
+        path.join(repoDir, 'src', 'alt.txt'),
+        'alpha\nbeta\ngamma\n',
+      );
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'alpha|gamma',
-        path: path.join(repoDir, 'src'),
-        fixed_strings: false,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'alpha|gamma',
+          path: path.join(repoDir, 'src'),
+          fixed_strings: false,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
 
-    expect(result.error).toBeUndefined();
-    expect(result.totalMatches).toBe(2);
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.totalMatches).toBe(2);
+    },
+  );
 
   test('executeGrepFallback rejects patterns it cannot represent in ERE', async () => {
     const repoDir = temps.createRepo();
@@ -812,7 +923,7 @@ describe('tools/grep/fallback', () => {
     );
   });
 
-  test('executeGrepFallback sorts paths bytewise like ripgrep', async () => {
+  gnu('executeGrepFallback sorts paths bytewise like ripgrep', async () => {
     const repoDir = temps.createRepo();
     writeFileSync(path.join(repoDir, 'README.md'), 'needle\n');
     writeFileSync(path.join(repoDir, 'package.json'), 'needle\n');
@@ -844,227 +955,242 @@ describe('tools/grep/fallback', () => {
     expect(result.limitReached).toBe(true);
   });
 
-  test('executeGrepFallback keeps context group separators out of file paths', async () => {
-    const repoDir = temps.createRepo();
-    writeFileSync(path.join(repoDir, 'src', 'a.txt'), 'match\ncontext\n');
-    writeFileSync(path.join(repoDir, 'src', 'b.txt'), 'match\ncontext\n');
+  gnu(
+    'executeGrepFallback keeps context group separators out of file paths',
+    async () => {
+      const repoDir = temps.createRepo();
+      writeFileSync(path.join(repoDir, 'src', 'a.txt'), 'match\ncontext\n');
+      writeFileSync(path.join(repoDir, 'src', 'b.txt'), 'match\ncontext\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'match',
-        paths: [
-          path.join(repoDir, 'src', 'a.txt'),
-          path.join(repoDir, 'src', 'b.txt'),
-        ],
-        after_context: 1,
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
-
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
-
-    const paths = result.files.map((file) => file.absolutePath);
-    expect(paths).toHaveLength(2);
-    expect(paths).toContain(path.join(repoDir, 'src', 'a.txt'));
-    expect(paths).toContain(path.join(repoDir, 'src', 'b.txt'));
-    expect(paths.some((p) => p.includes('--'))).toBe(false);
-    for (const file of result.files) {
-      expect(file.matches[0]?.after).toHaveLength(1);
-    }
-  });
-
-  test('executeGrepFallback keeps the top-K prefix property with capacity above one', async () => {
-    const repoDir = temps.createRepo();
-    writeFileSync(path.join(repoDir, 'LICENSE'), 'needle\n');
-    writeFileSync(path.join(repoDir, 'package.json'), 'needle\n');
-    writeFileSync(path.join(repoDir, 'README.md'), 'needle\n');
-
-    const normalize = (overrides: Record<string, unknown>) =>
-      normalizeGrepInput(
-        {
-          pattern: 'needle',
-          path: repoDir,
-          output_mode: 'files_with_matches',
-          fixed_strings: true,
-          sort_by: 'path',
-          ...overrides,
-        },
-        createRepoContext(repoDir) as any,
-      );
-
-    const three = await executeGrepFallback(
-      normalize({ max_results: 3 }),
-      new AbortController().signal,
-      { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
-    );
-    const two = await executeGrepFallback(
-      normalize({ max_results: 2 }),
-      new AbortController().signal,
-      { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
-    );
-
-    const threePaths = three.files.map((file) => file.absolutePath);
-    expect(threePaths).toEqual([
-      path.join(repoDir, 'LICENSE'),
-      path.join(repoDir, 'README.md'),
-      path.join(repoDir, 'package.json'),
-    ]);
-    // The capacity-2 result must be a prefix of the capacity-3 result.
-    expect(two.files.map((file) => file.absolutePath)).toEqual(
-      threePaths.slice(0, 2),
-    );
-    expect(two.limitReached).toBe(true);
-  });
-
-  test('executeGrepFallback content budget follows result priority, not arrival order', async () => {
-    const repoDir = temps.createRepo();
-    // README.md sorts before package.json but is listed SECOND in targets:
-    // GNU grep still emits matches in argument order, so the worse file's
-    // matches arrive first and must be displaced when README's arrive.
-    writeFileSync(path.join(repoDir, 'package.json'), 'needle\nneedle\n');
-    writeFileSync(path.join(repoDir, 'README.md'), 'needle\n');
-
-    const run = async (paths: string[]) => {
       const input = normalizeGrepInput(
         {
-          pattern: 'needle',
-          paths,
-          output_mode: 'content',
+          pattern: 'match',
+          paths: [
+            path.join(repoDir, 'src', 'a.txt'),
+            path.join(repoDir, 'src', 'b.txt'),
+          ],
+          after_context: 1,
           fixed_strings: true,
-          sort_by: 'path',
-          max_results: 2,
         },
         createRepoContext(repoDir) as any,
       );
-      return executeGrepFallback(input, new AbortController().signal, {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      });
-    };
 
-    const direct = await run([
-      path.join(repoDir, 'package.json'),
-      path.join(repoDir, 'README.md'),
-    ]);
-    const reversed = await run([
-      path.join(repoDir, 'README.md'),
-      path.join(repoDir, 'package.json'),
-    ]);
-
-    // The best file must retain its match regardless of target order.
-    const readme = (result: typeof direct) =>
-      result.files.find(
-        (file) => file.absolutePath === path.join(repoDir, 'README.md'),
-      );
-    expect(readme(direct)?.matches).toHaveLength(1);
-    expect(readme(reversed)?.matches).toHaveLength(1);
-    // And the total retained matches must be identical across permutations.
-    expect(direct.totalMatches).toBe(reversed.totalMatches);
-  });
-
-  test('executeGrepFallback keeps full context stable when eviction follows target permutation', async () => {
-    const repoDir = temps.createRepo();
-    const betterPath = path.join(repoDir, 'README.md');
-    const worsePath = path.join(repoDir, 'package.json');
-    writeFileSync(betterPath, 'needle\n');
-    writeFileSync(worsePath, 'needle\nplain\nneedle\nplain\nplain\n');
-
-    const run = async (paths: string[]) => {
-      const input = normalizeGrepInput(
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
         {
-          pattern: 'needle',
-          paths,
-          output_mode: 'content',
-          fixed_strings: true,
-          sort_by: 'path',
-          max_results: 2,
-          before_context: 2,
-          after_context: 2,
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
         },
-        createRepoContext(repoDir) as any,
       );
-      return executeGrepFallback(input, new AbortController().signal, {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      });
-    };
 
-    const direct = await run([worsePath, betterPath]);
-    const reversed = await run([betterPath, worsePath]);
-    const structure = (result: typeof direct) =>
-      result.files.map((file) => ({
-        path: file.absolutePath,
-        matchCount: file.matchCount,
-        matches: file.matches.map((match) => ({
-          lineNumber: match.lineNumber,
-          lineText: match.lineText,
-          before: match.before,
-          after: match.after,
-        })),
-      }));
+      const paths = result.files.map((file) => file.absolutePath);
+      expect(paths).toHaveLength(2);
+      expect(paths).toContain(path.join(repoDir, 'src', 'a.txt'));
+      expect(paths).toContain(path.join(repoDir, 'src', 'b.txt'));
+      expect(paths.some((p) => p.includes('--'))).toBe(false);
+      for (const file of result.files) {
+        expect(file.matches[0]?.after).toHaveLength(1);
+      }
+    },
+  );
 
-    expect(structure(direct)).toEqual(structure(reversed));
-    expect({
-      totalMatches: direct.totalMatches,
-      limitReached: direct.limitReached,
-      truncated: direct.truncated,
-    }).toEqual({
-      totalMatches: reversed.totalMatches,
-      limitReached: reversed.limitReached,
-      truncated: reversed.truncated,
-    });
-  });
+  gnu(
+    'executeGrepFallback keeps the top-K prefix property with capacity above one',
+    async () => {
+      const repoDir = temps.createRepo();
+      writeFileSync(path.join(repoDir, 'LICENSE'), 'needle\n');
+      writeFileSync(path.join(repoDir, 'package.json'), 'needle\n');
+      writeFileSync(path.join(repoDir, 'README.md'), 'needle\n');
 
-  test('executeGrepFallback reports limit flags when sorted eviction has no context', async () => {
-    const repoDir = temps.createRepo();
-    const betterPath = path.join(repoDir, 'README.md');
-    const worsePath = path.join(repoDir, 'package.json');
-    writeFileSync(betterPath, 'needle\n');
-    writeFileSync(worsePath, 'needle\nneedle\n');
+      const normalize = (overrides: Record<string, unknown>) =>
+        normalizeGrepInput(
+          {
+            pattern: 'needle',
+            path: repoDir,
+            output_mode: 'files_with_matches',
+            fixed_strings: true,
+            sort_by: 'path',
+            ...overrides,
+          },
+          createRepoContext(repoDir) as any,
+        );
 
-    const run = async (paths: string[]) => {
-      const input = normalizeGrepInput(
-        {
-          pattern: 'needle',
-          paths,
-          output_mode: 'content',
-          fixed_strings: true,
-          sort_by: 'path',
-          max_results: 2,
-          context: 0,
-        },
-        createRepoContext(repoDir) as any,
+      const three = await executeGrepFallback(
+        normalize({ max_results: 3 }),
+        new AbortController().signal,
+        { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
       );
-      return executeGrepFallback(input, new AbortController().signal, {
-        path: 'grep',
-        backend: 'grep',
-        source: 'system-gnu-grep',
+      const two = await executeGrepFallback(
+        normalize({ max_results: 2 }),
+        new AbortController().signal,
+        { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
+      );
+
+      const threePaths = three.files.map((file) => file.absolutePath);
+      expect(threePaths).toEqual([
+        path.join(repoDir, 'LICENSE'),
+        path.join(repoDir, 'README.md'),
+        path.join(repoDir, 'package.json'),
+      ]);
+      // The capacity-2 result must be a prefix of the capacity-3 result.
+      expect(two.files.map((file) => file.absolutePath)).toEqual(
+        threePaths.slice(0, 2),
+      );
+      expect(two.limitReached).toBe(true);
+    },
+  );
+
+  gnu(
+    'executeGrepFallback content budget follows result priority, not arrival order',
+    async () => {
+      const repoDir = temps.createRepo();
+      // README.md sorts before package.json but is listed SECOND in targets:
+      // GNU grep still emits matches in argument order, so the worse file's
+      // matches arrive first and must be displaced when README's arrive.
+      writeFileSync(path.join(repoDir, 'package.json'), 'needle\nneedle\n');
+      writeFileSync(path.join(repoDir, 'README.md'), 'needle\n');
+
+      const run = async (paths: string[]) => {
+        const input = normalizeGrepInput(
+          {
+            pattern: 'needle',
+            paths,
+            output_mode: 'content',
+            fixed_strings: true,
+            sort_by: 'path',
+            max_results: 2,
+          },
+          createRepoContext(repoDir) as any,
+        );
+        return executeGrepFallback(input, new AbortController().signal, {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        });
+      };
+
+      const direct = await run([
+        path.join(repoDir, 'package.json'),
+        path.join(repoDir, 'README.md'),
+      ]);
+      const reversed = await run([
+        path.join(repoDir, 'README.md'),
+        path.join(repoDir, 'package.json'),
+      ]);
+
+      // The best file must retain its match regardless of target order.
+      const readme = (result: typeof direct) =>
+        result.files.find(
+          (file) => file.absolutePath === path.join(repoDir, 'README.md'),
+        );
+      expect(readme(direct)?.matches).toHaveLength(1);
+      expect(readme(reversed)?.matches).toHaveLength(1);
+      // And the total retained matches must be identical across permutations.
+      expect(direct.totalMatches).toBe(reversed.totalMatches);
+    },
+  );
+
+  gnu(
+    'executeGrepFallback keeps full context stable when eviction follows target permutation',
+    async () => {
+      const repoDir = temps.createRepo();
+      const betterPath = path.join(repoDir, 'README.md');
+      const worsePath = path.join(repoDir, 'package.json');
+      writeFileSync(betterPath, 'needle\n');
+      writeFileSync(worsePath, 'needle\nplain\nneedle\nplain\nplain\n');
+
+      const run = async (paths: string[]) => {
+        const input = normalizeGrepInput(
+          {
+            pattern: 'needle',
+            paths,
+            output_mode: 'content',
+            fixed_strings: true,
+            sort_by: 'path',
+            max_results: 2,
+            before_context: 2,
+            after_context: 2,
+          },
+          createRepoContext(repoDir) as any,
+        );
+        return executeGrepFallback(input, new AbortController().signal, {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        });
+      };
+
+      const direct = await run([worsePath, betterPath]);
+      const reversed = await run([betterPath, worsePath]);
+      const structure = (result: typeof direct) =>
+        result.files.map((file) => ({
+          path: file.absolutePath,
+          matchCount: file.matchCount,
+          matches: file.matches.map((match) => ({
+            lineNumber: match.lineNumber,
+            lineText: match.lineText,
+            before: match.before,
+            after: match.after,
+          })),
+        }));
+
+      expect(structure(direct)).toEqual(structure(reversed));
+      expect({
+        totalMatches: direct.totalMatches,
+        limitReached: direct.limitReached,
+        truncated: direct.truncated,
+      }).toEqual({
+        totalMatches: reversed.totalMatches,
+        limitReached: reversed.limitReached,
+        truncated: reversed.truncated,
       });
-    };
+    },
+  );
 
-    const direct = await run([worsePath, betterPath]);
-    const reversed = await run([betterPath, worsePath]);
+  gnu(
+    'executeGrepFallback reports limit flags when sorted eviction has no context',
+    async () => {
+      const repoDir = temps.createRepo();
+      const betterPath = path.join(repoDir, 'README.md');
+      const worsePath = path.join(repoDir, 'package.json');
+      writeFileSync(betterPath, 'needle\n');
+      writeFileSync(worsePath, 'needle\nneedle\n');
 
-    expect(direct.files.map((file) => file.absolutePath)).toEqual(
-      reversed.files.map((file) => file.absolutePath),
-    );
-    expect(direct.totalMatches).toBe(reversed.totalMatches);
-    expect(direct.limitReached).toBe(true);
-    expect(direct.truncated).toBe(true);
-    expect(reversed.limitReached).toBe(true);
-    expect(reversed.truncated).toBe(true);
-  });
+      const run = async (paths: string[]) => {
+        const input = normalizeGrepInput(
+          {
+            pattern: 'needle',
+            paths,
+            output_mode: 'content',
+            fixed_strings: true,
+            sort_by: 'path',
+            max_results: 2,
+            context: 0,
+          },
+          createRepoContext(repoDir) as any,
+        );
+        return executeGrepFallback(input, new AbortController().signal, {
+          path: 'grep',
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        });
+      };
+
+      const direct = await run([worsePath, betterPath]);
+      const reversed = await run([betterPath, worsePath]);
+
+      expect(direct.files.map((file) => file.absolutePath)).toEqual(
+        reversed.files.map((file) => file.absolutePath),
+      );
+      expect(direct.totalMatches).toBe(reversed.totalMatches);
+      expect(direct.limitReached).toBe(true);
+      expect(direct.truncated).toBe(true);
+      expect(reversed.limitReached).toBe(true);
+      expect(reversed.truncated).toBe(true);
+    },
+  );
 
   test('executeGrepFallback rejects non-equivalent ERE constructs instead of reinterpreting them', async () => {
     const repoDir = temps.createRepo();
@@ -1152,180 +1278,195 @@ describe('tools/grep/fallback', () => {
     expect(built.command).not.toContain('-F');
   });
 
-  test('executeGrepFallback marks mixed text and binary matches as truncated', async () => {
-    const repoDir = temps.createRepo();
-    const textPath = path.join(repoDir, 'src', 'text.txt');
-    const binaryPath = path.join(repoDir, 'src', 'binary.bin');
-    writeFileSync(textPath, 'GNU\n');
-    writeFileSync(
-      binaryPath,
-      Uint8Array.from([
-        0x47, 0x4e, 0x55, 0x00, 0x62, 0x69, 0x6e, 0x61, 0x72, 0x79,
-      ]),
-    );
+  gnu(
+    'executeGrepFallback marks mixed text and binary matches as truncated',
+    async () => {
+      const repoDir = temps.createRepo();
+      const textPath = path.join(repoDir, 'src', 'text.txt');
+      const binaryPath = path.join(repoDir, 'src', 'binary.bin');
+      writeFileSync(textPath, 'GNU\n');
+      writeFileSync(
+        binaryPath,
+        Uint8Array.from([
+          0x47, 0x4e, 0x55, 0x00, 0x62, 0x69, 0x6e, 0x61, 0x72, 0x79,
+        ]),
+      );
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'GNU',
-        paths: [textPath, binaryPath],
-        output_mode: 'content',
-        fixed_strings: true,
-        context: 0,
-        max_results: 1000,
-      },
-      createRepoContext(repoDir) as any,
-    );
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'GNU',
+          paths: [textPath, binaryPath],
+          output_mode: 'content',
+          fixed_strings: true,
+          context: 0,
+          max_results: 1000,
+        },
+        createRepoContext(repoDir) as any,
+      );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
+      );
 
-    expect(result.totalMatches).toBe(1);
-    expect(result.totalFiles).toBe(1);
-    expect(result.truncated).toBe(true);
-    expect(result.limitReached).toBe(false);
-    expect(result.error).toBeUndefined();
-    expect(
-      result.warnings.some((warning) => /binary file.*matches/i.test(warning)),
-    ).toBe(true);
-  });
+      expect(result.totalMatches).toBe(1);
+      expect(result.totalFiles).toBe(1);
+      expect(result.truncated).toBe(true);
+      expect(result.limitReached).toBe(false);
+      expect(result.error).toBeUndefined();
+      expect(
+        result.warnings.some((warning) =>
+          /binary file.*matches/i.test(warning),
+        ),
+      ).toBe(true);
+    },
+  );
 
-  test('executeGrepFallback retains adjacent matches as context after the budget is exhausted', async () => {
-    const repoDir = temps.createRepo();
-    const sample = path.join(repoDir, 'src', 'adjacent.txt');
-    writeFileSync(sample, 'import a\nimport b\nplain\n');
+  gnu(
+    'executeGrepFallback retains adjacent matches as context after the budget is exhausted',
+    async () => {
+      const repoDir = temps.createRepo();
+      const sample = path.join(repoDir, 'src', 'adjacent.txt');
+      writeFileSync(sample, 'import a\nimport b\nplain\n');
 
-    const input = normalizeGrepInput(
-      {
-        pattern: '^import',
-        path: sample,
-        after_context: 1,
-        fixed_strings: false,
-        sort_by: 'path',
-        max_results: 1,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: '^import',
+          path: sample,
+          after_context: 1,
+          fixed_strings: false,
+          sort_by: 'path',
+          max_results: 1,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
-    );
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        { path: 'grep', backend: 'grep', source: 'system-gnu-grep' },
+      );
 
-    const file = result.files.find((entry) => entry.absolutePath === sample);
-    expect(file).toBeDefined();
-    expect(file?.matches).toHaveLength(1);
-    // The second adjacent match, discarded by the budget, still appears as
-    // trailing context of the retained one, like ripgrep.
-    expect(file?.matches[0]?.after).toEqual([
-      { lineNumber: 2, text: 'import b' },
-    ]);
-  });
+      const file = result.files.find((entry) => entry.absolutePath === sample);
+      expect(file).toBeDefined();
+      expect(file?.matches).toHaveLength(1);
+      // The second adjacent match, discarded by the budget, still appears as
+      // trailing context of the retained one, like ripgrep.
+      expect(file?.matches[0]?.after).toEqual([
+        { lineNumber: 2, text: 'import b' },
+      ]);
+    },
+  );
 
-  test('executeGrepFallback treats binary-file stderr as unrepresentable output', async () => {
-    const repoDir = temps.createRepo();
-    const wrapperDir = temps.createDir('opencode-bettergrep-binary-wrapper');
-    const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
-    writeFileSync(
-      wrapperPath,
-      [
-        '#!/usr/bin/env bash',
-        'if [ "$1" = "--version" ]; then',
-        "  printf 'grep (GNU grep) 3.11\\n'",
-        '  exit 0',
-        'fi',
-        "printf 'grep: /usr/bin/grep: binary file matches\\n' >&2",
-        'exit 0',
-        '',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
+  posix(
+    'executeGrepFallback treats binary-file stderr as unrepresentable output',
+    async () => {
+      const repoDir = temps.createRepo();
+      const wrapperDir = temps.createDir('opencode-bettergrep-binary-wrapper');
+      const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
+      writeFileSync(
+        wrapperPath,
+        [
+          '#!/usr/bin/env bash',
+          'if [ "$1" = "--version" ]; then',
+          "  printf 'grep (GNU grep) 3.11\\n'",
+          '  exit 0',
+          'fi',
+          "printf 'grep: /usr/bin/grep: binary file matches\\n' >&2",
+          'exit 0',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
 
-    const input = normalizeGrepInput(
-      {
-        pattern: 'GNU',
-        path: path.join(repoDir, 'src'),
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
+      const input = normalizeGrepInput(
+        {
+          pattern: 'GNU',
+          path: path.join(repoDir, 'src'),
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
 
-    const result = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      {
+      const result = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        {
+          path: wrapperPath,
+          backend: 'grep',
+          source: 'system-gnu-grep',
+        },
+      );
+
+      expect(result.error).toContain('binary files');
+      expect(result.truncated).toBe(true);
+      expect(result.totalMatches).toBe(0);
+    },
+  );
+
+  posixGnu(
+    'executeGrepFallback retries GNU grep validation after transient failures',
+    async () => {
+      const repoDir = temps.createRepo();
+      const wrapperDir = temps.createDir('opencode-bettergrep-wrapper');
+      const markerPath = path.join(wrapperDir, 'validated');
+      const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
+
+      writeFileSync(
+        wrapperPath,
+        [
+          '#!/usr/bin/env bash',
+          'set -eu',
+          `marker=${JSON.stringify(markerPath)}`,
+          'if [ "$#" -gt 0 ] && [ "$1" = "--version" ]; then',
+          '  if [ ! -f "$marker" ]; then',
+          '    : > "$marker"',
+          "    printf 'resource temporarily unavailable\\n' >&2",
+          '    exit 1',
+          '  fi',
+          "  printf 'grep (GNU grep) 3.11\\n'",
+          '  exit 0',
+          'fi',
+          'exec grep "$@"',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+
+      const input = normalizeGrepInput(
+        {
+          pattern: 'createTool',
+          path: path.join(repoDir, 'src'),
+          output_mode: 'files_with_matches',
+          fixed_strings: true,
+        },
+        createRepoContext(repoDir) as any,
+      );
+      const cli = {
         path: wrapperPath,
-        backend: 'grep',
-        source: 'system-gnu-grep',
-      },
-    );
+        backend: 'grep' as const,
+        source: 'system-gnu-grep' as const,
+      };
 
-    expect(result.error).toContain('binary files');
-    expect(result.truncated).toBe(true);
-    expect(result.totalMatches).toBe(0);
-  });
+      const first = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        cli,
+      );
+      expect(first.error).toContain('resource temporarily unavailable');
 
-  test('executeGrepFallback retries GNU grep validation after transient failures', async () => {
-    const repoDir = temps.createRepo();
-    const wrapperDir = temps.createDir('opencode-bettergrep-wrapper');
-    const markerPath = path.join(wrapperDir, 'validated');
-    const wrapperPath = path.join(wrapperDir, 'grep-wrapper.sh');
-
-    writeFileSync(
-      wrapperPath,
-      [
-        '#!/usr/bin/env bash',
-        'set -eu',
-        `marker=${JSON.stringify(markerPath)}`,
-        'if [ "$#" -gt 0 ] && [ "$1" = "--version" ]; then',
-        '  if [ ! -f "$marker" ]; then',
-        '    : > "$marker"',
-        "    printf 'resource temporarily unavailable\\n' >&2",
-        '    exit 1',
-        '  fi',
-        "  printf 'grep (GNU grep) 3.11\\n'",
-        '  exit 0',
-        'fi',
-        'exec grep "$@"',
-        '',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
-
-    const input = normalizeGrepInput(
-      {
-        pattern: 'createTool',
-        path: path.join(repoDir, 'src'),
-        output_mode: 'files_with_matches',
-        fixed_strings: true,
-      },
-      createRepoContext(repoDir) as any,
-    );
-    const cli = {
-      path: wrapperPath,
-      backend: 'grep' as const,
-      source: 'system-gnu-grep' as const,
-    };
-
-    const first = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      cli,
-    );
-    expect(first.error).toContain('resource temporarily unavailable');
-
-    const second = await executeGrepFallback(
-      input,
-      new AbortController().signal,
-      cli,
-    );
-    expect(second.error).toBeUndefined();
-    expect(
-      second.files.some(
-        (file) => file.absolutePath === path.join(repoDir, 'src', 'example.ts'),
-      ),
-    ).toBe(true);
-  });
+      const second = await executeGrepFallback(
+        input,
+        new AbortController().signal,
+        cli,
+      );
+      expect(second.error).toBeUndefined();
+      expect(
+        second.files.some(
+          (file) =>
+            file.absolutePath === path.join(repoDir, 'src', 'example.ts'),
+        ),
+      ).toBe(true);
+    },
+  );
 });

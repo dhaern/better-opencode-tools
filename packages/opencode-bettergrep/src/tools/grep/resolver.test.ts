@@ -12,53 +12,61 @@ import {
 import { setAbortKind } from './runtime';
 import { createTempTracker } from './test-helpers';
 
+const posix = process.platform === 'win32' ? test.skip : test;
+
 describe('tools/grep/resolver', () => {
   const temps = createTempTracker({ resetResolver: true });
 
-  test('memo reuses a valid probe per deps, then invalidates on stat, PATH, and deps changes', async () => {
-    const dir = temps.createDir('bettergrep-probe-memo');
-    const binary = path.join(dir, 'rg-stub');
-    const calls = path.join(dir, 'calls');
-    const script = (tag: string) =>
-      `#!/bin/sh\nprintf 'hit\\n' >> "${calls}"\nprintf 'ripgrep ${tag}\\n'\n`;
-    writeFileSync(binary, script('v1'), { mode: 0o755 });
-    const deps = {
-      findExecutable: (name: string) => (name === 'rg' ? binary : null),
-    };
-    const run = () => resolveGrepCliWithAutoInstall(deps);
-    const count = () => readFileSync(calls, 'utf8').trim().split('\n').length;
+  posix(
+    'memo reuses a valid probe per deps, then invalidates on stat, PATH, and deps changes',
+    async () => {
+      const dir = temps.createDir('bettergrep-probe-memo');
+      const binary = path.join(dir, 'rg-stub');
+      const calls = path.join(dir, 'calls');
+      const script = (tag: string) =>
+        `#!/bin/sh\nprintf 'hit\\n' >> "${calls}"\nprintf 'ripgrep ${tag}\\n'\n`;
+      writeFileSync(binary, script('v1'), { mode: 0o755 });
+      const deps = {
+        findExecutable: (name: string) => (name === 'rg' ? binary : null),
+      };
+      const run = () => resolveGrepCliWithAutoInstall(deps);
+      const count = () => readFileSync(calls, 'utf8').trim().split('\n').length;
 
-    expect((await run()).path).toBe(binary);
-    expect((await run()).path).toBe(binary);
-    expect(count()).toBe(1);
+      expect((await run()).path).toBe(binary);
+      expect((await run()).path).toBe(binary);
+      expect(count()).toBe(1);
 
-    writeFileSync(binary, script('v222222'), { mode: 0o755 });
-    utimesSync(
-      binary,
-      new Date('2020-01-01T00:00:00Z'),
-      new Date('2020-01-01T00:00:00Z'),
-    );
-    await run();
-    expect(count()).toBe(2);
-
-    const previousPath = process.env.PATH;
-    const previousCache = process.env.XDG_CACHE_HOME;
-    try {
-      process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`;
+      writeFileSync(binary, script('v222222'), { mode: 0o755 });
+      utimesSync(
+        binary,
+        new Date('2020-01-01T00:00:00Z'),
+        new Date('2020-01-01T00:00:00Z'),
+      );
       await run();
-      expect(count()).toBe(3);
-      process.env.XDG_CACHE_HOME = dir;
+      expect(count()).toBe(2);
+
+      const previousPath = process.env.PATH;
+      const previousCache = process.env.XDG_CACHE_HOME;
+      const previousLocalAppData = process.env.LOCALAPPDATA;
+      try {
+        process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`;
+        await run();
+        expect(count()).toBe(3);
+        process.env.XDG_CACHE_HOME = dir;
+        process.env.LOCALAPPDATA = dir;
+        await run();
+        expect(count()).toBe(4);
+      } finally {
+        process.env.PATH = previousPath;
+        process.env.XDG_CACHE_HOME = previousCache;
+        process.env.LOCALAPPDATA = previousLocalAppData;
+      }
       await run();
-      expect(count()).toBe(4);
-    } finally {
-      process.env.PATH = previousPath;
-      process.env.XDG_CACHE_HOME = previousCache;
-    }
-    await run();
-    expect(count()).toBe(5);
-    await resolveGrepCliWithAutoInstall({ ...deps });
-    expect(count()).toBe(6);
-  });
+      expect(count()).toBe(5);
+      await resolveGrepCliWithAutoInstall({ ...deps });
+      expect(count()).toBe(6);
+    },
+  );
 
   test('GNU memo survives rejected rg until it changes', async () => {
     const rg = path.join(temps.createDir('bettergrep-rejected-rg'), 'rg');
@@ -289,16 +297,18 @@ describe('tools/grep/resolver', () => {
   });
 
   test('resolveGrepCliWithAutoInstall falls back to system grep when install fails', async () => {
+    const grep = process.execPath;
     const cli = await resolveGrepCliWithAutoInstall({
-      findExecutable: (name) => (name === 'grep' ? '/usr/bin/grep' : null),
+      findExecutable: (name) => (name === 'grep' ? grep : null),
       getInstalledRipgrepPath: () => null,
+      isSupportedGrep: () => true,
       installLatestStableRipgrep: async () => {
         throw new Error('network down');
       },
     });
 
     expect(cli).toEqual({
-      path: '/usr/bin/grep',
+      path: grep,
       backend: 'grep',
       source: 'system-gnu-grep',
     });
@@ -311,9 +321,11 @@ describe('tools/grep/resolver', () => {
         throw new Error('offline');
       });
       const rgProbe = mock(() => false);
+      const grep = path.join(temps.createDir('fake-grep'), 'grep');
+      writeFileSync(grep, 'fake');
       const deps = {
         findExecutable: (name: string) =>
-          name === 'rg' ? process.execPath : '/usr/bin/grep',
+          name === 'rg' ? process.execPath : grep,
         getInstalledRipgrepPath: () => null,
         isSupportedGrep: () => true,
         isSupportedRipgrep: rgProbe,

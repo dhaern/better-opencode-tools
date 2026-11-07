@@ -1,10 +1,19 @@
 /// <reference types="bun-types" />
-import { afterEach, mock } from 'bun:test';
+import { afterEach, mock, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resetGrepCliResolverForTests } from './resolver';
 import type { GrepSearchResult } from './types';
+
+const grepVersion = spawnSync('grep', ['--version'], {
+  encoding: 'utf8',
+  windowsHide: true,
+});
+export const hasGnuGrep =
+  grepVersion.status === 0 && /GNU grep/.test(grepVersion.stdout);
+export const testGnuGrep = hasGnuGrep ? test : test.skip;
 
 function createTempPath(prefix: string): string {
   return path.join(

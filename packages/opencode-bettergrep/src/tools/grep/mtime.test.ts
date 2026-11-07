@@ -9,6 +9,7 @@ import { setAbortKind } from './runtime';
 import { createRepoContext, createTempTracker } from './test-helpers';
 
 const temps = createTempTracker();
+const posix = process.platform === 'win32' ? test.skip : test;
 const systemRg = which.sync('rg', { nothrow: false });
 const systemCli = {
   path: systemRg,
@@ -44,7 +45,7 @@ function seedRepo(fileCount: number): string {
   return root;
 }
 
-test.each(['content', 'count'] as const)(
+posix.each(['content', 'count'] as const)(
   'mtime %s replays 130 files in three invocations (T3)',
   async (outputMode) => {
     const root = seedRepo(130);
@@ -132,7 +133,7 @@ test.each(['asc', 'desc'] as const)(
   },
 );
 
-test.each(['content', 'count'] as const)(
+posix.each(['content', 'count'] as const)(
   'mtime %s completely recovered batch leaves no error metadata (T1)',
   async (outputMode) => {
     const root = seedRepo(10);
@@ -168,7 +169,7 @@ test.each(['content', 'count'] as const)(
   },
 );
 
-test.each(['content', 'count'] as const)(
+posix.each(['content', 'count'] as const)(
   'mtime %s permanently failing file reports only the failed retry (T2)',
   async (outputMode) => {
     const root = seedRepo(10);
@@ -219,7 +220,7 @@ test.each(['content', 'count', 'files_with_matches'] as const)(
   },
 );
 
-test('mtime replay stops at a mid-replay limit', async () => {
+posix('mtime replay stops at a mid-replay limit', async () => {
   // 70 files span two replay batches; the limit fires in the first batch and
   // the second batch must never run.
   const root = seedRepo(70);
@@ -278,7 +279,7 @@ test.each(['asc', 'desc'] as const)(
   },
 );
 
-test('mtime replay skips non-replayable paths with a warning', async () => {
+posix('mtime replay skips non-replayable paths with a warning', async () => {
   const root = temps.createDir('bettergrep-mtime-nonutf8');
   writeFileSync(path.join(root, 'good.txt'), 'needle\n');
   const rawName = Buffer.from([
@@ -300,22 +301,25 @@ test('mtime replay skips non-replayable paths with a warning', async () => {
   );
 });
 
-test('a solely non-UTF8 match uses direct fallback before sorting or replay', async () => {
-  const root = temps.createDir('bettergrep-mtime-only-nonutf8');
-  const file = Buffer.concat([
-    Buffer.from(`${root}/`),
-    Buffer.from([0xff, 0x2e, 0x74, 0x78, 0x74]),
-  ]);
-  writeFileSync(file, 'needle\n');
-  const result = await executeMtimeMode(
-    mtimeInput(root),
-    new AbortController().signal,
-    systemCli,
-  );
-  expect(result.strategy).toBe('mtime-fallback');
-  expect(result.totalMatches).toBe(1);
-  expect(result.warnings.join(' ')).toContain('non-UTF8');
-});
+posix(
+  'a solely non-UTF8 match uses direct fallback before sorting or replay',
+  async () => {
+    const root = temps.createDir('bettergrep-mtime-only-nonutf8');
+    const file = Buffer.concat([
+      Buffer.from(`${root}/`),
+      Buffer.from([0xff, 0x2e, 0x74, 0x78, 0x74]),
+    ]);
+    writeFileSync(file, 'needle\n');
+    const result = await executeMtimeMode(
+      mtimeInput(root),
+      new AbortController().signal,
+      systemCli,
+    );
+    expect(result.strategy).toBe('mtime-fallback');
+    expect(result.totalMatches).toBe(1);
+    expect(result.warnings.join(' ')).toContain('non-UTF8');
+  },
+);
 
 test('mtime sort with an expired deadline reports a timeout', async () => {
   const file = createFileMatch({

@@ -1,5 +1,8 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from 'bun:test';
+
+const posix = process.platform === 'win32' ? test.skip : test;
+
 import { Effect } from 'effect';
 import {
   askReadPermission,
@@ -39,11 +42,14 @@ describe('tools/read/permissions', () => {
     expect(permissionGlob('/tmp/app/(auth)')).toBe('/tmp/app/(auth)/*');
   });
 
-  test('rejects literal POSIX backslashes instead of using unsafe escapes', () => {
-    expect(() => permissionGlob('/tmp/a\\b')).toThrow(
-      /wildcard metacharacters/,
-    );
-  });
+  posix(
+    'rejects literal POSIX backslashes instead of using unsafe escapes',
+    () => {
+      expect(() => permissionGlob('/tmp/a\\b')).toThrow(
+        /wildcard metacharacters/,
+      );
+    },
+  );
 
   test('does not turn a literal POSIX backslash into a different permission path', async () => {
     const ask = mock(async () => undefined);

@@ -179,8 +179,8 @@ test('saves external directory permission at its project root', async () => {
   );
   expect(asks.find((ask) => ask.action === 'external_directory')).toMatchObject(
     {
-      resources: [path.join(external, 'nested', '*')],
-      save: [path.join(external, '*')],
+      resources: [path.join(external, 'nested', '*').replaceAll('\\', '/')],
+      save: [path.join(external, '*').replaceAll('\\', '/')],
     },
   );
 });
