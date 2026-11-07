@@ -97,8 +97,23 @@ interface SharedAutoInstallState {
 
 let autoInstallState: SharedAutoInstallState | null = null;
 
-function buildUnavailableBackendMessage(error?: unknown): string {
-  return `Neither ripgrep (rg) nor GNU grep is available. Checked system rg, managed rg, ripgrep auto-install, and system grep.${error instanceof Error && error.message ? ` Auto-install error: ${error.message}` : ''}`;
+function describeSystemBinary(label: string, path: string | null): string {
+  return path
+    ? `${label} at ${path} failed its --version check`
+    : `${label} not found on PATH`;
+}
+
+function buildUnavailableBackendMessage(
+  deps: GrepResolverDependencies,
+  error?: unknown,
+): string {
+  const find = deps.findExecutable ?? defaultFindExecutable;
+  const checked = [
+    describeSystemBinary('system rg', find(RG_BINARY)),
+    'no valid managed rg',
+    describeSystemBinary('system grep', find(GREP_BINARY)),
+  ].join('; ');
+  return `Neither ripgrep (rg) nor GNU grep is available. Checked: ${checked}.${error instanceof Error && error.message ? ` Auto-install error: ${error.message}` : ''}`;
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -297,7 +312,7 @@ function createSharedAutoInstall(
         return fallback;
       }
 
-      throw new Error(buildUnavailableBackendMessage(error));
+      throw new Error(buildUnavailableBackendMessage(deps, error));
     } finally {
       clearTimeout(installTimer);
       controller.signal.removeEventListener('abort', abortInstall);
