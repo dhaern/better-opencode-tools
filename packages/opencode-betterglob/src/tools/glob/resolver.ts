@@ -199,8 +199,19 @@ function create(deps: GlobResolverDependencies): SharedAutoInstallState {
         // Logging must not mask the installation failure; late failures are
         // observed by race even when the last waiter has cancelled.
       }
+      let checked = '';
+      try {
+        const find = deps.findExecutableAsync ?? defaultFindExecutableAsync;
+        const system = await race(
+          find(RG_BINARY, controller.signal),
+          controller.signal,
+        );
+        checked = ` Checked: ${system ? `system rg at ${system} failed its --version check` : 'system rg not found on PATH'}; no valid managed rg.`;
+      } catch {
+        // The lookup only adds detail; the installation failure is reported regardless.
+      }
       throw new Error(
-        `ripgrep (rg) is required for glob search and auto-install failed.${error instanceof Error && error.message.length > 0 ? ` Auto-install error: ${error.message}` : ''}`,
+        `ripgrep (rg) is required for glob search and auto-install failed.${checked}${error instanceof Error && error.message.length > 0 ? ` Auto-install error: ${error.message}` : ''}`,
       );
     } finally {
       current.settled = true;

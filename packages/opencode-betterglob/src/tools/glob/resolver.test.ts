@@ -326,6 +326,27 @@ describe('tools/glob/resolver', () => {
     }
   });
 
+  test('reports what the system rg check found when auto-install fails', async () => {
+    await expect(
+      resolveGlobCliWithAutoInstall(
+        {
+          ensureSupervisorRuntimeAsync: async () => {},
+          findExecutableAsync: async () => '/opt/bin/rg',
+          validateExecutableAsync: async () => false,
+          getInstalledRipgrepPathAsync: async () => null,
+          installLatestStableRipgrep: async () => {
+            throw new Error('network down');
+          },
+          logger: () => {},
+        },
+        undefined,
+        { allowAutoInstall: true },
+      ),
+    ).rejects.toThrow(
+      'Checked: system rg at /opt/bin/rg failed its --version check; no valid managed rg. Auto-install error: network down',
+    );
+  });
+
   test('cancels a pending failure logger and observes its late rejection', async () => {
     const controller = new AbortController();
     let started!: () => void;

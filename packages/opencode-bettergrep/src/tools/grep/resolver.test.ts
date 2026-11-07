@@ -683,6 +683,21 @@ describe('tools/grep/resolver', () => {
     ).rejects.toThrow(/Neither ripgrep \(rg\) nor GNU grep is available\./);
   });
 
+  test('resolveGrepCliWithAutoInstall reports what each unavailable backend check found', async () => {
+    await expect(
+      resolveGrepCliWithAutoInstall({
+        findExecutable: (name) => (name === 'rg' ? '/opt/bin/rg' : null),
+        isSupportedRipgrep: () => false,
+        getInstalledRipgrepPath: () => null,
+        installLatestStableRipgrep: async () => {
+          throw new Error('network down');
+        },
+      }),
+    ).rejects.toThrow(
+      'Checked: system rg at /opt/bin/rg failed its --version check; no valid managed rg; system grep not found on PATH. Auto-install error: network down',
+    );
+  });
+
   test('resolveGrepCliWithAutoInstall retries after a previous install failure when no fallback exists', async () => {
     let attempts = 0;
 
